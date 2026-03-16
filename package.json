@@ -6,7 +6,7 @@
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "bin": {
-    "sparkflow": "dist/src/cli/index.js"
+    "sparkflow-run": "dist/src/cli/index.js"
   },
   "scripts": {
     "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/",

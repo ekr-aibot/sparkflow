@@ -8,8 +8,8 @@ import type { SparkflowWorkflow } from "../schema/types.js";
 
 function usage(): never {
   console.log(`Usage:
-  sparkflow validate <workflow.json>
-  sparkflow run <workflow.json> [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--verbose]`);
+  sparkflow-run validate <workflow.json>
+  sparkflow-run run <workflow.json> [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--verbose]`);
   process.exit(1);
 }
 

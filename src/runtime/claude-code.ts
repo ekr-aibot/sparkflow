@@ -31,7 +31,8 @@ function formatStreamEvent(event: Record<string, unknown>): string | null {
       if (block.type === "text" && block.text) {
         parts.push(String(block.text));
       } else if (block.type === "tool_use") {
-        parts.push(`[tool: ${block.name}]`);
+        const input = block.input ? JSON.stringify(block.input) : "";
+        parts.push(`[tool: ${block.name}] ${input}`);
       } else if (block.type === "tool_result") {
         // Usually not in assistant messages, but just in case
         parts.push(`[tool_result]`);

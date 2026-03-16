@@ -1,15 +1,15 @@
 {
   "version": "1",
   "name": "feature-development",
-  "description": "Author code, then fan out to automated review and tests. On failure, loop back to author with feedback. On success, create a PR.",
-  "entry": "author",
+  "description": "Develop code, then fan out to automated review and tests. On failure, loop back to developer with feedback. On success, create a PR.",
+  "entry": "developer",
   "defaults": {
     "max_retries": 5,
     "worktree": { "mode": "shared" }
   },
   "steps": {
-    "author": {
-      "name": "Author Agent",
+    "developer": {
+      "name": "Developer Agent",
       "description": "Write or revise code based on user instructions or feedback from reviewers/tests.",
       "interactive": true,
       "runtime": {
@@ -17,7 +17,7 @@
         "model": "sonnet",
         "auto_accept": false
       },
-      "prompt": "./prompts/author.md",
+      "prompt": "./prompts/developer.md",
       "on_success": [
         { "step": "reviewer" },
         { "step": "test" }
@@ -44,7 +44,7 @@
       ],
       "on_failure": [
         {
-          "step": "author",
+          "step": "developer",
           "message": "The code review found issues that need to be fixed:\n\n${steps.reviewer.output.review}"
         }
       ],
@@ -70,7 +70,7 @@
       ],
       "on_failure": [
         {
-          "step": "author",
+          "step": "developer",
           "message": "Tests failed. Here is the test output:\n\n${steps.test.output.results}"
         }
       ],
@@ -94,7 +94,7 @@
       "prompt": "./prompts/pr.md",
       "on_failure": [
         {
-          "step": "author",
+          "step": "developer",
           "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr.output.feedback}"
         }
       ],

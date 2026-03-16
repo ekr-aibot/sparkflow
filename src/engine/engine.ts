@@ -1,5 +1,6 @@
 import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import type { SparkflowWorkflow, Step, Runtime } from "../schema/types.js";
 import type { RuntimeAdapter } from "../runtime/types.js";
@@ -85,8 +86,10 @@ export class WorkflowEngine {
   private dryRun: boolean;
   private plan?: string;
   private verbose: boolean;
+  private statusJson: boolean;
   private worktreeManager: WorktreeManager;
   private interactionManager: UserInteractionManager;
+  private pendingAnswers = new Map<string, (answer: string) => void>();
 
   private stepStatuses = new Map<string, StepStatus>();
   private stepOutputs = new Map<string, Record<string, unknown>>();
@@ -107,6 +110,7 @@ export class WorkflowEngine {
     this.dryRun = options.dryRun ?? false;
     this.plan = options.plan;
     this.verbose = options.verbose ?? false;
+    this.statusJson = options.statusJson ?? false;
     this.worktreeManager = new WorktreeManager(this.cwd);
     this.interactionManager = new UserInteractionManager(this.logger);
 
@@ -171,6 +175,18 @@ export class WorkflowEngine {
       stepResults: this.stepStatuses,
       error: this.abortError,
     };
+  }
+
+  /**
+   * Answer a pending ask_user question identified by request ID.
+   * Used when running with --status-json to receive answers from the dashboard.
+   */
+  answerPendingQuestion(requestId: string, answer: string): void {
+    const resolve = this.pendingAnswers.get(requestId);
+    if (resolve) {
+      this.pendingAnswers.delete(requestId);
+      resolve(answer);
+    }
   }
 
   private allTerminalStepsSucceeded(): boolean {
@@ -334,7 +350,20 @@ export class WorkflowEngine {
       ipcServer.onRequest(async (msg: IpcMessage) => {
         if (msg.type === "ask_user") {
           const question = String(msg.payload.question);
-          const response = await this.interactionManager.ask(stepId, question);
+
+          let response: string;
+          if (this.statusJson) {
+            // Emit ask_user event on stderr and wait for answer via stdin
+            const requestId = randomBytes(8).toString("hex");
+            const event = { type: "ask_user", step: stepId, question, request_id: requestId };
+            process.stderr.write(JSON.stringify(event) + "\n");
+            response = await new Promise<string>((resolve) => {
+              this.pendingAnswers.set(requestId, resolve);
+            });
+          } else {
+            response = await this.interactionManager.ask(stepId, question);
+          }
+
           return { type: "response", id: msg.id, payload: { response } };
         } else if (msg.type === "send_message") {
           const msgText = String(msg.payload.message);

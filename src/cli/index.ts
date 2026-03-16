@@ -2,14 +2,67 @@
 
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
+import { createInterface } from "node:readline";
 import { validate } from "../schema/validate.js";
 import { WorkflowEngine } from "../engine/engine.js";
 import type { SparkflowWorkflow } from "../schema/types.js";
+import type { Logger } from "../engine/types.js";
+
+class StatusJsonLogger implements Logger {
+  info(message: string): void {
+    // Parse step status from log messages and emit as JSON events on stderr
+    const stepMatch = message.match(/^\[(\S+)\] (running|succeeded|failed)/);
+    if (stepMatch) {
+      const event = { type: "step_status", step: stepMatch[1], state: stepMatch[2] };
+      process.stderr.write(JSON.stringify(event) + "\n");
+    }
+
+    const startMatch = message.match(/^\[sparkflow\] Starting workflow "(.+)"/);
+    if (startMatch) {
+      const event = { type: "workflow_start", name: startMatch[1] };
+      process.stderr.write(JSON.stringify(event) + "\n");
+    }
+
+    const completeMatch = message.match(/^\[sparkflow\] Workflow .+ completed successfully/);
+    if (completeMatch) {
+      const event = { type: "workflow_complete", success: true };
+      process.stderr.write(JSON.stringify(event) + "\n");
+    }
+
+    const failMatch = message.match(/^\[sparkflow\] Workflow .+ (failed|aborted)/);
+    if (failMatch) {
+      const event = { type: "workflow_complete", success: false };
+      process.stderr.write(JSON.stringify(event) + "\n");
+    }
+
+    // Also pass through to stdout for verbose output
+    console.log(message);
+  }
+
+  error(message: string): void {
+    console.error(message);
+  }
+}
+
+function setupStdinAnswerReader(engine: WorkflowEngine): void {
+  if (!process.stdin.readable) return;
+  const rl = createInterface({ input: process.stdin });
+  rl.on("line", (line) => {
+    try {
+      const event = JSON.parse(line) as { type: string; request_id: string; response: string };
+      if (event.type === "answer" && event.request_id) {
+        engine.answerPendingQuestion(event.request_id, event.response);
+      }
+    } catch {
+      // ignore non-JSON lines
+    }
+  });
+}
 
 function usage(): never {
   console.log(`Usage:
   sparkflow-run validate <workflow.json>
-  sparkflow-run run <workflow.json> [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--verbose]`);
+  sparkflow-run run <workflow.json> [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--verbose] [--status-json]`);
   process.exit(1);
 }
 
@@ -77,15 +130,31 @@ async function main(): Promise<void> {
     }
 
     const verbose = args.includes("--verbose");
+    const statusJson = args.includes("--status-json");
 
     const workflowDir = dirname(resolve(workflowPath));
+
+    // When --status-json is active, use a logger that emits JSON events on stderr
+    // and reads answer events from stdin
+    let logger: import("../engine/types.js").Logger | undefined;
+    if (statusJson) {
+      logger = new StatusJsonLogger();
+    }
+
     const engine = new WorkflowEngine(data as SparkflowWorkflow, {
       cwd,
       workflowDir,
       dryRun,
       plan,
       verbose,
+      logger,
+      statusJson,
     });
+
+    if (statusJson) {
+      // Read stdin for answer events
+      setupStdinAnswerReader(engine);
+    }
 
     const runResult = await engine.run();
     process.exit(runResult.success ? 0 : 1);

@@ -17,6 +17,8 @@ export interface EngineOptions {
   plan?: string;
   /** Stream sub-agent stdout/stderr to the console in real time. */
   verbose?: boolean;
+  /** Emit structured JSON status events on stderr for dashboard integration. */
+  statusJson?: boolean;
 }
 
 export interface RunResult {

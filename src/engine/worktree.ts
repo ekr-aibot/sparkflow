@@ -20,8 +20,8 @@ export class WorktreeManager {
     }
 
     // Isolated: create a git worktree
-    const timestamp = Date.now();
-    const branch = worktreeConfig.branch ?? `sparkflow/${stepId}-${timestamp}`;
+    const baseBranch = worktreeConfig.branch ?? `sparkflow/${stepId}`;
+    const branch = this.findAvailableBranch(baseBranch);
     const worktreePath = resolve(this.repoRoot, WORKTREE_DIR, stepId);
 
     // Prune stale worktree entries (e.g., from a previous crashed run)
@@ -71,5 +71,25 @@ export class WorktreeManager {
 
   hasWorktree(stepId: string): boolean {
     return this.worktrees.has(stepId);
+  }
+
+  private branchExists(branch: string): boolean {
+    try {
+      execFileSync("git", ["rev-parse", "--verify", branch], {
+        cwd: this.repoRoot,
+        stdio: "pipe",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private findAvailableBranch(baseName: string): string {
+    if (!this.branchExists(baseName)) return baseName;
+    for (let i = 2; ; i++) {
+      const candidate = `${baseName}-${i}`;
+      if (!this.branchExists(candidate)) return candidate;
+    }
   }
 }

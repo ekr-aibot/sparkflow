@@ -1,5 +1,4 @@
 import type { JobInfo } from "./types.js";
-import type { TerminalWriter } from "./terminal-writer.js";
 
 const COLORS = {
   reset: "\x1b[0m",
@@ -32,12 +31,6 @@ export class StatusPane {
   private height = 0;
   private totalRows = 0;
   private totalCols = 0;
-  private writer: TerminalWriter | null = null;
-
-  setWriter(writer: TerminalWriter): void {
-    this.writer = writer;
-  }
-
   setDimensions(cols: number, rows: number): void {
     this.totalCols = cols;
     this.totalRows = rows;
@@ -53,7 +46,10 @@ export class StatusPane {
 
   render(jobs: JobInfo[]): void {
     if (this.height === 0 || this.totalRows === 0) return;
+    process.stdout.write(this.buildOutput(jobs));
+  }
 
+  buildOutput(jobs: JobInfo[]): string {
     const startRow = this.totalRows - this.height + 1;
 
     // Save cursor
@@ -79,7 +75,6 @@ export class StatusPane {
         const question = job.pendingQuestion ? ` ? ${job.pendingQuestion}` : "";
         const line = `${COLORS.dim}${job.id.slice(0, 8)}${COLORS.reset} ${COLORS.cyan}[${name}${step}]${COLORS.reset} ${color}${stateLabel}${COLORS.reset} ${job.summary}${question} ${COLORS.dim}(${time})${COLORS.reset}`;
 
-        // Truncate to terminal width (rough — ANSI codes make this imprecise but acceptable)
         out += line;
       }
     }
@@ -87,10 +82,6 @@ export class StatusPane {
     // Restore cursor
     out += "\x1b8";
 
-    if (this.writer) {
-      this.writer.writeSync(out);
-    } else {
-      process.stdout.write(out);
-    }
+    return out;
   }
 }

@@ -55,7 +55,6 @@ export class App {
     this.options = options;
     this.writer = new TerminalWriter();
     this.statusPane = new StatusPane();
-    this.statusPane.setWriter(this.writer);
     this.jobManager = new JobManager();
     this.ipcServer = new IpcServer();
   }
@@ -101,9 +100,13 @@ export class App {
     process.stdout.write(`\x1b[1;${topRows}r`);
     process.stdout.write("\x1b[H"); // cursor to top
 
-    // 6. Configure status pane
+    // 6. Configure status pane and persistent renderer
     this.statusPane.setDimensions(cols, rows);
     this.statusPane.setHeight(this.statusHeight);
+    this.writer.setStatusRenderer(
+      () => this.statusPane.buildOutput(this.jobManager.getJobs()),
+      `\x1b[1;${topRows}r`,
+    );
 
     // 7. Spawn PTY with chat command + MCP config + system prompt
     const chatArgs = [
@@ -160,17 +163,16 @@ export class App {
       }
     });
 
-    // 11. Job status updates → re-render status pane
+    // 11. Job status updates → trigger re-render
     this.jobManager.onUpdate(() => {
       this.updateStatusHeight();
-      this.statusPane.render(this.jobManager.getJobs());
+      this.writer.renderStatus();
     });
 
     // 12. Periodic re-render for elapsed time updates
     this.statusTimer = setInterval(() => {
-      const jobs = this.jobManager.getJobs();
-      if (jobs.length > 0) {
-        this.statusPane.render(jobs);
+      if (this.jobManager.getJobs().length > 0) {
+        this.writer.renderStatus();
       }
     }, 1000);
 
@@ -187,7 +189,7 @@ export class App {
     });
 
     // Initial status render
-    this.statusPane.render([]);
+    this.writer.renderStatus();
   }
 
   private handleIpcRequest(msg: IpcMessage): Promise<IpcMessage> {
@@ -262,18 +264,20 @@ export class App {
     const rows = process.stdout.rows || 24;
     const topRows = rows - this.statusHeight;
 
-    // Update scroll region
-    process.stdout.write(`\x1b[1;${topRows}r`);
+    // Update scroll region (applied after every PTY flush by the writer)
+    const scrollRegionSeq = `\x1b[1;${topRows}r`;
+    this.writer.setScrollRegion(scrollRegionSeq);
+    process.stdout.write(scrollRegionSeq);
 
     // Resize PTY
     if (this.ptyPane) {
       this.ptyPane.resize(cols, topRows);
     }
 
-    // Update status pane dimensions
+    // Update status pane dimensions and trigger re-render
     this.statusPane.setDimensions(cols, rows);
     this.statusPane.setHeight(this.statusHeight);
-    this.statusPane.render(this.jobManager.getJobs());
+    this.writer.renderStatus();
   }
 
   private shutdown(): void {

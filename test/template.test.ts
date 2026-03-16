@@ -37,20 +37,16 @@ describe("resolveTemplate", () => {
     expect(result).toBe("literal: ${steps.foo.output.bar}");
   });
 
-  it("throws when referencing a step with no outputs", () => {
+  it("returns placeholder when referencing a step with no outputs", () => {
     const outputs = new Map<string, Record<string, unknown>>();
-    expect(() =>
-      resolveTemplate("${steps.missing.output.x}", outputs)
-    ).toThrow('Template references step "missing" which has no outputs');
+    const result = resolveTemplate("${steps.missing.output.x}", outputs);
+    expect(result).toBe('[no output from step "missing"]');
   });
 
-  it("throws when referencing a non-existent output field", () => {
+  it("returns placeholder when referencing a non-existent output field", () => {
     const outputs = new Map([["author", { summary: "ok" }]]);
-    expect(() =>
-      resolveTemplate("${steps.author.output.missing}", outputs)
-    ).toThrow(
-      'Template references output "missing" on step "author" which does not exist'
-    );
+    const result = resolveTemplate("${steps.author.output.missing}", outputs);
+    expect(result).toBe('[no output "missing" from step "author"]');
   });
 
   it("returns text unchanged when no templates present", () => {

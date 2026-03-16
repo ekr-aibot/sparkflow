@@ -28,10 +28,22 @@ export class ShellAdapter implements RuntimeAdapter {
 
       if (!ctx.interactive) {
         child.stdout?.on("data", (data: Buffer) => {
-          stdout += data.toString();
+          const chunk = data.toString();
+          stdout += chunk;
+          if (ctx.verbose && ctx.logger) {
+            for (const line of chunk.split("\n")) {
+              if (line.trim()) ctx.logger.info(`[${ctx.stepId}:stdout] ${line}`);
+            }
+          }
         });
         child.stderr?.on("data", (data: Buffer) => {
-          stderr += data.toString();
+          const chunk = data.toString();
+          stderr += chunk;
+          if (ctx.verbose && ctx.logger) {
+            for (const line of chunk.split("\n")) {
+              if (line.trim()) ctx.logger.info(`[${ctx.stepId}:stderr] ${line}`);
+            }
+          }
         });
       }
 

@@ -25,14 +25,11 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (runtime.model) {
       args.push("--model", runtime.model);
     }
-    if (runtime.auto_accept) {
-      args.push("--dangerously-skip-permissions");
-    }
-    if (runtime.mcp_servers) {
-      for (const server of runtime.mcp_servers) {
-        args.push("--mcp", server);
-      }
-    }
+    // All steps run in --print mode (no TTY), so permissions must be auto-accepted.
+    // The auto_accept field in the workflow is now informational/documentation only.
+    args.push("--dangerously-skip-permissions");
+    // MCP servers listed in runtime.mcp_servers are resolved from the user's
+    // claude MCP configuration automatically (we don't pass --strict-mcp-config).
     if (runtime.args) {
       args.push(...runtime.args);
     }
@@ -90,10 +87,22 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       let stderr = "";
 
       child.stdout?.on("data", (data: Buffer) => {
-        stdout += data.toString();
+        const chunk = data.toString();
+        stdout += chunk;
+        if (ctx.verbose && ctx.logger) {
+          for (const line of chunk.split("\n")) {
+            if (line.trim()) ctx.logger.info(`[${ctx.stepId}:stdout] ${line}`);
+          }
+        }
       });
       child.stderr?.on("data", (data: Buffer) => {
-        stderr += data.toString();
+        const chunk = data.toString();
+        stderr += chunk;
+        if (ctx.verbose && ctx.logger) {
+          for (const line of chunk.split("\n")) {
+            if (line.trim()) ctx.logger.info(`[${ctx.stepId}:stderr] ${line}`);
+          }
+        }
       });
 
       let timedOut = false;

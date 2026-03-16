@@ -15,6 +15,8 @@ export interface EngineOptions {
   logger?: Logger;
   /** Project plan prepended to every step's prompt. */
   plan?: string;
+  /** Stream sub-agent stdout/stderr to the console in real time. */
+  verbose?: boolean;
 }
 
 export interface RunResult {

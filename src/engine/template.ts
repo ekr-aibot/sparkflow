@@ -20,12 +20,10 @@ export function resolveTemplate(
   const resolved = text.replace(TEMPLATE_RE, (_match, stepId: string, field: string) => {
     const outputs = stepOutputs.get(stepId);
     if (!outputs) {
-      throw new Error(`Template references step "${stepId}" which has no outputs`);
+      return `[no output from step "${stepId}"]`;
     }
     if (!(field in outputs)) {
-      throw new Error(
-        `Template references output "${field}" on step "${stepId}" which does not exist`
-      );
+      return `[no output "${field}" from step "${stepId}"]`;
     }
     const value = outputs[field];
     if (typeof value === "string") {

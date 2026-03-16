@@ -1,7 +1,7 @@
 {
   "version": "1",
   "name": "feature-development",
-  "description": "Author code, review, test, and ship a PR.",
+  "description": "Author code interactively, then fan out to automated review and tests. On failure, loop back to author with feedback. On success, create and merge a PR.",
   "entry": "author",
   "defaults": {
     "max_retries": 5,
@@ -17,7 +17,7 @@
         "model": "sonnet",
         "auto_accept": false
       },
-      "prompt": "Implement the feature described by the user. If you received feedback from a reviewer or test run, address all issues before signaling done.",
+      "prompt": "./prompts/author.md",
       "on_success": [
         { "step": "reviewer" },
         { "step": "test" }
@@ -38,8 +38,7 @@
         "model": "sonnet",
         "auto_accept": true
       },
-      "prompt": "Review the diff in the current worktree. Check for bugs, style issues, and design problems. Exit with success if the code is acceptable, failure if not.",
-      "worktree": { "mode": "isolated" },
+      "prompt": "./prompts/reviewer.md",
       "on_success": [
         { "step": "pr" }
       ],
@@ -65,7 +64,6 @@
         "command": "npm",
         "args": ["test"]
       },
-      "worktree": { "mode": "isolated" },
       "timeout": 300,
       "on_success": [
         { "step": "pr" }
@@ -94,7 +92,7 @@
         "auto_accept": true,
         "mcp_servers": ["github"]
       },
-      "prompt": "Create a pull request for the current branch. Summary of changes:\n${steps.author.output.summary}\n\nMonitor CI results and reviewer comments. Exit with success when the PR is merged. Exit with failure if CI fails or reviewers request changes.",
+      "prompt": "./prompts/pr.md",
       "on_failure": [
         {
           "step": "author",

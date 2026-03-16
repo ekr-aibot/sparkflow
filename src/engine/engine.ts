@@ -83,6 +83,7 @@ export class WorkflowEngine {
   private workflowDir: string;
   private dryRun: boolean;
   private plan?: string;
+  private verbose: boolean;
   private worktreeManager: WorktreeManager;
   private interactionManager: UserInteractionManager;
 
@@ -104,6 +105,7 @@ export class WorkflowEngine {
     this.workflowDir = options.workflowDir ?? this.cwd;
     this.dryRun = options.dryRun ?? false;
     this.plan = options.plan;
+    this.verbose = options.verbose ?? false;
     this.worktreeManager = new WorktreeManager(this.cwd);
     this.interactionManager = new UserInteractionManager(this.logger);
 
@@ -358,6 +360,8 @@ export class WorkflowEngine {
       interactive: step.interactive,
       timeout: step.timeout ?? this.workflow.defaults?.timeout,
       ipcSocketPath,
+      verbose: this.verbose,
+      logger: this.logger,
     };
 
     // Get adapter

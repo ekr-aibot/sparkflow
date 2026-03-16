@@ -24,6 +24,26 @@ export class WorktreeManager {
     const branch = worktreeConfig.branch ?? `sparkflow/${stepId}-${timestamp}`;
     const worktreePath = resolve(this.repoRoot, WORKTREE_DIR, stepId);
 
+    // Prune stale worktree entries (e.g., from a previous crashed run)
+    try {
+      execFileSync("git", ["worktree", "prune"], {
+        cwd: this.repoRoot,
+        stdio: "pipe",
+      });
+    } catch {
+      // Best-effort
+    }
+
+    // Remove leftover worktree at this path if it still exists
+    try {
+      execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
+        cwd: this.repoRoot,
+        stdio: "pipe",
+      });
+    } catch {
+      // Doesn't exist, that's fine
+    }
+
     execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
       cwd: this.repoRoot,
       stdio: "pipe",

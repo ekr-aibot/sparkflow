@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "description": "Workflow runner for CLI/TUI LLM agents",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
   "bin": {
-    "sparkflow": "dist/cli/index.js"
+    "sparkflow": "dist/src/cli/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/",
     "check": "tsc --noEmit",
     "test": "vitest run"
   },

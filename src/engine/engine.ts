@@ -1,4 +1,5 @@
 import { dirname, resolve } from "node:path";
+import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import type { SparkflowWorkflow, Step, Runtime } from "../schema/types.js";
 import type { RuntimeAdapter } from "../runtime/types.js";
 import type { RuntimeContext } from "../runtime/types.js";
@@ -7,10 +8,72 @@ import { ClaudeCodeAdapter } from "../runtime/claude-code.js";
 import { CustomAdapter } from "../runtime/custom.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
+import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
 import type { StepStatus, EngineOptions, RunResult, Logger } from "./types.js";
 import { ConsoleLogger } from "./types.js";
 
 const DEFAULT_MAX_RETRIES = 3;
+
+/**
+ * Serializes user interactions across concurrent interactive steps.
+ * One prompt at a time on the terminal, FIFO order.
+ */
+export class UserInteractionManager {
+  private queue: Array<{
+    stepId: string;
+    question: string;
+    resolve: (answer: string) => void;
+  }> = [];
+  private processing = false;
+  private logger: Logger;
+  private rl: ReadlineInterface | null = null;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async ask(stepId: string, question: string): Promise<string> {
+    return new Promise<string>((resolve) => {
+      this.queue.push({ stepId, question, resolve });
+      this.processQueue();
+    });
+  }
+
+  sendMessage(stepId: string, message: string): void {
+    this.logger.info(`[${stepId}] ${message}`);
+  }
+
+  private async processQueue(): Promise<void> {
+    if (this.processing || this.queue.length === 0) return;
+    this.processing = true;
+
+    while (this.queue.length > 0) {
+      const item = this.queue.shift()!;
+
+      if (!this.rl) {
+        this.rl = createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+      }
+
+      const answer = await new Promise<string>((resolve) => {
+        this.rl!.question(`[${item.stepId}] ${item.question}\n> `, resolve);
+      });
+
+      item.resolve(answer);
+    }
+
+    this.processing = false;
+  }
+
+  close(): void {
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
+  }
+}
 
 export class WorkflowEngine {
   private workflow: SparkflowWorkflow;
@@ -19,11 +82,14 @@ export class WorkflowEngine {
   private cwd: string;
   private workflowDir: string;
   private dryRun: boolean;
+  private plan?: string;
   private worktreeManager: WorktreeManager;
+  private interactionManager: UserInteractionManager;
 
   private stepStatuses = new Map<string, StepStatus>();
   private stepOutputs = new Map<string, Record<string, unknown>>();
   private activePromises = new Map<string, Promise<void>>();
+  private ipcServers = new Map<string, IpcServer>();
   private aborted = false;
   private abortError?: string;
 
@@ -37,7 +103,9 @@ export class WorkflowEngine {
     this.cwd = options.cwd ?? process.cwd();
     this.workflowDir = options.workflowDir ?? this.cwd;
     this.dryRun = options.dryRun ?? false;
+    this.plan = options.plan;
     this.worktreeManager = new WorktreeManager(this.cwd);
+    this.interactionManager = new UserInteractionManager(this.logger);
 
     this.adapters = adapters ?? new Map<string, RuntimeAdapter>([
       ["shell", new ShellAdapter()],
@@ -76,6 +144,13 @@ export class WorkflowEngine {
     } else {
       this.logger.error(`[sparkflow] Workflow "${this.workflow.name}" failed`);
     }
+
+    // Cleanup
+    this.interactionManager.close();
+    for (const [, ipc] of this.ipcServers) {
+      await ipc.close();
+    }
+    this.ipcServers.clear();
 
     return {
       success,
@@ -184,12 +259,19 @@ export class WorkflowEngine {
       return;
     }
 
-    // Resolve prompt
+    // Resolve prompt, prepending plan if provided
     let prompt: string | undefined;
-    if (step.prompt) {
+    if (step.prompt || this.plan) {
       try {
-        const raw = resolvePrompt(step.prompt, this.workflowDir);
-        prompt = resolveTemplate(raw, this.stepOutputs);
+        const parts: string[] = [];
+        if (this.plan) {
+          parts.push(`# Project Plan\n\n${this.plan}`);
+        }
+        if (step.prompt) {
+          const raw = resolvePrompt(step.prompt, this.workflowDir);
+          parts.push(resolveTemplate(raw, this.stepOutputs));
+        }
+        prompt = parts.join("\n\n");
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         this.logger.error(`[${stepId}] prompt resolution failed: ${errMsg}`);
@@ -229,6 +311,41 @@ export class WorkflowEngine {
       }
     }
 
+    // Set up IPC server for interactive claude-code steps
+    let ipcSocketPath: string | undefined;
+    if (step.interactive && runtime.type === "claude-code") {
+      const ipcServer = new IpcServer();
+      this.ipcServers.set(stepId, ipcServer);
+
+      ipcServer.onRequest(async (msg: IpcMessage) => {
+        if (msg.type === "ask_user") {
+          const question = String(msg.payload.question);
+          const response = await this.interactionManager.ask(stepId, question);
+          return { type: "response", id: msg.id, payload: { response } };
+        } else if (msg.type === "send_message") {
+          const msgText = String(msg.payload.message);
+          this.interactionManager.sendMessage(stepId, msgText);
+          return { type: "response", id: msg.id, payload: {} };
+        }
+        return {
+          type: "error",
+          id: msg.id,
+          payload: { error: `Unknown message type: ${msg.type}` },
+        };
+      });
+
+      try {
+        await ipcServer.listen();
+        ipcSocketPath = ipcServer.path;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`[${stepId}] IPC server setup failed: ${errMsg}`);
+        status.state = "failed";
+        this.onStepFailure(stepId);
+        return;
+      }
+    }
+
     // Build runtime context
     const ctx: RuntimeContext = {
       stepId,
@@ -240,6 +357,7 @@ export class WorkflowEngine {
       env,
       interactive: step.interactive,
       timeout: step.timeout ?? this.workflow.defaults?.timeout,
+      ipcSocketPath,
     };
 
     // Get adapter
@@ -279,6 +397,13 @@ export class WorkflowEngine {
       status.state = "failed";
       this.logger.error(`[${stepId}] error: ${errMsg}`);
       this.onStepFailure(stepId);
+    } finally {
+      // Clean up IPC server after step completes
+      const ipc = this.ipcServers.get(stepId);
+      if (ipc) {
+        await ipc.close();
+        this.ipcServers.delete(stepId);
+      }
     }
 
     // Process queued messages

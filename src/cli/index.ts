@@ -9,7 +9,7 @@ import type { SparkflowWorkflow } from "../schema/types.js";
 function usage(): never {
   console.log(`Usage:
   sparkflow validate <workflow.json>
-  sparkflow run <workflow.json> [--dry-run] [--cwd <dir>]`);
+  sparkflow run <workflow.json> [--dry-run] [--cwd <dir>] [--plan <plan.md>]`);
   process.exit(1);
 }
 
@@ -69,11 +69,19 @@ async function main(): Promise<void> {
       cwd = resolve(args[cwdIndex + 1]);
     }
 
+    let plan: string | undefined;
+    const planIndex = args.indexOf("--plan");
+    if (planIndex !== -1 && args[planIndex + 1]) {
+      const planPath = resolve(args[planIndex + 1]);
+      plan = readFileSync(planPath, "utf-8");
+    }
+
     const workflowDir = dirname(resolve(workflowPath));
     const engine = new WorkflowEngine(data as SparkflowWorkflow, {
       cwd,
       workflowDir,
       dryRun,
+      plan,
     });
 
     const runResult = await engine.run();

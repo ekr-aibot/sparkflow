@@ -13,6 +13,8 @@ export interface EngineOptions {
   workflowDir?: string;
   dryRun?: boolean;
   logger?: Logger;
+  /** Project plan prepended to every step's prompt. */
+  plan?: string;
 }
 
 export interface RunResult {

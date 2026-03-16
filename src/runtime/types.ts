@@ -10,6 +10,8 @@ export interface RuntimeContext {
   env: Record<string, string>;
   interactive: boolean;
   timeout?: number;
+  /** Path to the IPC Unix socket for interactive steps (MCP-based user communication). */
+  ipcSocketPath?: string;
 }
 
 export interface RuntimeResult {

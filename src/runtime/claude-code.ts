@@ -1,6 +1,17 @@
 import { spawn } from "node:child_process";
+import { writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { ClaudeCodeRuntime } from "../schema/types.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Path to the compiled MCP server entry point
+const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
 
 export class ClaudeCodeAdapter implements RuntimeAdapter {
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
@@ -26,48 +37,39 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push(...runtime.args);
     }
 
+    // All steps use --print mode
+    args.push("--print", "--output-format", "json");
+
+    // Use a temp dir for any files we need to pass to claude
+    const tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-mcp-"));
+    const tempFiles: string[] = [];
+
+    // For interactive steps, set up MCP config so the agent can call ask_user
+    if (ctx.interactive && ctx.ipcSocketPath) {
+      const mcpConfigPath = join(tmpDir, "mcp-config.json");
+      tempFiles.push(mcpConfigPath);
+      const mcpConfig = {
+        mcpServers: {
+          sparkflow: {
+            command: "node",
+            args: [MCP_SERVER_PATH],
+            env: {
+              SPARKFLOW_SOCKET: ctx.ipcSocketPath,
+            },
+          },
+        },
+      };
+      writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig));
+      args.push("--mcp-config", mcpConfigPath);
+    }
+
     // Build prompt: step prompt + transition message
     const parts: string[] = [];
     if (ctx.prompt) parts.push(ctx.prompt);
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
     const fullPrompt = parts.join("\n\n");
 
-    if (ctx.interactive) {
-      // Interactive: TTY passthrough
-      if (fullPrompt) {
-        args.push("--prompt", fullPrompt);
-      }
-
-      return new Promise<RuntimeResult>((resolve) => {
-        const child = spawn("claude", args, {
-          cwd: ctx.cwd,
-          env: { ...process.env as Record<string, string>, ...ctx.env },
-          stdio: "inherit",
-        });
-
-        child.on("close", (code) => {
-          resolve({
-            success: (code ?? 1) === 0,
-            outputs: {},
-            exitCode: code ?? 1,
-          });
-        });
-
-        child.on("error", (err) => {
-          resolve({
-            success: false,
-            outputs: {},
-            error: err.message,
-          });
-        });
-      });
-    }
-
-    // Non-interactive: capture JSON output
-    args.push("--print", "--output-format", "json");
-    if (fullPrompt) {
-      args.push(fullPrompt);
-    }
+    // Prompt is piped via stdin in --print mode to avoid ENAMETOOLONG
 
     return new Promise<RuntimeResult>((resolve) => {
       const child = spawn("claude", args, {
@@ -75,6 +77,14 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         env: { ...process.env as Record<string, string>, ...ctx.env },
         stdio: "pipe",
       });
+
+      // Pipe prompt via stdin
+      if (fullPrompt) {
+        child.stdin?.write(fullPrompt);
+        child.stdin?.end();
+      } else {
+        child.stdin?.end();
+      }
 
       let stdout = "";
       let stderr = "";
@@ -97,6 +107,11 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
       child.on("close", (code) => {
         if (timer) clearTimeout(timer);
+        // Cleanup temp files
+        for (const f of tempFiles) {
+          try { unlinkSync(f); } catch { /* ignore */ }
+        }
+
         const exitCode = code ?? 1;
         const success = exitCode === 0;
 
@@ -146,6 +161,9 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
       child.on("error", (err) => {
         if (timer) clearTimeout(timer);
+        for (const f of tempFiles) {
+          try { unlinkSync(f); } catch { /* ignore */ }
+        }
         resolve({
           success: false,
           outputs: {},

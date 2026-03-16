@@ -1,8 +1,10 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, join, basename } from "node:path";
+import { tmpdir } from "node:os";
 import type { JobInfo } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,11 +19,21 @@ interface ManagedJob {
   stdinWriter: (data: string) => void;
   outputBuffer: string[];
   pendingRequestId?: string;
+  logPath?: string;
+  logStream?: WriteStream;
 }
 
 export class JobManager {
   private jobs = new Map<string, ManagedJob>();
   private updateCallbacks: Array<() => void> = [];
+  private tmuxSession: string | null = null;
+
+  /**
+   * Set the tmux session name so job windows can be created.
+   */
+  setTmuxSession(session: string): void {
+    this.tmuxSession = session;
+  }
 
   startJob(workflowPath: string, opts?: { cwd?: string; plan?: string }): string {
     const id = randomBytes(6).toString("hex");
@@ -45,6 +57,10 @@ export class JobManager {
       startTime: Date.now(),
     };
 
+    // Create log file for this job
+    const logPath = join(tmpdir(), `sparkflow-job-${id}.log`);
+    const logStream = createWriteStream(logPath, { flags: "a" });
+
     const managed: ManagedJob = {
       info,
       process: child,
@@ -52,15 +68,21 @@ export class JobManager {
         child.stdin?.write(data + "\n");
       },
       outputBuffer: [],
+      logPath,
+      logStream,
     };
 
     this.jobs.set(id, managed);
+
+    // Open a tmux window with tail -f on the log
+    this.openTmuxWindow(id, workflowPath, logPath);
 
     // Parse stderr for status-json events, and capture for output buffer
     if (child.stderr) {
       const rl = createInterface({ input: child.stderr });
       rl.on("line", (line) => {
         managed.outputBuffer.push(`[stderr] ${line}`);
+        logStream.write(`${line}\n`);
         this.handleStatusLine(id, line);
       });
     }
@@ -70,6 +92,7 @@ export class JobManager {
       const rl = createInterface({ input: child.stdout });
       rl.on("line", (line) => {
         managed.outputBuffer.push(line);
+        logStream.write(`${line}\n`);
         // Also try to parse verbose output for step info
         this.handleVerboseLine(id, line);
       });
@@ -83,6 +106,9 @@ export class JobManager {
           job.info.state = code === 0 ? "succeeded" : "failed";
           job.info.summary = code === 0 ? "completed" : `exit code ${code}`;
         }
+        const finalMsg = `\n--- job ${id} ${job.info.state} ---\n`;
+        job.logStream?.write(finalMsg);
+        job.logStream?.end();
         this.fireUpdate();
       }
     });
@@ -93,6 +119,8 @@ export class JobManager {
         job.info.state = "failed";
         job.info.summary = err.message;
         job.info.endTime = Date.now();
+        job.logStream?.write(`\n--- job ${id} error: ${err.message} ---\n`);
+        job.logStream?.end();
         this.fireUpdate();
       }
     });
@@ -213,10 +241,31 @@ export class JobManager {
     for (const cb of this.updateCallbacks) cb();
   }
 
+  private openTmuxWindow(jobId: string, workflowPath: string, logPath: string): void {
+    if (!this.tmuxSession) return;
+    const name = basename(workflowPath, ".json").slice(0, 20);
+    const windowName = `${name}:${jobId.slice(0, 6)}`;
+    try {
+      execFileSync("tmux", [
+        "new-window", "-d",
+        "-t", this.tmuxSession,
+        "-n", windowName,
+        "tail", "-f", logPath,
+      ], { stdio: "pipe" });
+    } catch {
+      // tmux not available or session gone — non-fatal
+    }
+  }
+
   killAll(): void {
     for (const [, job] of this.jobs) {
       try {
         job.process.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+      try {
+        job.logStream?.end();
       } catch {
         // ignore
       }

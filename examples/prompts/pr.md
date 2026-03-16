@@ -41,10 +41,10 @@ After the PR is created, monitor it for:
 
 ### Merge
 
-Monitor the repository for merging. Once complete, you can exit with a success condition.
+**DO NOT merge the PR.** Merging is the human's responsibility. Your job is only to create the PR, verify CI passes, and report the result.
 
 ## Output
 
-On **success**: report the merged PR URL.
+On **success**: report the PR URL (not merged — just ready for human review).
 
 On **failure**: provide specific, actionable feedback about what went wrong — CI logs, reviewer comments, or merge conflicts. This gets passed back to the author agent.

@@ -13,6 +13,43 @@ const __dirname = dirname(__filename);
 // Path to the compiled MCP server entry point
 const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
 
+/**
+ * Format a stream-json event for verbose logging.
+ * Returns a human-readable string, or null to skip logging.
+ */
+function formatStreamEvent(event: Record<string, unknown>): string | null {
+  const type = event.type as string;
+
+  if (type === "assistant") {
+    const msg = event.message as Record<string, unknown> | undefined;
+    if (!msg) return null;
+    const content = msg.content as Array<Record<string, unknown>> | undefined;
+    if (!content) return null;
+
+    const parts: string[] = [];
+    for (const block of content) {
+      if (block.type === "text" && block.text) {
+        parts.push(String(block.text));
+      } else if (block.type === "tool_use") {
+        parts.push(`[tool: ${block.name}]`);
+      } else if (block.type === "tool_result") {
+        // Usually not in assistant messages, but just in case
+        parts.push(`[tool_result]`);
+      }
+    }
+    return parts.length > 0 ? parts.join(" ") : null;
+  }
+
+  if (type === "result") {
+    const result = event.result;
+    if (result) return `result: ${String(result).slice(0, 200)}`;
+    return null;
+  }
+
+  // Skip init, rate_limit_event, etc.
+  return null;
+}
+
 export class ClaudeCodeAdapter implements RuntimeAdapter {
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
     const runtime = ctx.runtime as ClaudeCodeRuntime;
@@ -34,8 +71,12 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push(...runtime.args);
     }
 
-    // All steps use --print mode
-    args.push("--print", "--output-format", "json");
+    // Use stream-json for verbose mode (real-time output), plain json otherwise
+    if (ctx.verbose) {
+      args.push("--print", "--output-format", "stream-json", "--verbose");
+    } else {
+      args.push("--print", "--output-format", "json");
+    }
 
     // Use a temp dir for any files we need to pass to claude
     const tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-mcp-"));
@@ -85,13 +126,35 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
       let stdout = "";
       let stderr = "";
+      // For stream-json mode, we collect the final result event
+      let resultEvent: Record<string, unknown> | null = null;
+      let stdoutLineBuffer = "";
 
       child.stdout?.on("data", (data: Buffer) => {
         const chunk = data.toString();
         stdout += chunk;
+
         if (ctx.verbose && ctx.logger) {
-          for (const line of chunk.split("\n")) {
-            if (line.trim()) ctx.logger.info(`[${ctx.stepId}:stdout] ${line}`);
+          // Parse newline-delimited JSON events
+          stdoutLineBuffer += chunk;
+          let newlineIdx: number;
+          while ((newlineIdx = stdoutLineBuffer.indexOf("\n")) !== -1) {
+            const line = stdoutLineBuffer.slice(0, newlineIdx).trim();
+            stdoutLineBuffer = stdoutLineBuffer.slice(newlineIdx + 1);
+            if (!line) continue;
+            try {
+              const event = JSON.parse(line) as Record<string, unknown>;
+              if (event.type === "result") {
+                resultEvent = event;
+              }
+              const formatted = formatStreamEvent(event);
+              if (formatted) {
+                ctx.logger.info(`[${ctx.stepId}] ${formatted}`);
+              }
+            } catch {
+              // Not JSON, log raw
+              ctx.logger.info(`[${ctx.stepId}] ${line}`);
+            }
           }
         }
       });
@@ -135,27 +198,27 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         }
 
         const outputs: Record<string, unknown> = {};
-        if (success && stdout.trim()) {
-          try {
-            const parsed = JSON.parse(stdout.trim());
-            // Map declared outputs from the parsed response
-            if (ctx.step.outputs) {
-              for (const name of Object.keys(ctx.step.outputs)) {
-                if (parsed[name] !== undefined) {
-                  outputs[name] = parsed[name];
-                }
+
+        // In stream-json (verbose) mode, use the collected result event.
+        // In json mode, parse the single JSON blob from stdout.
+        const parsed = ctx.verbose
+          ? resultEvent
+          : this.tryParseJson(stdout.trim());
+
+        if (success && parsed) {
+          if (ctx.step.outputs) {
+            for (const name of Object.keys(ctx.step.outputs)) {
+              if ((parsed as Record<string, unknown>)[name] !== undefined) {
+                outputs[name] = (parsed as Record<string, unknown>)[name];
               }
             }
-            // Also store the full response as _response
-            outputs._response = parsed;
-          } catch {
-            // If JSON parse fails, store raw output
-            if (ctx.step.outputs) {
-              for (const [name, decl] of Object.entries(ctx.step.outputs)) {
-                if (decl.type === "text") {
-                  outputs[name] = stdout.trim();
-                }
-              }
+          }
+          outputs._response = parsed;
+        } else if (success && stdout.trim() && ctx.step.outputs) {
+          // Fallback: store raw output for text outputs
+          for (const [name, decl] of Object.entries(ctx.step.outputs)) {
+            if (decl.type === "text") {
+              outputs[name] = stdout.trim();
             }
           }
         }
@@ -180,5 +243,13 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         });
       });
     });
+  }
+
+  private tryParseJson(text: string): Record<string, unknown> | null {
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   }
 }

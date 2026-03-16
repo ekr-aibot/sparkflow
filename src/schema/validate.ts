@@ -164,21 +164,28 @@ function semanticValidation(workflow: SparkflowWorkflow): ValidationDiagnostic[]
     }
   }
 
-  // All on_failure transitions must target the same step
-  const failureTargets = new Set<string>();
-  for (const [id, step] of Object.entries(workflow.steps)) {
-    if (step.on_failure) {
-      for (const t of step.on_failure) {
-        failureTargets.add(t.step);
+  // Parallel siblings (steps fanned out from the same parent) must have
+  // on_failure transitions that all target the same step, to avoid conflicts.
+  for (const [parentId, parentStep] of Object.entries(workflow.steps)) {
+    if (!parentStep.on_success || parentStep.on_success.length < 2) continue;
+
+    const siblingIds = parentStep.on_success.map((t) => t.step);
+    const failureTargets = new Set<string>();
+    for (const sibId of siblingIds) {
+      const sib = workflow.steps[sibId];
+      if (sib?.on_failure) {
+        for (const t of sib.on_failure) {
+          failureTargets.add(t.step);
+        }
       }
     }
-  }
-  if (failureTargets.size > 1) {
-    diagnostics.push({
-      severity: "error",
-      message: `All on_failure transitions must target the same step, but found targets: ${[...failureTargets].join(", ")}`,
-      path: "steps",
-    });
+    if (failureTargets.size > 1) {
+      diagnostics.push({
+        severity: "error",
+        message: `Parallel steps [${siblingIds.join(", ")}] (from "${parentId}") have on_failure transitions targeting different steps: ${[...failureTargets].join(", ")}. Parallel siblings must all fail back to the same step.`,
+        path: `steps.${parentId}.on_success`,
+      });
+    }
   }
 
   // Warn about unreachable steps

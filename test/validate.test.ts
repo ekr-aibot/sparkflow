@@ -270,7 +270,7 @@ describe("validate", () => {
       );
     });
 
-    it("errors when on_failure transitions target different steps", () => {
+    it("errors when parallel siblings have on_failure targeting different steps", () => {
       const result = validate({
         version: "1",
         name: "test",
@@ -303,11 +303,40 @@ describe("validate", () => {
       });
       expect(result.valid).toBe(false);
       expect(result.errors).toContainEqual(
-        expect.objectContaining({ message: expect.stringContaining("same step") })
+        expect.objectContaining({ message: expect.stringContaining("Parallel") })
       );
     });
 
-    it("accepts when all on_failure transitions target the same step", () => {
+    it("accepts non-parallel steps with on_failure targeting different steps", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_success: [{ step: "b" }],
+            on_failure: [{ step: "a" }],
+          },
+          b: {
+            name: "B",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_failure: [{ step: "c" }],
+          },
+          c: {
+            name: "C",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+          },
+        },
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("accepts when all parallel siblings on_failure target the same step", () => {
       const result = validate({
         version: "1",
         name: "test",

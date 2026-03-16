@@ -1,7 +1,7 @@
 {
   "version": "1",
   "name": "feature-development",
-  "description": "Author code, then fan out to automated review and tests. On failure, loop back to author with feedback.",
+  "description": "Author code, then fan out to automated review and tests. On failure, loop back to author with feedback. On success, create a PR.",
   "entry": "author",
   "defaults": {
     "max_retries": 5,
@@ -39,6 +39,9 @@
         "auto_accept": true
       },
       "prompt": "./prompts/reviewer.md",
+      "on_success": [
+        { "step": "pr" }
+      ],
       "on_failure": [
         {
           "step": "author",
@@ -62,6 +65,9 @@
         "args": ["test"]
       },
       "timeout": 300,
+      "on_success": [
+        { "step": "pr" }
+      ],
       "on_failure": [
         {
           "step": "author",
@@ -72,6 +78,34 @@
         "results": {
           "type": "text",
           "description": "Full test output including failure messages and stack traces"
+        }
+      }
+    },
+    "pr": {
+      "name": "PR Agent",
+      "description": "Create a PR with a summary of the changes.",
+      "interactive": false,
+      "join": ["reviewer", "test"],
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/pr.md",
+      "on_failure": [
+        {
+          "step": "author",
+          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr.output.feedback}"
+        }
+      ],
+      "outputs": {
+        "feedback": {
+          "type": "text",
+          "description": "CI failure details or reviewer comments from GitHub"
+        },
+        "pr_url": {
+          "type": "text",
+          "description": "URL of the created pull request"
         }
       }
     }

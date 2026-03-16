@@ -34,7 +34,7 @@ A single node in the workflow graph.
 | `description` | `string` | no | Longer description. Shown to agents and in logs. |
 | `interactive` | `boolean` | yes | `true`: presents a TUI the user can interact with. `false`: runs autonomously. |
 | `runtime` | `Runtime` | yes (or inherited) | How to execute this step. If omitted, inherited from `defaults.runtime`. |
-| `prompt` | `string` | no | Instructions injected into the agent's context. Supports template interpolation. Ignored for shell runtimes. |
+| `prompt` | `string` | no | Instructions injected into the agent's context. Supports template interpolation. If the value starts with `./` or ends with `.md`, the engine reads it as a file path (relative to the workflow JSON file) and uses the file contents as the prompt text. For shell runtimes, the resolved prompt is passed via the `SPARKFLOW_PROMPT` environment variable. |
 | `worktree` | `WorktreeConfig` | no | Git worktree configuration. Defaults to `defaults.worktree` or `{"mode":"shared"}`. |
 | `join` | `string[]` | no | Step IDs this step waits for (fan-in). The step will not start until ALL listed steps have completed successfully. |
 | `on_success` | `Transition[]` | no | Transitions on success. Multiple entries = fan-out (concurrent). If omitted, workflow completes when this step succeeds. |
@@ -115,6 +115,7 @@ ${steps.<step_id>.output.<field>}
 
 1. **`prompt`** — instructions injected into an agent for a step
 2. **`message`** — message attached to a transition
+3. **`env`** — environment variable values on a step
 
 Templates are **not** allowed in other fields.
 

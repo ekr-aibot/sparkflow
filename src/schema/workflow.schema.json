@@ -1,0 +1,228 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sparkflow.dev/schema/workflow/v1",
+  "title": "SparkflowWorkflow",
+  "description": "A Sparkflow workflow definition — a directed cyclic graph of steps executed by CLI/TUI LLM agents.",
+  "type": "object",
+  "required": ["version", "name", "entry", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1",
+      "description": "Schema version. Always \"1\" for now."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable name for this workflow."
+    },
+    "description": {
+      "type": "string",
+      "description": "Longer description of what this workflow does."
+    },
+    "entry": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The step ID where execution begins. Must be a key in steps."
+    },
+    "defaults": { "$ref": "#/$defs/StepDefaults" },
+    "steps": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Steps in the workflow, keyed by unique step ID.",
+      "patternProperties": {
+        "^[a-zA-Z0-9_-]+$": { "$ref": "#/$defs/Step" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "StepDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Default max times a step can be re-entered via feedback loops."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Default timeout in seconds for non-interactive steps."
+        },
+        "runtime": { "$ref": "#/$defs/Runtime" },
+        "worktree": { "$ref": "#/$defs/WorktreeConfig" }
+      }
+    },
+    "Step": {
+      "type": "object",
+      "required": ["name", "interactive"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable display name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Longer description of what this step does."
+        },
+        "interactive": {
+          "type": "boolean",
+          "description": "true: presents a TUI; false: runs autonomously."
+        },
+        "runtime": { "$ref": "#/$defs/Runtime" },
+        "prompt": {
+          "type": "string",
+          "description": "Instructions injected into the agent's context. Supports template interpolation."
+        },
+        "worktree": { "$ref": "#/$defs/WorktreeConfig" },
+        "join": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Step IDs this step waits for (fan-in)."
+        },
+        "on_success": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Transition" },
+          "minItems": 1,
+          "description": "Transitions on success. Multiple entries = fan-out."
+        },
+        "on_failure": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Transition" },
+          "minItems": 1,
+          "description": "Transitions on failure."
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max re-entries via feedback loops before workflow aborts."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Timeout in seconds for non-interactive steps."
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/OutputDeclaration" },
+          "description": "Named outputs this step produces."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Extra environment variables. Values support template interpolation."
+        }
+      }
+    },
+    "Transition": {
+      "type": "object",
+      "required": ["step"],
+      "additionalProperties": false,
+      "properties": {
+        "step": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Target step ID."
+        },
+        "message": {
+          "type": "string",
+          "description": "Context passed to the target step. Supports template interpolation."
+        }
+      }
+    },
+    "Runtime": {
+      "oneOf": [
+        { "$ref": "#/$defs/ClaudeCodeRuntime" },
+        { "$ref": "#/$defs/ShellRuntime" },
+        { "$ref": "#/$defs/CustomRuntime" }
+      ]
+    },
+    "ClaudeCodeRuntime": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "claude-code" },
+        "model": { "type": "string", "description": "Model to use (e.g. \"sonnet\", \"opus\")." },
+        "auto_accept": { "type": "boolean", "description": "Auto-accept all tool calls without confirmation." },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional CLI flags."
+        },
+        "mcp_servers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of MCP servers to enable."
+        }
+      }
+    },
+    "ShellRuntime": {
+      "type": "object",
+      "required": ["type", "command"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "shell" },
+        "command": { "type": "string", "minLength": 1, "description": "The command to execute." },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Arguments to the command."
+        },
+        "cwd": { "type": "string", "description": "Working directory override." }
+      }
+    },
+    "CustomRuntime": {
+      "type": "object",
+      "required": ["type", "adapter"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "custom" },
+        "adapter": { "type": "string", "minLength": 1, "description": "Path to the adapter binary or Node module." },
+        "config": {
+          "type": "object",
+          "description": "Arbitrary adapter-specific configuration."
+        }
+      }
+    },
+    "WorktreeConfig": {
+      "type": "object",
+      "required": ["mode"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["isolated", "shared"],
+          "description": "\"shared\": main worktree. \"isolated\": temporary git worktree."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch name for isolated worktrees."
+        }
+      }
+    },
+    "OutputDeclaration": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["text", "json", "file"],
+          "description": "Output type."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this output contains."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "version": "1",
+  "name": "feature-development",
+  "description": "Author code, review, test, and ship a PR.",
+  "entry": "author",
+  "defaults": {
+    "max_retries": 5,
+    "worktree": { "mode": "shared" }
+  },
+  "steps": {
+    "author": {
+      "name": "Author Agent",
+      "description": "Write or revise code based on user instructions or feedback from reviewers/tests.",
+      "interactive": true,
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": false
+      },
+      "prompt": "Implement the feature described by the user. If you received feedback from a reviewer or test run, address all issues before signaling done.",
+      "on_success": [
+        { "step": "reviewer" },
+        { "step": "test" }
+      ],
+      "outputs": {
+        "summary": {
+          "type": "text",
+          "description": "Summary of changes made in this iteration"
+        }
+      }
+    },
+    "reviewer": {
+      "name": "Reviewer Agent",
+      "description": "Review code changes for correctness, style, and design.",
+      "interactive": false,
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "Review the diff in the current worktree. Check for bugs, style issues, and design problems. Exit with success if the code is acceptable, failure if not.",
+      "worktree": { "mode": "isolated" },
+      "on_success": [
+        { "step": "pr" }
+      ],
+      "on_failure": [
+        {
+          "step": "author",
+          "message": "The code review found issues that need to be fixed:\n\n${steps.reviewer.output.review}"
+        }
+      ],
+      "outputs": {
+        "review": {
+          "type": "text",
+          "description": "Review comments explaining what needs to change and why"
+        }
+      }
+    },
+    "test": {
+      "name": "Test Runner",
+      "description": "Run the project's test suite.",
+      "interactive": false,
+      "runtime": {
+        "type": "shell",
+        "command": "npm",
+        "args": ["test"]
+      },
+      "worktree": { "mode": "isolated" },
+      "timeout": 300,
+      "on_success": [
+        { "step": "pr" }
+      ],
+      "on_failure": [
+        {
+          "step": "author",
+          "message": "Tests failed. Here is the test output:\n\n${steps.test.output.results}"
+        }
+      ],
+      "outputs": {
+        "results": {
+          "type": "text",
+          "description": "Full test output including failure messages and stack traces"
+        }
+      }
+    },
+    "pr": {
+      "name": "PR Agent",
+      "description": "Create a PR and monitor CI results and reviewer feedback on GitHub.",
+      "interactive": false,
+      "join": ["reviewer", "test"],
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true,
+        "mcp_servers": ["github"]
+      },
+      "prompt": "Create a pull request for the current branch. Summary of changes:\n${steps.author.output.summary}\n\nMonitor CI results and reviewer comments. Exit with success when the PR is merged. Exit with failure if CI fails or reviewers request changes.",
+      "on_failure": [
+        {
+          "step": "author",
+          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr.output.feedback}"
+        }
+      ],
+      "outputs": {
+        "feedback": {
+          "type": "text",
+          "description": "CI failure details or reviewer comments from GitHub"
+        },
+        "pr_url": {
+          "type": "text",
+          "description": "URL of the created pull request"
+        }
+      }
+    }
+  }
+}

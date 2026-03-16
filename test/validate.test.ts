@@ -270,6 +270,72 @@ describe("validate", () => {
       );
     });
 
+    it("errors when on_failure transitions target different steps", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_success: [{ step: "b" }, { step: "c" }],
+          },
+          b: {
+            name: "B",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_failure: [{ step: "a" }],
+          },
+          c: {
+            name: "C",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_failure: [{ step: "d" }],
+          },
+          d: {
+            name: "D",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+          },
+        },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ message: expect.stringContaining("same step") })
+      );
+    });
+
+    it("accepts when all on_failure transitions target the same step", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_success: [{ step: "b" }, { step: "c" }],
+          },
+          b: {
+            name: "B",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_failure: [{ step: "a" }],
+          },
+          c: {
+            name: "C",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_failure: [{ step: "a" }],
+          },
+        },
+      });
+      expect(result.valid).toBe(true);
+    });
+
     it("accepts step without runtime when defaults.runtime is set", () => {
       const result = validate({
         version: "1",

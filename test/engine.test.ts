@@ -376,6 +376,143 @@ describe("WorkflowEngine", () => {
     expect(aRunCount).toBeGreaterThanOrEqual(2);
   });
 
+  it("fan-out succeeds when both downstream steps succeed", async () => {
+    const executionOrder: string[] = [];
+    const workflow = makeWorkflow({
+      steps: {
+        author: {
+          name: "Author",
+          interactive: false,
+          on_success: [{ step: "reviewer" }, { step: "test" }],
+        },
+        reviewer: {
+          name: "Reviewer",
+          interactive: false,
+          on_failure: [{ step: "author", message: "review failed" }],
+        },
+        test: {
+          name: "Test",
+          interactive: false,
+          on_failure: [{ step: "author", message: "tests failed" }],
+        },
+      },
+      entry: "author",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executionOrder.push(ctx.stepId);
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    expect(executionOrder[0]).toBe("author");
+    expect(executionOrder).toContain("reviewer");
+    expect(executionOrder).toContain("test");
+    expect(executionOrder.length).toBe(3);
+  });
+
+  it("one downstream step fails and recycles upstream", async () => {
+    const executionOrder: string[] = [];
+    let reviewerAttempts = 0;
+    const workflow = makeWorkflow({
+      steps: {
+        author: {
+          name: "Author",
+          interactive: false,
+          on_success: [{ step: "reviewer" }, { step: "test" }],
+        },
+        reviewer: {
+          name: "Reviewer",
+          interactive: false,
+          on_failure: [{ step: "author", message: "review failed" }],
+        },
+        test: {
+          name: "Test",
+          interactive: false,
+          on_failure: [{ step: "author", message: "tests failed" }],
+        },
+      },
+      entry: "author",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executionOrder.push(ctx.stepId);
+      if (ctx.stepId === "reviewer") {
+        reviewerAttempts++;
+        if (reviewerAttempts === 1) {
+          return { success: false, outputs: {}, error: "bad code" };
+        }
+      }
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    expect(reviewerAttempts).toBe(2);
+    // author ran at least twice (initial + retry after reviewer failure)
+    expect(executionOrder.filter((s) => s === "author").length).toBeGreaterThanOrEqual(2);
+    // reviewer ran twice (fail then succeed)
+    expect(executionOrder.filter((s) => s === "reviewer").length).toBe(2);
+  });
+
+  it("both downstream steps fail and recycle upstream", async () => {
+    const executionOrder: string[] = [];
+    let reviewerAttempts = 0;
+    let testAttempts = 0;
+    const workflow = makeWorkflow({
+      steps: {
+        author: {
+          name: "Author",
+          interactive: false,
+          on_success: [{ step: "reviewer" }, { step: "test" }],
+        },
+        reviewer: {
+          name: "Reviewer",
+          interactive: false,
+          on_failure: [{ step: "author", message: "review failed" }],
+        },
+        test: {
+          name: "Test",
+          interactive: false,
+          on_failure: [{ step: "author", message: "tests failed" }],
+        },
+      },
+      entry: "author",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executionOrder.push(ctx.stepId);
+      if (ctx.stepId === "reviewer") {
+        reviewerAttempts++;
+        if (reviewerAttempts === 1) {
+          return { success: false, outputs: {}, error: "bad code" };
+        }
+      }
+      if (ctx.stepId === "test") {
+        testAttempts++;
+        if (testAttempts === 1) {
+          return { success: false, outputs: {}, error: "tests broken" };
+        }
+      }
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    // Both ran at least twice (initial failure + at least one retry that succeeds)
+    expect(reviewerAttempts).toBeGreaterThanOrEqual(2);
+    expect(testAttempts).toBeGreaterThanOrEqual(2);
+    // author ran multiple times due to failures from both downstream steps
+    expect(executionOrder.filter((s) => s === "author").length).toBeGreaterThanOrEqual(2);
+  });
+
   it("dry-run does not execute adapters", async () => {
     let adapterCalled = false;
     const workflow = makeWorkflow();

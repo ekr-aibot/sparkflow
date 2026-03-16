@@ -1,4 +1,5 @@
 import { dirname, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import type { SparkflowWorkflow, Step, Runtime } from "../schema/types.js";
 import type { RuntimeAdapter } from "../runtime/types.js";
@@ -145,6 +146,17 @@ export class WorkflowEngine {
       this.logger.info(`[sparkflow] Workflow "${this.workflow.name}" completed successfully`);
     } else {
       this.logger.error(`[sparkflow] Workflow "${this.workflow.name}" failed`);
+    }
+
+    // Print the current branch
+    try {
+      const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd: this.cwd,
+        stdio: "pipe",
+      }).toString().trim();
+      this.logger.info(`[sparkflow] Results are on branch: ${branch}`);
+    } catch {
+      // Not a git repo or git not available
     }
 
     // Cleanup

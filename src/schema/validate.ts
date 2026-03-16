@@ -164,6 +164,23 @@ function semanticValidation(workflow: SparkflowWorkflow): ValidationDiagnostic[]
     }
   }
 
+  // All on_failure transitions must target the same step
+  const failureTargets = new Set<string>();
+  for (const [id, step] of Object.entries(workflow.steps)) {
+    if (step.on_failure) {
+      for (const t of step.on_failure) {
+        failureTargets.add(t.step);
+      }
+    }
+  }
+  if (failureTargets.size > 1) {
+    diagnostics.push({
+      severity: "error",
+      message: `All on_failure transitions must target the same step, but found targets: ${[...failureTargets].join(", ")}`,
+      path: "steps",
+    });
+  }
+
   // Warn about unreachable steps
   for (const id of stepIds) {
     if (!reachable.has(id)) {

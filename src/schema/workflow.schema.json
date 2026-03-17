@@ -141,7 +141,9 @@
       "oneOf": [
         { "$ref": "#/$defs/ClaudeCodeRuntime" },
         { "$ref": "#/$defs/ShellRuntime" },
-        { "$ref": "#/$defs/CustomRuntime" }
+        { "$ref": "#/$defs/CustomRuntime" },
+        { "$ref": "#/$defs/PrWatcherRuntime" },
+        { "$ref": "#/$defs/PrCreatorRuntime" }
       ]
     },
     "ClaudeCodeRuntime": {
@@ -190,6 +192,24 @@
           "type": "object",
           "description": "Arbitrary adapter-specific configuration."
         }
+      }
+    },
+    "PrWatcherRuntime": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "pr-watcher" },
+        "poll_interval": { "type": "integer", "minimum": 5, "description": "Seconds between checks." }
+      }
+    },
+    "PrCreatorRuntime": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "pr-creator" },
+        "model": { "type": "string", "description": "Model for title/summary generation. Defaults to \"sonnet\"." }
       }
     },
     "WorktreeConfig": {

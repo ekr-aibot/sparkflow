@@ -1,7 +1,7 @@
 {
   "version": "1",
   "name": "feature-development",
-  "description": "Develop code, then fan out to automated review and tests. On failure, loop back to developer with feedback. On success, create a PR.",
+  "description": "Develop code, then fan out to automated review and tests. On failure, loop back to developer with feedback. On success, create and watch a PR.",
   "entry": "developer",
   "defaults": {
     "max_retries": 5,
@@ -40,7 +40,7 @@
       },
       "prompt": "./prompts/reviewer.md",
       "on_success": [
-        { "step": "pr" }
+        { "step": "pr-create" }
       ],
       "on_failure": [
         {
@@ -66,7 +66,7 @@
       },
       "timeout": 300,
       "on_success": [
-        { "step": "pr" }
+        { "step": "pr-create" }
       ],
       "on_failure": [
         {
@@ -81,21 +81,37 @@
         }
       }
     },
-    "pr": {
-      "name": "PR Agent",
-      "description": "Create a PR with a summary of the changes.",
+    "pr-create": {
+      "name": "PR Creator",
+      "description": "Push the branch and create a pull request with an AI-generated title and summary.",
       "interactive": false,
       "join": ["reviewer", "test"],
       "runtime": {
-        "type": "claude-code",
-        "model": "sonnet",
-        "auto_accept": true
+        "type": "pr-creator",
+        "model": "sonnet"
       },
-      "prompt": "./prompts/pr.md",
+      "on_success": [
+        { "step": "pr-watch" }
+      ],
+      "outputs": {
+        "pr_url": {
+          "type": "text",
+          "description": "URL of the created pull request"
+        }
+      }
+    },
+    "pr-watch": {
+      "name": "PR Watcher",
+      "description": "Watch the PR for merge, CI failures, or review comments.",
+      "interactive": false,
+      "runtime": {
+        "type": "pr-watcher",
+        "poll_interval": 30
+      },
       "on_failure": [
         {
           "step": "developer",
-          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr.output.feedback}"
+          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr-watch.output.feedback}"
         }
       ],
       "outputs": {
@@ -105,7 +121,7 @@
         },
         "pr_url": {
           "type": "text",
-          "description": "URL of the created pull request"
+          "description": "URL of the pull request"
         }
       }
     }

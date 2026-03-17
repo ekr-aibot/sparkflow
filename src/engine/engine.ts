@@ -8,6 +8,8 @@ import type { RuntimeContext } from "../runtime/types.js";
 import { ShellAdapter } from "../runtime/shell.js";
 import { ClaudeCodeAdapter } from "../runtime/claude-code.js";
 import { CustomAdapter } from "../runtime/custom.js";
+import { PrWatcherAdapter } from "../runtime/pr-watcher.js";
+import { PrCreatorAdapter } from "../runtime/pr-creator.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
@@ -118,6 +120,8 @@ export class WorkflowEngine {
       ["shell", new ShellAdapter()],
       ["claude-code", new ClaudeCodeAdapter()],
       ["custom", new CustomAdapter()],
+      ["pr-watcher", new PrWatcherAdapter()],
+      ["pr-creator", new PrCreatorAdapter()],
     ]);
 
     // Initialize step statuses

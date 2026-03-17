@@ -51,7 +51,19 @@ export interface CustomRuntime {
   config?: Record<string, unknown>;
 }
 
-export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime;
+export interface PrWatcherRuntime {
+  type: "pr-watcher";
+  /** Seconds between polling checks. Defaults to 30. */
+  poll_interval?: number;
+}
+
+export interface PrCreatorRuntime {
+  type: "pr-creator";
+  /** Model for title/summary generation. Defaults to "sonnet". */
+  model?: string;
+}
+
+export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime;
 
 // ── Transition ──────────────────────────────────────────────────────
 

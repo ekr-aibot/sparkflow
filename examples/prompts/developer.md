@@ -34,4 +34,9 @@ When addressing test failures:
 
 ## Finishing up
 
-When you're confident the implementation is correct and complete, signal that you're done. Your changes will be reviewed by an automated code reviewer and tested by the project's test suite. If either finds issues, you'll be re-entered with feedback.
+When you're confident the implementation is correct and complete:
+
+1. **Stage and commit your changes.** Run `git add` for every file you created or modified, then `git commit` with a clear message describing what you did and why. Do not leave uncommitted work — downstream steps (review, testing, PR creation) operate on the committed state.
+2. Signal that you're done.
+
+Your changes will be reviewed by an automated code reviewer and tested by the project's test suite. If either finds issues, you'll be re-entered with feedback.

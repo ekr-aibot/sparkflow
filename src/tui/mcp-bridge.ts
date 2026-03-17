@@ -101,58 +101,9 @@ server.tool(
   }
 );
 
-// --- MCP Prompts (show up as /slash-commands in claude) ---
-
-server.prompt(
-  "sf-plan",
-  "Enter planning mode to build a project plan before dispatching to a workflow",
-  async () => {
-    return {
-      messages: [{
-        role: "user" as const,
-        content: {
-          type: "text" as const,
-          text: `Enter planning mode. Help me think through what I want to build before handing it off to a sparkflow workflow.
-
-Work with me to produce a clear, detailed project plan. This plan will be passed to the workflow agents as their instructions, so it needs to be specific enough for them to execute autonomously. Help me think through:
-
-1. **Goal**: What are we building? What problem does it solve?
-2. **Scope**: What's in and what's out? What are the boundaries?
-3. **Approach**: How should it be implemented? Key design decisions, architecture, patterns.
-4. **Files**: What files need to be created or modified?
-5. **Details**: Edge cases, error handling, testing strategy, anything the agents need to know.
-6. **Verification**: How do we know it's done? What does success look like?
-
-Ask me questions, challenge my assumptions, and help me refine the plan. When we're both happy with it, I'll use /sf-dispatch to write the plan to disk and kick off the workflow.`,
-        },
-      }],
-    };
-  }
-);
-
-server.prompt(
-  "sf-dispatch",
-  "Write the plan to disk and dispatch it to a sparkflow workflow",
-  { workflow_path: z.string().describe("Path to the workflow JSON file to run") },
-  async ({ workflow_path }) => {
-    return {
-      messages: [{
-        role: "user" as const,
-        content: {
-          type: "text" as const,
-          text: `Dispatch the plan we just built to the workflow at: ${workflow_path}
-
-Do the following:
-1. Write the plan we developed to a markdown file (e.g. plan.md in the current directory).
-2. Call the start_workflow tool with workflow_path="${workflow_path}" and plan set to the path of the plan file.
-3. Report back the job ID.
-
-The status pane at the bottom of the terminal will show live progress.`,
-        },
-      }],
-    };
-  }
-);
+// --- MCP Prompts (for commands that need live IPC data) ---
+// sf-plan and sf-dispatch are injected as Claude Code slash commands
+// in .claude/commands/ by the sparkflow entry point.
 
 server.prompt(
   "sf-detail",

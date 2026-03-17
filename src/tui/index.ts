@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, mkdirSync, existsSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -23,10 +23,10 @@ You have MCP tools from the sparkflow-dashboard server to manage workflow jobs:
 - get_job_detail: Get the full output log from a specific job.
 
 The user has slash commands:
-- /sf-plan — Enter planning mode. Help the user think through what they want to build: goals, scope, approach, files to change, edge cases, verification. Produce a clear project plan that workflow agents can execute autonomously.
-- /sf-dispatch <workflow_path> — Write the plan from this conversation to a file and start the specified workflow with it. The workflow already exists — the plan is passed via --plan.
-- /sf-detail <job_id> — Show output from a job and diagnose failures.
-- /sf-jobs — Quick summary of all running jobs.
+- /project:sf-plan — Enter planning mode. Help the user think through what they want to build. Produce a project plan for workflow agents to execute.
+- /project:sf-dispatch <workflow_path> — Write the plan to disk and start the specified workflow with it via --plan.
+- /sf-detail <job_id> — Show output from a job and diagnose failures (MCP prompt).
+- /sf-jobs — Quick summary of all running jobs (MCP prompt).
 
 If a job becomes blocked (needs user input), it will show in the status pane at the bottom of the terminal. The user will handle blocked jobs directly.`;
 
@@ -37,6 +37,7 @@ Options:
   --chat-command <cmd>   Chat tool command (default: "claude")
   --chat-args <args>     Extra args for chat tool (comma-separated)
   --cwd <dir>            Working directory (default: current directory)
+  --workflow <path>      Default workflow for /project:sf-dispatch (default: none)
   --status-lines <n>     Height of status pane in lines (default: 5)`);
   process.exit(0);
 }
@@ -45,11 +46,13 @@ function parseArgs(argv: string[]): {
   chatCommand: string;
   chatArgs: string[];
   cwd: string;
+  workflow: string | null;
   statusLines: number;
 } {
   let chatCommand = "claude";
   let chatArgs: string[] = [];
   let cwd = process.cwd();
+  let workflow: string | null = null;
   let statusLines = 5;
 
   for (let i = 0; i < argv.length; i++) {
@@ -71,6 +74,13 @@ function parseArgs(argv: string[]): {
       case "--cwd":
         cwd = resolve(argv[++i] ?? ".");
         break;
+      case "--workflow":
+        workflow = argv[++i];
+        if (!workflow) {
+          console.error("Error: --workflow requires a value");
+          process.exit(1);
+        }
+        break;
       case "--status-lines":
         statusLines = parseInt(argv[++i] ?? "5", 10);
         break;
@@ -80,7 +90,7 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { chatCommand, chatArgs, cwd, statusLines };
+  return { chatCommand, chatArgs, cwd, workflow, statusLines };
 }
 
 function checkTmux(): void {
@@ -93,6 +103,34 @@ function checkTmux(): void {
 }
 
 const args = parseArgs(process.argv.slice(2));
+
+// Validate --workflow if provided
+if (args.workflow) {
+  const workflowPath = resolve(args.cwd, args.workflow);
+  if (!existsSync(workflowPath)) {
+    console.error(`Error: workflow file not found: ${workflowPath}`);
+    process.exit(1);
+  }
+  try {
+    const content = readFileSync(workflowPath, "utf-8");
+    const data = JSON.parse(content);
+    const { validate } = await import("../schema/validate.js");
+    const result = validate(data);
+    if (!result.valid) {
+      console.error(`Error: workflow validation failed: ${workflowPath}`);
+      for (const err of result.errors) {
+        console.error(`  ${err.message}${err.path ? ` (at ${err.path})` : ""}`);
+      }
+      process.exit(1);
+    }
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      console.error(`Error: invalid JSON in workflow file: ${workflowPath}`);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
 
 checkTmux();
 
@@ -119,6 +157,41 @@ writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig));
 const systemPromptPath = join(tmpDir, "system-prompt.txt");
 writeFileSync(systemPromptPath, DEFAULT_SYSTEM_PROMPT);
 
+// 4. Inject slash commands into .claude/commands/ in the working directory
+const SLASH_COMMANDS: Record<string, string> = {
+  "sf-plan": `Enter planning mode. Help me think through what I want to build before handing it off to a sparkflow workflow.
+
+Work with me to produce a clear, detailed project plan. This plan will be passed to the workflow agents as their instructions, so it needs to be specific enough for them to execute autonomously.
+
+Cover these areas as the conversation develops:
+- **Goal**: What are we building? What problem does it solve?
+- **Scope**: What's in and what's out?
+- **Approach**: Key design decisions, architecture, patterns.
+- **Files**: What needs to be created or modified?
+- **Details**: Edge cases, error handling, testing strategy.
+- **Verification**: How do we know it's done?
+
+Important: Do NOT ask me if I want to continue, if I'm ready to proceed, or if there's anything else to discuss. Just respond to what I say. When I'm done planning, I'll run /project:sf-dispatch myself. Keep your responses focused and concise — give me your analysis, flag concerns, and suggest improvements directly without asking permission to continue.`,
+
+};
+
+// sf-dispatch is built dynamically based on --workflow flag
+const defaultWorkflowNote = args.workflow
+  ? `The default workflow is: ${resolve(args.cwd, args.workflow)}
+If the user provides an argument, use that instead: $ARGUMENTS`
+  : `The workflow to run: $ARGUMENTS`;
+
+SLASH_COMMANDS["sf-dispatch"] = `Dispatch the plan we just built to a sparkflow workflow.
+
+${defaultWorkflowNote}
+
+Do the following:
+1. Write the plan we developed to a markdown file (e.g. plan.md in the current directory).
+2. Call the start_workflow MCP tool with workflow_path set to the workflow path above, and plan set to the path of the plan file you wrote.
+3. Report back the job ID.
+
+The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`;
+
 // Shell-escape a single argument
 const sq = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
@@ -138,6 +211,30 @@ const buildStatusCmd = (session: string) =>
 // 6. Create tmux session with two panes
 const sessionName = `sparkflow-${randomBytes(4).toString("hex")}`;
 const attachName = `${sessionName}-attach`;
+
+// sf-quit needs the session name
+SLASH_COMMANDS["sf-quit"] = `Shut down the sparkflow dashboard session.
+
+Run this command:
+\`\`\`
+tmux kill-session -t '${sessionName}'
+\`\`\`
+
+This will terminate all running jobs and close the dashboard.`;
+
+// Write slash command files to .claude/commands/
+const commandsDir = join(args.cwd, ".claude", "commands");
+const createdCommandsDir = !existsSync(commandsDir);
+const commandFiles: string[] = [];
+
+mkdirSync(commandsDir, { recursive: true });
+for (const [name, content] of Object.entries(SLASH_COMMANDS)) {
+  const filePath = join(commandsDir, `${name}.md`);
+  if (!existsSync(filePath)) {
+    writeFileSync(filePath, content);
+    commandFiles.push(filePath);
+  }
+}
 
 // Get terminal dimensions before we lose the TTY
 const cols = process.stdout.columns || 80;
@@ -191,4 +288,12 @@ try {
   try { unlinkSync(mcpConfigPath); } catch { /* ignore */ }
   try { unlinkSync(systemPromptPath); } catch { /* ignore */ }
   try { unlinkSync(socketPath); } catch { /* ignore */ }
+  // Remove injected slash command files
+  for (const f of commandFiles) {
+    try { unlinkSync(f); } catch { /* ignore */ }
+  }
+  // Remove commands dir if we created it and it's now empty
+  if (createdCommandsDir) {
+    try { rmdirSync(commandsDir); } catch { /* ignore — not empty or already gone */ }
+  }
 }

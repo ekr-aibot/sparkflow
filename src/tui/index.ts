@@ -159,19 +159,24 @@ writeFileSync(systemPromptPath, DEFAULT_SYSTEM_PROMPT);
 
 // 4. Inject slash commands into .claude/commands/ in the working directory
 const SLASH_COMMANDS: Record<string, string> = {
-  "sf-plan": `Enter planning mode. Help me think through what I want to build before handing it off to a sparkflow workflow.
+  "sf-plan": `I want to build a plan for a task. Read my description below, then:
 
-Work with me to produce a clear, detailed project plan. This plan will be passed to the workflow agents as their instructions, so it needs to be specific enough for them to execute autonomously.
+1. If anything is unclear or ambiguous, ask me your questions **all at once** in a single message. Wait for my answers before proceeding.
+2. Once you have enough information, produce a complete project plan and stop. Do not ask what to do next or offer to help further — just present the plan.
 
-Cover these areas as the conversation develops:
-- **Goal**: What are we building? What problem does it solve?
+The plan will be passed to workflow agents as their instructions, so it must be specific enough for them to execute autonomously. Structure the plan with these sections:
+
+- **Goal**: What are we building and why?
 - **Scope**: What's in and what's out?
 - **Approach**: Key design decisions, architecture, patterns.
 - **Files**: What needs to be created or modified?
 - **Details**: Edge cases, error handling, testing strategy.
 - **Verification**: How do we know it's done?
 
-Important: Do NOT ask me if I want to continue, if I'm ready to proceed, or if there's anything else to discuss. Just respond to what I say. When I'm done planning, I'll run /project:sf-dispatch myself. Keep your responses focused and concise — give me your analysis, flag concerns, and suggest improvements directly without asking permission to continue.`,
+Keep the plan concrete — name specific files, functions, and types. When I'm happy with it, I'll run /project:sf-dispatch myself.
+
+Here's what I want to build:
+$ARGUMENTS`,
 
 };
 
@@ -186,9 +191,8 @@ SLASH_COMMANDS["sf-dispatch"] = `Dispatch the plan we just built to a sparkflow 
 ${defaultWorkflowNote}
 
 Do the following:
-1. Write the plan we developed to a markdown file (e.g. plan.md in the current directory).
-2. Call the start_workflow MCP tool with workflow_path set to the workflow path above, and plan set to the path of the plan file you wrote.
-3. Report back the job ID.
+1. Call the start_workflow MCP tool with workflow_path set to the workflow path above, and plan_text set to the full plan markdown we developed (not a file path — the tool writes it to .sparkflow/logs/ automatically).
+2. Report back the job ID.
 
 The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`;
 
@@ -230,10 +234,8 @@ const commandFiles: string[] = [];
 mkdirSync(commandsDir, { recursive: true });
 for (const [name, content] of Object.entries(SLASH_COMMANDS)) {
   const filePath = join(commandsDir, `${name}.md`);
-  if (!existsSync(filePath)) {
-    writeFileSync(filePath, content);
-    commandFiles.push(filePath);
-  }
+  writeFileSync(filePath, content);
+  commandFiles.push(filePath);
 }
 
 // Get terminal dimensions before we lose the TTY

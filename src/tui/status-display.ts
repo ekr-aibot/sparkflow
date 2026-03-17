@@ -77,14 +77,16 @@ function handleIpcRequest(msg: IpcMessage, jobManager: JobManager, cwd: string):
 
   switch (msg.type) {
     case "start_workflow": {
-      const { workflowPath, cwd: jobCwd, plan } = msg.payload as {
+      const { workflowPath, cwd: jobCwd, plan, planText } = msg.payload as {
         workflowPath: string;
         cwd?: string;
         plan?: string;
+        planText?: string;
       };
       const jobId = jobManager.startJob(workflowPath, {
         cwd: jobCwd ?? cwd,
         plan,
+        planText,
       });
       return response({ jobId });
     }

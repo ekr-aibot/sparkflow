@@ -1,7 +1,7 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join, basename } from "node:path";
 import { tmpdir } from "node:os";
@@ -35,12 +35,22 @@ export class JobManager {
     this.tmuxSession = session;
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string }): string {
     const id = randomBytes(6).toString("hex");
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
     if (opts?.cwd) args.push("--cwd", opts.cwd);
-    if (opts?.plan) args.push("--plan", opts.plan);
+
+    // Resolve plan path: explicit file path wins, otherwise write planText to logs dir
+    let planPath = opts?.plan;
+    if (!planPath && opts?.planText) {
+      const workflowName = basename(workflowPath, ".json");
+      const logDir = join(opts?.cwd ?? process.cwd(), ".sparkflow", "logs", workflowName);
+      mkdirSync(logDir, { recursive: true });
+      planPath = join(logDir, `plan-${id}.md`);
+      writeFileSync(planPath, opts.planText);
+    }
+    if (planPath) args.push("--plan", planPath);
 
     const child = spawn(process.execPath, [SPARKFLOW_RUN_PATH, ...args], {
       cwd: opts?.cwd ?? process.cwd(),
@@ -77,12 +87,16 @@ export class JobManager {
     // Open a tmux window with tail -f on the log
     this.openTmuxWindow(id, workflowPath, logPath);
 
+    const safeLogWrite = (stream: WriteStream | undefined, msg: string) => {
+      if (stream && !stream.closed && stream.writable) stream.write(msg);
+    };
+
     // Parse stderr for status-json events, and capture for output buffer
     if (child.stderr) {
       const rl = createInterface({ input: child.stderr });
       rl.on("line", (line) => {
         managed.outputBuffer.push(`[stderr] ${line}`);
-        logStream.write(`${line}\n`);
+        safeLogWrite(managed.logStream, `${line}\n`);
         this.handleStatusLine(id, line);
       });
     }
@@ -92,11 +106,18 @@ export class JobManager {
       const rl = createInterface({ input: child.stdout });
       rl.on("line", (line) => {
         managed.outputBuffer.push(line);
-        logStream.write(`${line}\n`);
+        safeLogWrite(managed.logStream, `${line}\n`);
         // Also try to parse verbose output for step info
         this.handleVerboseLine(id, line);
       });
     }
+
+    const endLogStream = (job: ManagedJob, msg: string) => {
+      if (!job.logStream || job.logStream.closed || !job.logStream.writable) return;
+      job.logStream.write(msg);
+      job.logStream.end();
+      job.logStream = undefined;
+    };
 
     child.on("close", (code) => {
       const job = this.jobs.get(id);
@@ -106,9 +127,7 @@ export class JobManager {
           job.info.state = code === 0 ? "succeeded" : "failed";
           job.info.summary = code === 0 ? "completed" : `exit code ${code}`;
         }
-        const finalMsg = `\n--- job ${id} ${job.info.state} ---\n`;
-        job.logStream?.write(finalMsg);
-        job.logStream?.end();
+        endLogStream(job, `\n--- job ${id} ${job.info.state} ---\n`);
         this.fireUpdate();
       }
     });
@@ -119,8 +138,7 @@ export class JobManager {
         job.info.state = "failed";
         job.info.summary = err.message;
         job.info.endTime = Date.now();
-        job.logStream?.write(`\n--- job ${id} error: ${err.message} ---\n`);
-        job.logStream?.end();
+        endLogStream(job, `\n--- job ${id} error: ${err.message} ---\n`);
         this.fireUpdate();
       }
     });

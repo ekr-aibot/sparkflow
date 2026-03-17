@@ -95,6 +95,17 @@ function getComments(owner: string, repo: string, num: number, cwd: string): Com
   }
 }
 
+function getReviewComments(owner: string, repo: string, num: number, cwd: string): Comment[] {
+  try {
+    return ghJson<Comment[]>(
+      ["api", `repos/${owner}/${repo}/pulls/${num}/comments`],
+      cwd,
+    );
+  } catch {
+    return [];
+  }
+}
+
 function formatFeedback(type: string, details: string): string {
   return `[${type}]\n${details}`;
 }
@@ -152,6 +163,9 @@ export class PrWatcherAdapter implements RuntimeAdapter {
 
     const initialComments = getComments(owner, repo, pr.number, ctx.cwd);
     const initialCommentCount = initialComments.length;
+
+    const initialReviewComments = getReviewComments(owner, repo, pr.number, ctx.cwd);
+    const initialReviewCommentCount = initialReviewComments.length;
 
     // Poll loop
     while (true) {
@@ -243,7 +257,7 @@ export class PrWatcherAdapter implements RuntimeAdapter {
         }
       }
 
-      // Check for new comments
+      // Check for new issue comments
       const comments = getComments(owner, repo, pr.number, ctx.cwd);
       if (comments.length > initialCommentCount) {
         const newComments = comments.slice(initialCommentCount);
@@ -259,6 +273,41 @@ export class PrWatcherAdapter implements RuntimeAdapter {
           },
           error: "New comments on PR",
         };
+      }
+
+      // Check for new PR review comments (inline code comments)
+      const reviewComments = getReviewComments(owner, repo, pr.number, ctx.cwd);
+      if (reviewComments.length > initialReviewCommentCount) {
+        const newReviewComments = reviewComments.slice(initialReviewCommentCount);
+        const details = newReviewComments
+          .map((c) => `- @${c.user.login}: ${c.body}`)
+          .join("\n");
+        ctx.logger?.info(`[${ctx.stepId}] new review comments on PR`);
+        return {
+          success: false,
+          outputs: {
+            feedback: formatFeedback("Review Comments", details),
+            pr_url: current.url,
+          },
+          error: "New review comments on PR",
+        };
+      }
+
+      // All checks passed and no blocking reviews → success
+      if (checks.length > 0) {
+        const allCompleted = checks.every(
+          (c) => c.state === "completed" || c.state === "COMPLETED",
+        );
+        const noneFailed = checks.every(
+          (c) => c.conclusion !== "failure" && c.conclusion !== "FAILURE",
+        );
+        if (allCompleted && noneFailed) {
+          ctx.logger?.info(`[${ctx.stepId}] all checks passed`);
+          return {
+            success: true,
+            outputs: { pr_url: current.url },
+          };
+        }
       }
 
       ctx.logger?.info(`[${ctx.stepId}] no changes, polling again in ${runtime.poll_interval ?? DEFAULT_POLL_INTERVAL}s...`);

@@ -99,6 +99,8 @@ export class WorkflowEngine {
   private ipcServers = new Map<string, IpcServer>();
   private aborted = false;
   private abortError?: string;
+  /** When the workflow default is "isolated", all steps share this single worktree. */
+  private runWorktree?: string;
 
   constructor(
     workflow: SparkflowWorkflow,
@@ -139,6 +141,30 @@ export class WorkflowEngine {
   async run(): Promise<RunResult> {
     this.logger.info(`[sparkflow] Starting workflow "${this.workflow.name}"`);
 
+    // If workflow default worktree is "fork" or "isolated", create a single
+    // worktree for the entire run. All steps share this directory.
+    //   fork     → new directory, detached HEAD (no new branch)
+    //   isolated → new directory, new named branch (for PRs)
+    const defaultMode = this.workflow.defaults?.worktree?.mode;
+    if ((defaultMode === "fork" || defaultMode === "isolated") && !this.dryRun) {
+      try {
+        const dummyStep: Step = {
+          name: "_run",
+          interactive: false,
+          worktree: this.workflow.defaults!.worktree,
+        };
+        this.runWorktree = this.worktreeManager.resolve("_run", dummyStep, {
+          ...this.workflow,
+          defaults: { ...this.workflow.defaults, worktree: { mode: "shared" } },
+        });
+        this.logger.info(`[sparkflow] Using ${defaultMode} worktree: ${this.runWorktree}`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`[sparkflow] Failed to create run worktree: ${errMsg}`);
+        return { success: false, stepResults: this.stepStatuses, error: errMsg };
+      }
+    }
+
     this.triggerStep(this.workflow.entry);
 
     // Drain active promises until nothing is running
@@ -156,16 +182,20 @@ export class WorkflowEngine {
       this.logger.error(`[sparkflow] Workflow "${this.workflow.name}" failed`);
     }
 
-    // Print the current branch
+    // Print the current branch (use run worktree if active)
+    const reportCwd = this.runWorktree ?? this.cwd;
     try {
       const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-        cwd: this.cwd,
+        cwd: reportCwd,
         stdio: "pipe",
       }).toString().trim();
       this.logger.info(`[sparkflow] Results are on branch: ${branch}`);
     } catch {
       // Not a git repo or git not available
     }
+
+    // Cleanup run-level worktree (keep it around — it has the results)
+    // Don't clean up: the user or pr-creator needs the branch.
 
     // Cleanup
     this.interactionManager.close();
@@ -270,7 +300,8 @@ export class WorkflowEngine {
 
     this.logger.info(
       `[${stepId}] running (${runtime.type}${step.interactive ? ", interactive" : ""}${
-        step.worktree?.mode === "isolated" ? ", isolated worktree" : ""
+        step.worktree?.mode === "isolated" ? ", isolated worktree" :
+        step.worktree?.mode === "fork" ? ", forked worktree" : ""
       })`
     );
 
@@ -281,10 +312,25 @@ export class WorkflowEngine {
       return;
     }
 
-    // Resolve worktree
+    // Resolve worktree: if a run-level worktree exists, steps without their
+    // own worktree config share it. Steps with a "fork" config get a fresh
+    // checkout at the run worktree's HEAD (so they only see committed state).
     let cwd: string;
     try {
-      cwd = this.worktreeManager.resolve(stepId, step, this.workflow);
+      if (this.runWorktree && !step.worktree) {
+        cwd = this.runWorktree;
+      } else {
+        // If there's a run-level worktree, resolve the step's worktree
+        // relative to its HEAD commit (not the repo root HEAD).
+        let commitish: string | undefined;
+        if (this.runWorktree) {
+          commitish = execFileSync("git", ["rev-parse", "HEAD"], {
+            cwd: this.runWorktree,
+            stdio: "pipe",
+          }).toString().trim();
+        }
+        cwd = this.worktreeManager.resolve(stepId, step, this.workflow, commitish);
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.logger.error(`[${stepId}] worktree setup failed: ${errMsg}`);

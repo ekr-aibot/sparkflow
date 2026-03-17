@@ -219,8 +219,8 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": ["isolated", "shared"],
-          "description": "\"shared\": main worktree. \"isolated\": temporary git worktree."
+          "enum": ["shared", "fork", "isolated"],
+          "description": "\"shared\": main worktree. \"fork\": new worktree, detached HEAD. \"isolated\": new worktree, new branch."
         },
         "branch": {
           "type": "string",

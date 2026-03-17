@@ -37,6 +37,7 @@ When addressing test failures:
 When you're confident the implementation is correct and complete:
 
 1. **Stage and commit your changes.** Run `git add` for every file you created or modified, then `git commit` with a clear message describing what you did and why. Do not leave uncommitted work — downstream steps (review, testing, PR creation) operate on the committed state.
-2. Signal that you're done.
+2. **Do NOT push.** Do not run `git push`. A separate PR creation step handles pushing and opening the pull request.
+3. Signal that you're done.
 
 Your changes will be reviewed by an automated code reviewer and tested by the project's test suite. If either finds issues, you'll be re-entered with feedback.

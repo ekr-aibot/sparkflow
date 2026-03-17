@@ -11,11 +11,12 @@ export interface OutputDeclaration {
 
 export interface WorktreeConfig {
   /**
-   * "shared" — runs in the main worktree (or parent step's worktree).
-   * "isolated" — gets its own temporary git worktree.
+   * "shared"   — runs in the main worktree (or run-level worktree).
+   * "fork"     — new worktree directory, detached HEAD at current commit.
+   * "isolated" — new worktree directory with a new named branch.
    */
-  mode: "isolated" | "shared";
-  /** Branch name for isolated worktrees. Ignored when mode is "shared". */
+  mode: "shared" | "fork" | "isolated";
+  /** Branch name for isolated worktrees. Ignored for shared/fork modes. */
   branch?: string;
 }
 

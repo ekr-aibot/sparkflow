@@ -12,42 +12,37 @@ export class WorktreeManager {
     this.repoRoot = repoRoot;
   }
 
-  resolve(stepId: string, step: Step, workflow: SparkflowWorkflow): string {
+  /**
+   * @param commitish  When provided, fork/isolated worktrees are created at
+   *                   this commit instead of at the repo-root HEAD.
+   */
+  resolve(stepId: string, step: Step, workflow: SparkflowWorkflow, commitish?: string): string {
     const worktreeConfig = step.worktree ?? workflow.defaults?.worktree ?? { mode: "shared" };
 
     if (worktreeConfig.mode === "shared") {
       return this.repoRoot;
     }
 
-    // Isolated: create a git worktree
-    const baseBranch = worktreeConfig.branch ?? `sparkflow/${stepId}`;
-    const branch = this.findAvailableBranch(baseBranch);
     const worktreePath = resolve(this.repoRoot, WORKTREE_DIR, stepId);
+    this.prepareWorktreePath(worktreePath);
 
-    // Prune stale worktree entries (e.g., from a previous crashed run)
-    try {
-      execFileSync("git", ["worktree", "prune"], {
+    if (worktreeConfig.mode === "fork") {
+      // New directory, detached HEAD at the given commit (or current HEAD)
+      const args = ["worktree", "add", "--detach", worktreePath];
+      if (commitish) args.push(commitish);
+      execFileSync("git", args, {
         cwd: this.repoRoot,
         stdio: "pipe",
       });
-    } catch {
-      // Best-effort
-    }
-
-    // Remove leftover worktree at this path if it still exists
-    try {
-      execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
+    } else {
+      // "isolated": new directory, new named branch
+      const baseBranch = worktreeConfig.branch ?? `sparkflow/${stepId}`;
+      const branch = this.findAvailableBranch(baseBranch);
+      execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
         cwd: this.repoRoot,
         stdio: "pipe",
       });
-    } catch {
-      // Doesn't exist, that's fine
     }
-
-    execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
-      cwd: this.repoRoot,
-      stdio: "pipe",
-    });
 
     this.worktrees.set(stepId, worktreePath);
     return worktreePath;
@@ -71,6 +66,28 @@ export class WorktreeManager {
 
   hasWorktree(stepId: string): boolean {
     return this.worktrees.has(stepId);
+  }
+
+  private prepareWorktreePath(worktreePath: string): void {
+    // Prune stale worktree entries (e.g., from a previous crashed run)
+    try {
+      execFileSync("git", ["worktree", "prune"], {
+        cwd: this.repoRoot,
+        stdio: "pipe",
+      });
+    } catch {
+      // Best-effort
+    }
+
+    // Remove leftover worktree at this path if it still exists
+    try {
+      execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
+        cwd: this.repoRoot,
+        stdio: "pipe",
+      });
+    } catch {
+      // Doesn't exist, that's fine
+    }
   }
 
   private branchExists(branch: string): boolean {

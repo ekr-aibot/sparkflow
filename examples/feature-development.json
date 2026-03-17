@@ -33,6 +33,7 @@
       "name": "Reviewer Agent",
       "description": "Review code changes for correctness, style, and design.",
       "interactive": false,
+      "worktree": { "mode": "fork" },
       "runtime": {
         "type": "claude-code",
         "model": "sonnet",
@@ -59,6 +60,7 @@
       "name": "Test Runner",
       "description": "Run the project's test suite.",
       "interactive": false,
+      "worktree": { "mode": "fork" },
       "runtime": {
         "type": "shell",
         "command": "npm",
@@ -111,7 +113,7 @@
       "on_failure": [
         {
           "step": "developer",
-          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr-watch.output.feedback}"
+          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr-watch.output.feedback}. Fix the issue, re-verify the PR, and then return success. **DO NOT update the PR**"
         }
       ],
       "outputs": {

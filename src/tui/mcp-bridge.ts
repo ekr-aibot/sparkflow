@@ -33,12 +33,13 @@ server.tool(
     workflow_path: z.string().describe("Path to the workflow JSON file"),
     cwd: z.string().optional().describe("Working directory for the workflow"),
     plan: z.string().optional().describe("Path to a plan file to prepend to prompts"),
+    plan_text: z.string().optional().describe("Plan text to prepend to prompts (written to a temp file automatically)"),
   },
-  async ({ workflow_path, cwd, plan }) => {
+  async ({ workflow_path, cwd, plan, plan_text }) => {
     const msg: IpcMessage = {
       type: "start_workflow",
       id: randomBytes(8).toString("hex"),
-      payload: { workflowPath: workflow_path, cwd, plan },
+      payload: { workflowPath: workflow_path, cwd, plan, planText: plan_text },
     };
     const response = await ipc.request(msg);
     if (response.type === "error") {

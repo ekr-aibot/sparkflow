@@ -12,7 +12,7 @@ export interface JobInfo {
 }
 
 export type DashboardRequest =
-  | { type: "start_workflow"; id: string; payload: { workflowPath: string; cwd?: string; plan?: string } }
+  | { type: "start_workflow"; id: string; payload: { workflowPath: string; cwd?: string; plan?: string; planText?: string } }
   | { type: "list_jobs"; id: string; payload: Record<string, never> }
   | { type: "get_job_detail"; id: string; payload: { jobId: string } }
   | { type: "answer_question"; id: string; payload: { jobId: string; answer: string } };

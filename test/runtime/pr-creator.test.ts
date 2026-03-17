@@ -100,19 +100,14 @@ function setupBaseMocks(opts: { prCreateTitle?: (t: string) => void } = {}) {
   mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
     const argsArr = args as string[];
 
-    // git rev-parse --abbrev-ref HEAD
-    if (cmd === "git" && argsArr?.[0] === "rev-parse") {
-      return Buffer.from("my-feature\n");
-    }
-
-    // git checkout -b <branch>
-    if (cmd === "git" && argsArr?.[0] === "checkout" && argsArr?.[1] === "-b") {
-      return Buffer.from("");
-    }
-
-    // git push
+    // git push -u origin HEAD
     if (cmd === "git" && argsArr?.[0] === "push") {
       return Buffer.from("");
+    }
+
+    // git rev-parse --abbrev-ref HEAD (for fallback title)
+    if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+      return Buffer.from("sparkflow/developer\n");
     }
 
     // git log
@@ -157,7 +152,7 @@ describe("PrCreatorAdapter", () => {
     vi.restoreAllMocks();
   });
 
-  it("creates a unique branch and new PR", async () => {
+  it("pushes current branch and creates a new PR", async () => {
     setupBaseMocks();
     mockSpawnClaude({ title: "Add feature and fix bug", summary: "- Added feature\n- Fixed bug" });
 
@@ -165,39 +160,23 @@ describe("PrCreatorAdapter", () => {
     expect(result.success).toBe(true);
     expect(result.outputs.pr_url).toBe("https://github.com/o/r/pull/99");
 
-    // Should have created a branch matching my-feature-pr-<hex>
-    const checkoutCall = mockExecFileSync.mock.calls.find(
-      (c) => c[0] === "git" && (c[1] as string[])?.[0] === "checkout",
-    );
-    expect(checkoutCall).toBeDefined();
-    const branchName = (checkoutCall![1] as string[])[2];
-    expect(branchName).toMatch(/^my-feature-pr-[0-9a-f]{6}$/);
-  });
-
-  it("pushes the new branch, not the original", async () => {
-    setupBaseMocks();
-    mockSpawnClaude({ title: "title", summary: "summary" });
-
-    await adapter.run(makeCtx());
-
+    // Should push HEAD (the worktree's unique branch), not create a new branch
     const pushCall = mockExecFileSync.mock.calls.find(
       (c) => c[0] === "git" && (c[1] as string[])?.[0] === "push",
     );
     expect(pushCall).toBeDefined();
-    const pushBranch = (pushCall![1] as string[])[3];
-    expect(pushBranch).toMatch(/^my-feature-pr-[0-9a-f]{6}$/);
+    expect((pushCall![1] as string[]).includes("HEAD")).toBe(true);
+
+    // Should NOT have called git checkout -b
+    const checkoutCall = mockExecFileSync.mock.calls.find(
+      (c) => c[0] === "git" && (c[1] as string[])?.[0] === "checkout",
+    );
+    expect(checkoutCall).toBeUndefined();
   });
 
   it("fails immediately on push failure", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
-
-      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
-        return Buffer.from("my-feature\n");
-      }
-      if (cmd === "git" && argsArr?.[0] === "checkout") {
-        return Buffer.from("");
-      }
       if (cmd === "git" && argsArr?.[0] === "push") {
         throw new Error("remote: Permission denied");
       }
@@ -212,27 +191,6 @@ describe("PrCreatorAdapter", () => {
     expect(result.error).toContain("Failed to push");
   });
 
-  it("fails on branch creation failure", async () => {
-    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
-      const argsArr = args as string[];
-
-      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
-        return Buffer.from("my-feature\n");
-      }
-      if (cmd === "git" && argsArr?.[0] === "checkout") {
-        throw new Error("branch already exists");
-      }
-      if (cmd === "gh" && argsArr?.join(" ").includes("repo view")) {
-        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
-      }
-      throw new Error(`Unexpected: ${cmd}`);
-    });
-
-    const result = await adapter.run(makeCtx());
-    expect(result.success).toBe(false);
-    expect(result.error).toContain("Failed to create branch");
-  });
-
   it("uses fallback title/summary when claude fails", async () => {
     let capturedTitle = "";
     setupBaseMocks({ prCreateTitle: (t) => { capturedTitle = t; } });
@@ -241,7 +199,36 @@ describe("PrCreatorAdapter", () => {
     const result = await adapter.run(makeCtx());
     expect(result.success).toBe(true);
     expect(result.outputs.pr_url).toBe("https://github.com/o/r/pull/99");
-    // Fallback title is derived from branch name
-    expect(capturedTitle).toBe("My Feature");
+    // Fallback title derived from branch name "sparkflow/developer"
+    expect(capturedTitle).toBe("Sparkflow/Developer");
+  });
+
+  it("handles gh pr create failure", async () => {
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/dev\n");
+      if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc Add thing\n");
+      if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" f.ts | 1 +\n");
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+
+      if (key.includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      if (key.includes("pr create")) {
+        throw new Error("GraphQL: branch already has a PR");
+      }
+
+      throw new Error(`Unexpected gh command: ${key}`);
+    });
+
+    mockSpawnClaude({ title: "Title", summary: "Summary" });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Failed to create PR");
   });
 });

@@ -5,7 +5,7 @@
   "entry": "developer",
   "defaults": {
     "max_retries": 5,
-    "worktree": { "mode": "shared" }
+    "worktree": { "mode": "isolated" }
   },
   "steps": {
     "developer": {

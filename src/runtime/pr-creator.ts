@@ -1,5 +1,4 @@
 import { execFileSync, spawn as nodeSpawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { PrCreatorRuntime } from "../schema/types.js";
 
@@ -148,38 +147,16 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       baseBranch = "main";
     }
 
-    // Step 2: Create a unique PR branch so each workflow run gets its own PR
-    const sourceBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-      cwd: ctx.cwd,
-      stdio: "pipe",
-    }).toString().trim();
-
-    const suffix = randomBytes(3).toString("hex");
-    const prBranch = `${sourceBranch}-pr-${suffix}`;
-
+    // Step 2: Push current branch to remote.
+    // Each workflow run uses an isolated worktree with its own branch,
+    // so the branch is already unique — just push it.
     try {
-      execFileSync("git", ["checkout", "-b", prBranch], {
-        cwd: ctx.cwd,
-        stdio: "pipe",
-      });
-      ctx.logger?.info(`[${ctx.stepId}] created branch ${prBranch}`);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        outputs: {},
-        error: `Failed to create branch: ${errMsg}`,
-      };
-    }
-
-    // Step 3: Push the new branch to remote
-    try {
-      execFileSync("git", ["push", "-u", "origin", prBranch], {
+      execFileSync("git", ["push", "-u", "origin", "HEAD"], {
         cwd: ctx.cwd,
         stdio: "pipe",
         timeout: 60_000,
       });
-      ctx.logger?.info(`[${ctx.stepId}] pushed ${prBranch} to remote`);
+      ctx.logger?.info(`[${ctx.stepId}] pushed branch to remote`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       return {
@@ -189,7 +166,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       };
     }
 
-    // Step 4: Gather diff context
+    // Step 3: Gather diff context
     let diffContext: string;
     try {
       const log = execFileSync("git", ["log", `${baseBranch}..HEAD`, "--oneline"], {
@@ -207,7 +184,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       diffContext = "Unable to gather diff context";
     }
 
-    // Step 5: Generate title and summary
+    // Step 4: Generate title and summary
     let title: string;
     let summary: string;
     try {
@@ -222,7 +199,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       summary = fallback.summary;
     }
 
-    // Step 6: Create PR
+    // Step 5: Create PR
     try {
       gh(
         ["pr", "create", "--title", title, "--body", summary],
@@ -237,7 +214,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       };
     }
 
-    // Step 7: Get PR info
+    // Step 6: Get PR info
     try {
       const pr = ghJson<PrView>(
         ["pr", "view", "--json", "number,url"],

@@ -24,6 +24,16 @@ const WORKSPACE_CONTAINER = "/workspace";
 /** Where the IPC socket is mounted inside the container. */
 const IPC_SOCKET_CONTAINER = "/tmp/sparkflow.sock";
 
+/**
+ * Double-quote an arg for `sh -c`. Preserves `$` expansion while treating the
+ * value as a single token (no word-splitting). Only escapes `"`, `\`, and
+ * backtick so the shell still interprets variables and command substitution.
+ */
+function shellDoubleQuote(s: string): string {
+  if (/^[a-zA-Z0-9_.\-\/:=@+]+$/.test(s)) return s;
+  return '"' + s.replace(/["\\`]/g, "\\$&") + '"';
+}
+
 function envToFlags(env: Record<string, string> | undefined): string[] {
   if (!env) return [];
   const out: string[] = [];
@@ -65,9 +75,11 @@ class DockerSandbox implements SandboxHandle {
     args.push(this.id);
 
     if (opts.shell) {
-      // Reconstruct a shell command line. ShellAdapter passes command as a
-      // single string with shell:true; we forward it to sh -c verbatim.
-      const line = [opts.command, ...(opts.args ?? [])].join(" ");
+      // Reconstruct a shell command line for `sh -c`. Each part is
+      // double-quoted (preserving $ expansion) so that multi-word args
+      // like `-c "echo $FOO && bar"` survive as single tokens.
+      const parts = [opts.command, ...(opts.args ?? [])];
+      const line = parts.map(shellDoubleQuote).join(" ");
       args.push("sh", "-c", line);
     } else {
       args.push(opts.command, ...(opts.args ?? []));

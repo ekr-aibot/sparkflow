@@ -20,6 +20,46 @@ export interface WorktreeConfig {
   branch?: string;
 }
 
+// ── Sandbox ─────────────────────────────────────────────────────────
+
+export interface SandboxMount {
+  /** Host path to mount. */
+  host: string;
+  /** Path inside the sandbox. */
+  container: string;
+  /** Mount mode. Defaults to "rw". */
+  mode?: "ro" | "rw";
+}
+
+export interface LocalSandboxConfig {
+  type: "local";
+}
+
+export interface DockerSandboxConfig {
+  type: "docker";
+  /** Docker image to run. Must provide node, git, gh, and the workflow's toolchain. */
+  image: string;
+  /** Extra bind mounts beyond the worktree and IPC socket. */
+  mounts?: SandboxMount[];
+  /** Host env vars to forward into the container (e.g. GITHUB_TOKEN). */
+  env_passthrough?: string[];
+  /** `docker run --user` value. */
+  user?: string;
+  /** `docker run --network` value. */
+  network?: string;
+}
+
+export type SandboxConfig = LocalSandboxConfig | DockerSandboxConfig;
+
+/** Policy for restricting Claude Code's built-in tools when running in a sandbox. */
+export type SandboxToolPolicy =
+  /** Block built-in Bash only; keep Read/Edit/Write/Glob/Grep native. */
+  | "bash_only"
+  /** Block all built-in tools; agent must use MCP tools exclusively. */
+  | "strict"
+  /** No restriction. Built-in tools remain available. */
+  | "off";
+
 // ── Runtimes (discriminated union on `type`) ────────────────────────
 
 export interface ClaudeCodeRuntime {
@@ -32,6 +72,12 @@ export interface ClaudeCodeRuntime {
   args?: string[];
   /** Names of MCP servers to enable for this session. */
   mcp_servers?: string[];
+  /**
+   * How aggressively to restrict Claude Code's built-in tools when the step
+   * runs in a non-local sandbox. Defaults to "bash_only" (block built-in Bash,
+   * keep Read/Edit/Write/Glob/Grep native). Ignored for local sandboxes.
+   */
+  sandbox_tool_policy?: SandboxToolPolicy;
 }
 
 export interface ShellRuntime {
@@ -107,6 +153,8 @@ export interface Step {
   outputs?: Record<string, OutputDeclaration>;
   /** Extra environment variables. Values support templates. */
   env?: Record<string, string>;
+  /** Sandbox to run this step in. If omitted, inherited from defaults.sandbox (or local). */
+  sandbox?: SandboxConfig;
 }
 
 // ── Step Defaults ───────────────────────────────────────────────────
@@ -120,6 +168,8 @@ export interface StepDefaults {
   runtime?: Runtime;
   /** Default worktree settings. */
   worktree?: WorktreeConfig;
+  /** Default sandbox settings. */
+  sandbox?: SandboxConfig;
 }
 
 // ── Workflow (top-level) ────────────────────────────────────────────

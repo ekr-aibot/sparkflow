@@ -2,7 +2,7 @@ import { dirname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import type { SparkflowWorkflow, Step, Runtime } from "../schema/types.js";
+import type { SparkflowWorkflow, Step, Runtime, SandboxConfig } from "../schema/types.js";
 import type { RuntimeAdapter } from "../runtime/types.js";
 import type { RuntimeContext } from "../runtime/types.js";
 import { ShellAdapter } from "../runtime/shell.js";
@@ -15,6 +15,8 @@ import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
 import type { StepStatus, EngineOptions, RunResult, Logger } from "./types.js";
 import { ConsoleLogger } from "./types.js";
+import type { SandboxBackend, SandboxHandle } from "../sandbox/types.js";
+import { defaultSandboxBackends } from "../sandbox/index.js";
 
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -82,6 +84,7 @@ export class UserInteractionManager {
 export class WorkflowEngine {
   private workflow: SparkflowWorkflow;
   private adapters: Map<string, RuntimeAdapter>;
+  private sandboxBackends: Map<string, SandboxBackend>;
   private logger: Logger;
   private cwd: string;
   private workflowDir: string;
@@ -105,7 +108,8 @@ export class WorkflowEngine {
   constructor(
     workflow: SparkflowWorkflow,
     options: EngineOptions = {},
-    adapters?: Map<string, RuntimeAdapter>
+    adapters?: Map<string, RuntimeAdapter>,
+    sandboxBackends?: Map<string, SandboxBackend>,
   ) {
     this.workflow = workflow;
     this.logger = options.logger ?? new ConsoleLogger();
@@ -125,6 +129,8 @@ export class WorkflowEngine {
       ["pr-watcher", new PrWatcherAdapter()],
       ["pr-creator", new PrCreatorAdapter()],
     ]);
+
+    this.sandboxBackends = sandboxBackends ?? defaultSandboxBackends();
 
     // Initialize step statuses
     for (const id of Object.keys(workflow.steps)) {
@@ -439,6 +445,46 @@ export class WorkflowEngine {
       }
     }
 
+    // Resolve sandbox config and create the sandbox for this step.
+    const sandboxConfig = this.resolveSandbox(step);
+    // PR orchestration adapters never run user/agent code; keep them on the
+    // host regardless of workflow config.
+    const effectiveSandboxConfig: SandboxConfig =
+      runtime.type === "pr-watcher" || runtime.type === "pr-creator"
+        ? { type: "local" }
+        : sandboxConfig;
+
+    const sandboxBackend = this.sandboxBackends.get(effectiveSandboxConfig.type);
+    if (!sandboxBackend) {
+      this.logger.error(
+        `[${stepId}] no sandbox backend for type "${effectiveSandboxConfig.type}"`
+      );
+      status.state = "failed";
+      this.onStepFailure(stepId);
+      return;
+    }
+
+    let sandbox: SandboxHandle;
+    try {
+      sandbox = await sandboxBackend.create({
+        stepId,
+        step,
+        workspaceHostPath: cwd,
+        env,
+        ipcSocketHostPath: ipcSocketPath,
+        config: effectiveSandboxConfig,
+      });
+      if (effectiveSandboxConfig.type !== "local") {
+        this.logger.info(`[${stepId}] sandbox: ${sandbox.kind}:${sandbox.id}`);
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[${stepId}] sandbox setup failed: ${errMsg}`);
+      status.state = "failed";
+      this.onStepFailure(stepId);
+      return;
+    }
+
     // Build runtime context
     const ctx: RuntimeContext = {
       stepId,
@@ -453,6 +499,7 @@ export class WorkflowEngine {
       ipcSocketPath,
       verbose: this.verbose,
       logger: this.logger,
+      sandbox,
     };
 
     // Get adapter
@@ -460,6 +507,7 @@ export class WorkflowEngine {
     if (!adapter) {
       this.logger.error(`[${stepId}] no adapter for runtime type "${runtime.type}"`);
       status.state = "failed";
+      await sandbox.dispose();
       this.onStepFailure(stepId);
       return;
     }
@@ -493,6 +541,13 @@ export class WorkflowEngine {
       this.logger.error(`[${stepId}] error: ${errMsg}`);
       this.onStepFailure(stepId);
     } finally {
+      // Dispose sandbox
+      try {
+        await sandbox.dispose();
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`[${stepId}] sandbox dispose failed: ${errMsg}`);
+      }
       // Clean up IPC server after step completes
       const ipc = this.ipcServers.get(stepId);
       if (ipc) {
@@ -566,5 +621,9 @@ export class WorkflowEngine {
       throw new Error(`Step has no runtime and no default runtime configured`);
     }
     return runtime;
+  }
+
+  private resolveSandbox(step: Step): SandboxConfig {
+    return step.sandbox ?? this.workflow.defaults?.sandbox ?? { type: "local" };
   }
 }

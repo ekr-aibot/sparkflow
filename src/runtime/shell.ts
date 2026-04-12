@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 
 export class ShellAdapter implements RuntimeAdapter {
@@ -8,7 +7,8 @@ export class ShellAdapter implements RuntimeAdapter {
       throw new Error(`ShellAdapter received non-shell runtime: ${runtime.type}`);
     }
 
-    const env: Record<string, string> = { ...process.env as Record<string, string>, ...ctx.env };
+    // Per-call env — sandbox merges with ctx.env and (for local) host env.
+    const env: Record<string, string> = {};
     if (ctx.prompt) {
       env.SPARKFLOW_PROMPT = ctx.prompt;
     }
@@ -16,8 +16,10 @@ export class ShellAdapter implements RuntimeAdapter {
     const stdio = ctx.interactive ? "inherit" as const : "pipe" as const;
 
     return new Promise<RuntimeResult>((resolve) => {
-      const child = spawn(runtime.command, runtime.args ?? [], {
-        cwd: runtime.cwd ?? ctx.cwd,
+      const child = ctx.sandbox.spawn({
+        command: runtime.command,
+        args: runtime.args ?? [],
+        cwd: runtime.cwd,
         env,
         stdio,
         shell: true,

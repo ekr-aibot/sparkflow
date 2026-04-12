@@ -53,7 +53,8 @@
           "description": "Default timeout in seconds for non-interactive steps."
         },
         "runtime": { "$ref": "#/$defs/Runtime" },
-        "worktree": { "$ref": "#/$defs/WorktreeConfig" }
+        "worktree": { "$ref": "#/$defs/WorktreeConfig" },
+        "sandbox": { "$ref": "#/$defs/SandboxConfig" }
       }
     },
     "Step": {
@@ -118,7 +119,8 @@
           "type": "object",
           "additionalProperties": { "type": "string" },
           "description": "Extra environment variables. Values support template interpolation."
-        }
+        },
+        "sandbox": { "$ref": "#/$defs/SandboxConfig" }
       }
     },
     "Transition": {
@@ -163,6 +165,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Names of MCP servers to enable."
+        },
+        "sandbox_tool_policy": {
+          "type": "string",
+          "enum": ["bash_only", "strict", "off"],
+          "description": "How aggressively to restrict built-in tools when sandboxed. Defaults to \"bash_only\"."
         }
       }
     },
@@ -211,6 +218,46 @@
         "type": { "type": "string", "const": "pr-creator" },
         "model": { "type": "string", "description": "Model for title/summary generation. Defaults to \"sonnet\"." }
       }
+    },
+    "SandboxConfig": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "const": "local" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "image"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "const": "docker" },
+            "image": { "type": "string", "minLength": 1 },
+            "mounts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["host", "container"],
+                "additionalProperties": false,
+                "properties": {
+                  "host": { "type": "string", "minLength": 1 },
+                  "container": { "type": "string", "minLength": 1 },
+                  "mode": { "type": "string", "enum": ["ro", "rw"] }
+                }
+              }
+            },
+            "env_passthrough": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "user": { "type": "string" },
+            "network": { "type": "string" }
+          }
+        }
+      ]
     },
     "WorktreeConfig": {
       "type": "object",

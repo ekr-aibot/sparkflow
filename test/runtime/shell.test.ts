@@ -1,33 +1,42 @@
 import { describe, it, expect } from "vitest";
 import { ShellAdapter } from "../../src/runtime/shell.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
+import { LocalBackend } from "../../src/sandbox/local.js";
 
-function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
-  return {
+async function makeCtx(overrides: Partial<RuntimeContext> = {}): Promise<RuntimeContext> {
+  const base = {
     stepId: "test-step",
     step: {
       name: "Test",
       interactive: false,
     },
-    runtime: { type: "shell", command: "echo", args: ["hello"] },
+    runtime: { type: "shell" as const, command: "echo", args: ["hello"] },
     cwd: process.cwd(),
     env: {},
     interactive: false,
     ...overrides,
   };
+  const sandbox = await new LocalBackend().create({
+    stepId: base.stepId,
+    step: base.step,
+    workspaceHostPath: base.cwd,
+    env: base.env,
+    config: { type: "local" },
+  });
+  return { ...base, sandbox } as RuntimeContext;
 }
 
 describe("ShellAdapter", () => {
   const adapter = new ShellAdapter();
 
   it("runs a successful command", async () => {
-    const result = await adapter.run(makeCtx());
+    const result = await adapter.run(await makeCtx());
     expect(result.success).toBe(true);
     expect(result.exitCode).toBe(0);
   });
 
   it("captures stdout for text outputs", async () => {
-    const ctx = makeCtx({
+    const ctx = await makeCtx({
       step: {
         name: "Test",
         interactive: false,
@@ -42,7 +51,7 @@ describe("ShellAdapter", () => {
   });
 
   it("reports failure for non-zero exit code", async () => {
-    const ctx = makeCtx({
+    const ctx = await makeCtx({
       runtime: { type: "shell", command: "false" },
     });
 
@@ -52,7 +61,7 @@ describe("ShellAdapter", () => {
   });
 
   it("parses JSON output", async () => {
-    const ctx = makeCtx({
+    const ctx = await makeCtx({
       step: {
         name: "Test",
         interactive: false,
@@ -71,7 +80,7 @@ describe("ShellAdapter", () => {
   });
 
   it("passes SPARKFLOW_PROMPT env var when prompt is set", async () => {
-    const ctx = makeCtx({
+    const ctx = await makeCtx({
       step: {
         name: "Test",
         interactive: false,
@@ -87,7 +96,7 @@ describe("ShellAdapter", () => {
   });
 
   it("handles command timeout", async () => {
-    const ctx = makeCtx({
+    const ctx = await makeCtx({
       runtime: { type: "shell", command: "sleep", args: ["10"] },
       timeout: 1,
     });

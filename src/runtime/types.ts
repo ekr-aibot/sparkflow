@@ -1,4 +1,5 @@
 import type { Runtime, Step } from "../schema/types.js";
+import type { SandboxHandle } from "../sandbox/types.js";
 
 export interface RuntimeContext {
   stepId: string;
@@ -16,6 +17,11 @@ export interface RuntimeContext {
   verbose?: boolean;
   /** Logger for verbose output, prefixed with step ID. */
   logger?: import("../engine/types.js").Logger;
+  /**
+   * Sandbox this step runs in. Adapters MUST route subprocess execution
+   * through `sandbox.spawn` rather than calling `child_process.spawn` directly.
+   */
+  sandbox: SandboxHandle;
 }
 
 export interface RuntimeResult {

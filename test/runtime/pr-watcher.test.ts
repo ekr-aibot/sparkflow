@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PrWatcherAdapter } from "../../src/runtime/pr-watcher.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
 import * as child_process from "node:child_process";
+import { stubSandbox } from "../helpers/sandbox.js";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
@@ -25,6 +26,7 @@ function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     env: {},
     interactive: false,
     timeout: 5,
+    sandbox: stubSandbox,
     ...overrides,
   };
 }

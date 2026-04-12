@@ -2,16 +2,28 @@ import { spawn } from "node:child_process";
 import { writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
-import type { ClaudeCodeRuntime } from "../schema/types.js";
+import type { ClaudeCodeRuntime, SandboxToolPolicy } from "../schema/types.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+/** Tools kept native even under `bash_only` — pure filesystem ops scoped to cwd. */
+const NATIVE_FS_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep"];
+/** MCP tools always allowed. */
+const SPARKFLOW_MCP_TOOLS = [
+  "mcp__sparkflow__bash",
+  "mcp__sparkflow__ask_user",
+  "mcp__sparkflow__send_message",
+];
 
-// Path to the compiled MCP server entry point
-const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
+function buildAllowedTools(policy: SandboxToolPolicy): string[] | null {
+  switch (policy) {
+    case "off":
+      return null;
+    case "strict":
+      return [...SPARKFLOW_MCP_TOOLS];
+    case "bash_only":
+      return [...SPARKFLOW_MCP_TOOLS, ...NATIVE_FS_TOOLS];
+  }
+}
 
 /**
  * Format a stream-json event for verbose logging.
@@ -66,6 +78,19 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     // All steps run in --print mode (no TTY), so permissions must be auto-accepted.
     // The auto_accept field in the workflow is now informational/documentation only.
     args.push("--dangerously-skip-permissions");
+
+    // When the step runs in a non-local sandbox, restrict the built-in tool
+    // surface so the agent must route subprocesses through the in-sandbox MCP
+    // bash tool. For local sandboxes we leave the tool surface alone — no
+    // isolation to enforce.
+    if (ctx.sandbox.kind !== "local") {
+      const policy: SandboxToolPolicy = runtime.sandbox_tool_policy ?? "bash_only";
+      const allowed = buildAllowedTools(policy);
+      if (allowed) {
+        args.push("--allowedTools", allowed.join(","));
+      }
+    }
+
     // MCP servers listed in runtime.mcp_servers are resolved from the user's
     // claude MCP configuration automatically (we don't pass --strict-mcp-config).
     if (runtime.args) {
@@ -83,18 +108,21 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     const tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-mcp-"));
     const tempFiles: string[] = [];
 
-    // For interactive steps, set up MCP config so the agent can call ask_user
-    if (ctx.interactive && ctx.ipcSocketPath) {
+    // Always wire up sparkflow's MCP server: it hosts the in-sandbox `bash`
+    // tool (for non-local sandboxes) and `ask_user`/`send_message` (for
+    // interactive steps). The sandbox decides whether that's an in-container
+    // node process (docker) or a local one (local backend).
+    const shouldWireMcp = ctx.sandbox.kind !== "local" || (ctx.interactive && ctx.ipcSocketPath);
+    if (shouldWireMcp) {
       const mcpConfigPath = join(tmpDir, "mcp-config.json");
       tempFiles.push(mcpConfigPath);
+      const stdio = ctx.sandbox.mcpStdioCommand();
       const mcpConfig = {
         mcpServers: {
           sparkflow: {
-            command: "node",
-            args: [MCP_SERVER_PATH],
-            env: {
-              SPARKFLOW_SOCKET: ctx.ipcSocketPath,
-            },
+            command: stdio.command,
+            args: stdio.args,
+            env: stdio.env ?? {},
           },
         },
       };

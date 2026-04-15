@@ -335,8 +335,14 @@ export class JobManager {
     const job = this.jobs.get(jobId);
     if (!job || job.info.state !== "failed_waiting" || !job.pendingRequestId) return false;
 
+    if (!job.child || !job.child.stdin) {
+      // Rehydrated job — stdin pipe was lost across reload.
+      return false;
+    }
     const payload = JSON.stringify({ action, message });
-    job.stdinWriter(JSON.stringify({ type: "answer", request_id: job.pendingRequestId, response: payload }));
+    job.child.stdin.write(
+      JSON.stringify({ type: "answer", request_id: job.pendingRequestId, response: payload }) + "\n",
+    );
 
     if (action === "abort") {
       job.info.state = "failed";

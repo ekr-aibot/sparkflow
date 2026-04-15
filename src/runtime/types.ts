@@ -20,6 +20,10 @@ export interface RuntimeContext {
   sessionId?: string;
   /** When true and sessionId is set, resume that session instead of starting fresh. */
   resume?: boolean;
+  /** Outputs from previously completed steps — for adapters that resolve templates themselves. */
+  stepOutputs?: Map<string, Record<string, unknown>>;
+  /** Directory containing the calling workflow file — used to resolve relative paths. */
+  workflowDir?: string;
 }
 
 export interface RuntimeResult {

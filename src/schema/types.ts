@@ -64,7 +64,21 @@ export interface PrCreatorRuntime {
   model?: string;
 }
 
-export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime;
+export interface WorkflowRuntime {
+  type: "workflow";
+  /** Path to the sub-workflow JSON, resolved relative to the calling workflow file. */
+  workflow: string;
+  /** Max concurrent child runs for this pool across the whole process. */
+  max_concurrency?: number;
+  /** Named pool for sharing the concurrency slot across multiple steps. Defaults to the resolved workflow path. */
+  pool?: string;
+  /** Template expression resolving to an array; runs the sub-workflow once per element. */
+  foreach?: string;
+  /** Env vars passed to the child (supports templates; ${item} and ${item.field} when foreach is set). */
+  inputs?: Record<string, string>;
+}
+
+export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime | WorkflowRuntime;
 
 // ── Transition ──────────────────────────────────────────────────────
 

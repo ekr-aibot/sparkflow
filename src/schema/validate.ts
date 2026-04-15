@@ -162,6 +162,19 @@ function semanticValidation(workflow: SparkflowWorkflow): ValidationDiagnostic[]
     if (step.prompt) {
       validateTemplateRefs(step.prompt, `${base}.prompt`, stepIds, workflow.steps, diagnostics);
     }
+
+    // Validate templates in workflow runtime (foreach + inputs)
+    const runtime = step.runtime ?? workflow.defaults?.runtime;
+    if (runtime?.type === "workflow") {
+      if (runtime.foreach) {
+        validateTemplateRefs(runtime.foreach, `${base}.runtime.foreach`, stepIds, workflow.steps, diagnostics);
+      }
+      if (runtime.inputs) {
+        for (const [key, value] of Object.entries(runtime.inputs)) {
+          validateTemplateRefs(value, `${base}.runtime.inputs.${key}`, stepIds, workflow.steps, diagnostics);
+        }
+      }
+    }
   }
 
   // Parallel siblings (steps fanned out from the same parent) must have

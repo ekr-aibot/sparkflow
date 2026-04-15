@@ -10,6 +10,7 @@ import { ClaudeCodeAdapter } from "../runtime/claude-code.js";
 import { CustomAdapter } from "../runtime/custom.js";
 import { PrWatcherAdapter } from "../runtime/pr-watcher.js";
 import { PrCreatorAdapter } from "../runtime/pr-creator.js";
+import { WorkflowAdapter } from "../runtime/workflow.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
@@ -124,6 +125,7 @@ export class WorkflowEngine {
       ["custom", new CustomAdapter()],
       ["pr-watcher", new PrWatcherAdapter()],
       ["pr-creator", new PrCreatorAdapter()],
+      ["workflow", new WorkflowAdapter()],
     ]);
 
     // Initialize step statuses
@@ -233,7 +235,7 @@ export class WorkflowEngine {
     return true;
   }
 
-  private triggerStep(stepId: string, message?: string): void {
+  private triggerStep(stepId: string, message?: string, viaFailure: boolean = false): void {
     if (this.aborted) return;
 
     const status = this.stepStatuses.get(stepId)!;
@@ -247,7 +249,8 @@ export class WorkflowEngine {
       return;
     }
 
-    // Check retry limit
+    // Check retry limit (only counts failure-edge re-entries; successful self-loops
+    // like polling workflows don't burn retries).
     const maxRetries = step.max_retries ?? this.workflow.defaults?.max_retries ?? DEFAULT_MAX_RETRIES;
     if (status.retryCount > maxRetries) {
       this.aborted = true;
@@ -271,13 +274,9 @@ export class WorkflowEngine {
       }
     }
 
-    // Increment retry count (except first run)
-    if (status.state !== "pending" && status.state !== "waiting") {
+    // Increment retry count only on re-entry via a failure edge.
+    if (viaFailure && status.state !== "pending" && status.state !== "waiting") {
       status.retryCount++;
-    } else if (status.state === "pending") {
-      // First run: retryCount stays at 0
-    } else {
-      // Waiting → running (join satisfied): don't increment
     }
 
     status.state = "running";
@@ -458,6 +457,8 @@ export class WorkflowEngine {
       logger: this.logger,
       sessionId: status.sessionId,
       resume: resuming,
+      stepOutputs: this.stepOutputs,
+      workflowDir: this.workflowDir,
     };
     if (resuming) {
       this.logger.info(`[${stepId}] resuming session ${status.sessionId}`);
@@ -542,7 +543,7 @@ export class WorkflowEngine {
 
     if (step.on_failure && step.on_failure.length > 0) {
       for (const transition of step.on_failure) {
-        this.triggerStep(transition.step, transition.message);
+        this.triggerStep(transition.step, transition.message, true);
       }
       return;
     }
@@ -583,11 +584,12 @@ export class WorkflowEngine {
     const message = decision.message;
 
     if (action === "retry") {
-      // Reset the step so triggerStep will re-run it. retryCount is bumped
-      // inside triggerStep because state !== "pending" | "waiting".
+      // Reset the step so triggerStep will re-run it. viaFailure=true bumps
+      // the retry counter so a stuck user-driven retry loop still hits
+      // max_retries eventually.
       status.state = "failed";
       status.outputs = {};
-      this.triggerStep(stepId, message);
+      this.triggerStep(stepId, message, true);
     } else if (action === "skip") {
       status.state = "succeeded";
       status.outputs = {};

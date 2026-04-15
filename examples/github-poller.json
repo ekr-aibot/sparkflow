@@ -1,0 +1,61 @@
+{
+  "version": "1",
+  "name": "github-poller",
+  "description": "Poll GitHub for new issues labeled 'ready-for-claude' and dispatch feature-development for each.",
+  "entry": "poll",
+  "steps": {
+    "poll": {
+      "name": "Poll GitHub",
+      "description": "Find new issues to work on. Emits an array of items as JSON.",
+      "interactive": false,
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/github-poller.md",
+      "outputs": {
+        "items": {
+          "type": "json",
+          "description": "Array of { issue_number, title, body } for issues not yet in progress."
+        }
+      },
+      "on_success": [
+        { "step": "dispatch" }
+      ]
+    },
+    "dispatch": {
+      "name": "Dispatch feature-development",
+      "description": "Spawn feature-development per issue, capped by the worker pool.",
+      "interactive": false,
+      "runtime": {
+        "type": "workflow",
+        "workflow": "./feature-development.json",
+        "max_concurrency": 3,
+        "pool": "feature-development",
+        "foreach": "${steps.poll.output.items}",
+        "inputs": {
+          "ISSUE_NUMBER": "${item.issue_number}",
+          "ISSUE_TITLE": "${item.title}",
+          "ISSUE_BODY": "${item.body}"
+        }
+      },
+      "on_success": [
+        { "step": "sleep" }
+      ]
+    },
+    "sleep": {
+      "name": "Sleep before next poll",
+      "description": "Wait between polls so we don't hammer the GitHub API.",
+      "interactive": false,
+      "runtime": {
+        "type": "shell",
+        "command": "sleep",
+        "args": ["60"]
+      },
+      "on_success": [
+        { "step": "poll" }
+      ]
+    }
+  }
+}

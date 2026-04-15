@@ -151,7 +151,8 @@
         { "$ref": "#/$defs/ShellRuntime" },
         { "$ref": "#/$defs/CustomRuntime" },
         { "$ref": "#/$defs/PrWatcherRuntime" },
-        { "$ref": "#/$defs/PrCreatorRuntime" }
+        { "$ref": "#/$defs/PrCreatorRuntime" },
+        { "$ref": "#/$defs/WorkflowRuntime" }
       ]
     },
     "ClaudeCodeRuntime": {
@@ -218,6 +219,38 @@
       "properties": {
         "type": { "type": "string", "const": "pr-creator" },
         "model": { "type": "string", "description": "Model for title/summary generation. Defaults to \"sonnet\"." }
+      }
+    },
+    "WorkflowRuntime": {
+      "type": "object",
+      "required": ["type", "workflow"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "workflow" },
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to the sub-workflow JSON, relative to the calling workflow file."
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max concurrent child runs across this process for the named pool."
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Named pool for sharing a concurrency slot across multiple workflow steps. Defaults to the resolved workflow path."
+        },
+        "foreach": {
+          "type": "string",
+          "description": "Template expression resolving to an array; runs the sub-workflow once per element."
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Env vars passed to the child. Supports templates plus ${item}/${item.field} when foreach is set."
+        }
       }
     },
     "WorktreeConfig": {

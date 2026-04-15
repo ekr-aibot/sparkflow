@@ -16,6 +16,10 @@ export interface RuntimeContext {
   verbose?: boolean;
   /** Logger for verbose output, prefixed with step ID. */
   logger?: import("../engine/types.js").Logger;
+  /** Outputs from previously completed steps — for adapters that resolve templates themselves. */
+  stepOutputs?: Map<string, Record<string, unknown>>;
+  /** Directory containing the calling workflow file — used to resolve relative paths. */
+  workflowDir?: string;
 }
 
 export interface RuntimeResult {

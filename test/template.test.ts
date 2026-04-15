@@ -60,6 +60,30 @@ describe("resolveTemplate", () => {
     const result = resolveTemplate("Count: ${steps.step1.output.count}", outputs);
     expect(result).toBe("Count: 42");
   });
+
+  it("resolves ${item} to the JSON-stringified item", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const result = resolveTemplate("${item}", outputs, { id: 1 });
+    expect(result).toBe('{"id":1}');
+  });
+
+  it("resolves ${item.field} to a string field", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const result = resolveTemplate("name: ${item.name}", outputs, { name: "alice" });
+    expect(result).toBe("name: alice");
+  });
+
+  it("resolves nested ${item.a.b}", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const result = resolveTemplate("${item.issue.number}", outputs, { issue: { number: 42 } });
+    expect(result).toBe("42");
+  });
+
+  it("ignores ${item} when no item context is provided", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const result = resolveTemplate("${item.name}", outputs);
+    expect(result).toBe("${item.name}");
+  });
 });
 
 describe("resolvePrompt", () => {

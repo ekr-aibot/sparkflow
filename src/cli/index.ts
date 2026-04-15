@@ -157,6 +157,16 @@ async function main(): Promise<void> {
     }
 
     const runResult = await engine.run();
+
+    // Wait for any detached sub-workflows (spawned by the `workflow` runtime) to
+    // finish before exiting, so children aren't orphaned.
+    const { drainActiveChildren, activeChildCount } = await import("../runtime/workflow.js");
+    if (activeChildCount() > 0) {
+      console.log(`[sparkflow] waiting for ${activeChildCount()} detached sub-workflow(s) to finish...`);
+      await drainActiveChildren();
+      console.log(`[sparkflow] all sub-workflows finished.`);
+    }
+
     process.exit(runResult.success ? 0 : 1);
   }
 }

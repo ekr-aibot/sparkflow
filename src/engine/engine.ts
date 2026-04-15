@@ -10,6 +10,7 @@ import { ClaudeCodeAdapter } from "../runtime/claude-code.js";
 import { CustomAdapter } from "../runtime/custom.js";
 import { PrWatcherAdapter } from "../runtime/pr-watcher.js";
 import { PrCreatorAdapter } from "../runtime/pr-creator.js";
+import { WorkflowAdapter } from "../runtime/workflow.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
@@ -124,6 +125,7 @@ export class WorkflowEngine {
       ["custom", new CustomAdapter()],
       ["pr-watcher", new PrWatcherAdapter()],
       ["pr-creator", new PrCreatorAdapter()],
+      ["workflow", new WorkflowAdapter()],
     ]);
 
     // Initialize step statuses
@@ -233,7 +235,7 @@ export class WorkflowEngine {
     return true;
   }
 
-  private triggerStep(stepId: string, message?: string): void {
+  private triggerStep(stepId: string, message?: string, viaFailure: boolean = false): void {
     if (this.aborted) return;
 
     const status = this.stepStatuses.get(stepId)!;
@@ -247,7 +249,8 @@ export class WorkflowEngine {
       return;
     }
 
-    // Check retry limit
+    // Check retry limit (only counts failure-edge re-entries; successful self-loops
+    // like polling workflows don't burn retries).
     const maxRetries = step.max_retries ?? this.workflow.defaults?.max_retries ?? DEFAULT_MAX_RETRIES;
     if (status.retryCount > maxRetries) {
       this.aborted = true;
@@ -271,13 +274,9 @@ export class WorkflowEngine {
       }
     }
 
-    // Increment retry count (except first run)
-    if (status.state !== "pending" && status.state !== "waiting") {
+    // Increment retry count only on re-entry via a failure edge.
+    if (viaFailure && status.state !== "pending" && status.state !== "waiting") {
       status.retryCount++;
-    } else if (status.state === "pending") {
-      // First run: retryCount stays at 0
-    } else {
-      // Waiting → running (join satisfied): don't increment
     }
 
     status.state = "running";
@@ -453,6 +452,8 @@ export class WorkflowEngine {
       ipcSocketPath,
       verbose: this.verbose,
       logger: this.logger,
+      stepOutputs: this.stepOutputs,
+      workflowDir: this.workflowDir,
     };
 
     // Get adapter
@@ -524,7 +525,7 @@ export class WorkflowEngine {
 
     if (step.on_failure && step.on_failure.length > 0) {
       for (const transition of step.on_failure) {
-        this.triggerStep(transition.step, transition.message);
+        this.triggerStep(transition.step, transition.message, true);
       }
     } else {
       // No on_failure transitions → workflow fails

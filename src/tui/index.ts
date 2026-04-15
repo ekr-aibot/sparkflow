@@ -191,7 +191,10 @@ SLASH_COMMANDS["sf-dispatch"] = `Dispatch the plan we just built to a sparkflow 
 ${defaultWorkflowNote}
 
 Do the following:
-1. Call the start_workflow MCP tool with workflow_path set to the workflow path above, and plan_text set to the full plan markdown we developed (not a file path — the tool writes it to .sparkflow/logs/ automatically).
+1. Call the start_workflow MCP tool with:
+   - workflow_path set to the workflow path above,
+   - plan_text set to the full plan markdown we developed (not a file path — the tool writes it to .sparkflow/logs/ automatically),
+   - slug set to a 3-words-or-less label summarizing the plan's goal (e.g. "add user auth", "fix login bug", "refactor pdf export"). Use lowercase, no punctuation.
 2. Report back the job ID.
 
 The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`;

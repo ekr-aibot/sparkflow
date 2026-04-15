@@ -52,7 +52,8 @@ function renderJobs(jobs: JobInfo[]): void {
     for (const job of jobs) {
       const color = STATE_COLORS[job.state] ?? COLORS.reset;
       const step = job.currentStep ? `/${job.currentStep}` : "";
-      const name = job.workflowName || job.workflowPath;
+      const baseName = job.workflowName || job.workflowPath;
+      const name = job.slug ? `${baseName}: ${job.slug}` : baseName;
       const stateLabel = job.state.toUpperCase();
       const time = elapsed(job.startTime, job.endTime);
       const question = job.pendingQuestion ? ` ? ${job.pendingQuestion}` : "";
@@ -77,16 +78,18 @@ function handleIpcRequest(msg: IpcMessage, jobManager: JobManager, cwd: string):
 
   switch (msg.type) {
     case "start_workflow": {
-      const { workflowPath, cwd: jobCwd, plan, planText } = msg.payload as {
+      const { workflowPath, cwd: jobCwd, plan, planText, slug } = msg.payload as {
         workflowPath: string;
         cwd?: string;
         plan?: string;
         planText?: string;
+        slug?: string;
       };
       const jobId = jobManager.startJob(workflowPath, {
         cwd: jobCwd ?? cwd,
         plan,
         planText,
+        slug,
       });
       return response({ jobId });
     }

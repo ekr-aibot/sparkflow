@@ -150,6 +150,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
     // Step 2: Push current branch to remote.
     // Each workflow run uses an isolated worktree with its own branch,
     // so the branch is already unique — just push it.
+    // If the developer already pushed, warn but continue.
     try {
       execFileSync("git", ["push", "-u", "origin", "HEAD"], {
         cwd: ctx.cwd,
@@ -159,11 +160,33 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       ctx.logger?.info(`[${ctx.stepId}] pushed branch to remote`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        outputs: {},
-        error: `Failed to push: ${errMsg}`,
-      };
+      // If the remote already has this branch with the same commits, that's fine
+      const alreadyUpToDate =
+        errMsg.includes("Everything up-to-date") ||
+        errMsg.includes("everything up-to-date");
+      if (alreadyUpToDate) {
+        ctx.logger?.info(`[${ctx.stepId}] branch already pushed, continuing`);
+      } else {
+        // Try force-free push — maybe the developer pushed earlier commits
+        // and we just need to update. Attempt a regular push (non-force)
+        // one more time to surface the real error if it persists.
+        ctx.logger?.info(`[${ctx.stepId}] push failed (${errMsg}), retrying...`);
+        try {
+          execFileSync("git", ["push", "-u", "origin", "HEAD"], {
+            cwd: ctx.cwd,
+            stdio: "pipe",
+            timeout: 60_000,
+          });
+          ctx.logger?.info(`[${ctx.stepId}] pushed branch to remote on retry`);
+        } catch (retryErr) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          return {
+            success: false,
+            outputs: {},
+            error: `Failed to push: ${retryMsg}`,
+          };
+        }
+      }
     }
 
     // Step 3: Gather diff context
@@ -199,7 +222,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       summary = fallback.summary;
     }
 
-    // Step 5: Create PR
+    // Step 5: Create PR (or adopt an existing one for this branch)
     try {
       gh(
         ["pr", "create", "--title", title, "--body", summary],
@@ -207,11 +230,18 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       );
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        outputs: {},
-        error: `Failed to create PR: ${errMsg}`,
-      };
+      const alreadyExists =
+        errMsg.includes("already exists") ||
+        errMsg.includes("A pull request already exists");
+      if (alreadyExists) {
+        ctx.logger?.info(`[${ctx.stepId}] PR already exists for this branch, using it`);
+      } else {
+        return {
+          success: false,
+          outputs: {},
+          error: `Failed to create PR: ${errMsg}`,
+        };
+      }
     }
 
     // Step 6: Get PR info
@@ -220,7 +250,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
         ["pr", "view", "--json", "number,url"],
         ctx.cwd,
       );
-      ctx.logger?.info(`[${ctx.stepId}] created PR: ${pr.url}`);
+      ctx.logger?.info(`[${ctx.stepId}] PR ready: ${pr.url}`);
       return {
         success: true,
         outputs: { pr_url: pr.url },

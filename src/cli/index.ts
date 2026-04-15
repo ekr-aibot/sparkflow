@@ -5,6 +5,7 @@ import { resolve, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { validate } from "../schema/validate.js";
 import { WorkflowEngine } from "../engine/engine.js";
+import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
 import type { SparkflowWorkflow } from "../schema/types.js";
 import type { Logger } from "../engine/types.js";
 
@@ -61,8 +62,12 @@ function setupStdinAnswerReader(engine: WorkflowEngine): void {
 
 function usage(): never {
   console.log(`Usage:
-  sparkflow-run validate <workflow.json>
-  sparkflow-run run <workflow.json> [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--verbose] [--status-json]`);
+  sparkflow-run validate [<workflow>]
+  sparkflow-run run [<workflow>] [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--verbose] [--status-json]
+
+<workflow> may be a path to a JSON file, or a bare name resolved as
+.sparkflow/workflows/<name>.json. If omitted, uses "defaultWorkflow" from
+.sparkflow/config.json.`);
   process.exit(1);
 }
 
@@ -80,13 +85,27 @@ async function main(): Promise<void> {
     usage();
   }
 
-  const workflowPath = args[1];
-  if (!workflowPath) {
-    console.error("Error: workflow file path is required");
-    usage();
+  // Parse --cwd early so config loads from the right directory.
+  let cwd: string | undefined;
+  const cwdIndex = args.indexOf("--cwd");
+  if (cwdIndex !== -1 && args[cwdIndex + 1]) {
+    cwd = resolve(args[cwdIndex + 1]);
+  }
+  const effectiveCwd = cwd ?? process.cwd();
+
+  // Treat the second positional arg as the workflow name/path if it's not a flag.
+  const positional = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
+
+  let resolvedWorkflowPath: string;
+  try {
+    const config = loadProjectConfig(effectiveCwd);
+    resolvedWorkflowPath = resolveWorkflowPath(positional, effectiveCwd, config);
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    process.exit(1);
   }
 
-  const data = loadWorkflow(workflowPath);
+  const data = loadWorkflow(resolvedWorkflowPath);
   const result = validate(data);
 
   if (command === "validate") {
@@ -116,11 +135,6 @@ async function main(): Promise<void> {
     }
 
     const dryRun = args.includes("--dry-run");
-    let cwd: string | undefined;
-    const cwdIndex = args.indexOf("--cwd");
-    if (cwdIndex !== -1 && args[cwdIndex + 1]) {
-      cwd = resolve(args[cwdIndex + 1]);
-    }
 
     let plan: string | undefined;
     const planIndex = args.indexOf("--plan");
@@ -132,7 +146,7 @@ async function main(): Promise<void> {
     const verbose = args.includes("--verbose");
     const statusJson = args.includes("--status-json");
 
-    const workflowDir = dirname(resolve(workflowPath));
+    const workflowDir = dirname(resolvedWorkflowPath);
 
     // When --status-json is active, use a logger that emits JSON events on stderr
     // and reads answer events from stdin

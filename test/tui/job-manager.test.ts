@@ -32,8 +32,8 @@ describe("JobManager", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    manager = new JobManager();
     tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-test-jm-"));
+    manager = new JobManager(tmpDir);
   });
 
   afterEach(() => {
@@ -143,13 +143,16 @@ describe("JobManager", () => {
 
 describe("JobManager verbose line parsing", () => {
   let manager: JobManager;
+  let tmpDir2: string;
 
   beforeEach(() => {
-    manager = new JobManager();
+    tmpDir2 = mkdtempSync(join(tmpdir(), "sparkflow-test-jm2-"));
+    manager = new JobManager(tmpDir2);
   });
 
   afterEach(() => {
     manager.killAll();
+    try { rmSync(tmpDir2, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
   it("handles process errors gracefully", async () => {

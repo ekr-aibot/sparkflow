@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev": "tsc --watch"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

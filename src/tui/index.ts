@@ -15,6 +15,7 @@ const __dirname = dirname(__filename);
 
 const MCP_BRIDGE_PATH = resolve(__dirname, "mcp-bridge.js");
 const STATUS_DISPLAY_PATH = resolve(__dirname, "status-display.js");
+const SUPERVISOR_PATH = resolve(__dirname, "supervisor.js");
 
 const DEFAULT_SYSTEM_PROMPT = `You are running inside the sparkflow dashboard. The bottom tmux pane shows live status for all running workflow jobs.
 
@@ -43,7 +44,10 @@ Options:
   --chat-args <args>     Extra args for chat tool (comma-separated)
   --cwd <dir>            Working directory (default: current directory)
   --workflow <path>      Default workflow for /project:sf-dispatch (default: none)
-  --status-lines <n>     Height of status pane in lines (default: 5)`);
+  --status-lines <n>     Height of status pane in lines (default: 5)
+  --dev                  Hot-reload: run status daemon under a supervisor that
+                         watches dist/ and respawns on change (run tsc --watch
+                         separately). In-flight jobs survive reloads.`);
   process.exit(0);
 }
 
@@ -53,12 +57,14 @@ function parseArgs(argv: string[]): {
   cwd: string;
   workflow: string | null;
   statusLines: number;
+  dev: boolean;
 } {
   let chatCommand = "claude";
   let chatArgs: string[] = [];
   let cwd = process.cwd();
   let workflow: string | null = null;
   let statusLines = 5;
+  let dev = process.env.SPARKFLOW_DEV === "1";
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -89,13 +95,16 @@ function parseArgs(argv: string[]): {
       case "--status-lines":
         statusLines = parseInt(argv[++i] ?? "5", 10);
         break;
+      case "--dev":
+        dev = true;
+        break;
       default:
         console.error(`Unknown option: ${argv[i]}`);
         process.exit(1);
     }
   }
 
-  return { chatCommand, chatArgs, cwd, workflow, statusLines };
+  return { chatCommand, chatArgs, cwd, workflow, statusLines, dev };
 }
 
 function checkTmux(): void {
@@ -223,9 +232,11 @@ const chatCmdParts = [
 ];
 const chatCmd = chatCmdParts.join(" ");
 
-// 5. Build status display command (session name added after it's generated below)
+// 5. Build status display command (session name added after it's generated below).
+// In --dev mode we route through the supervisor so code changes under dist/ auto-reload.
+const statusEntry = args.dev ? SUPERVISOR_PATH : STATUS_DISPLAY_PATH;
 const buildStatusCmd = (session: string) =>
-  `exec ${sq(process.execPath)} ${sq(STATUS_DISPLAY_PATH)} ${sq(socketPath)} ${sq(args.cwd)} ${sq(session)}`;
+  `exec ${sq(process.execPath)} ${sq(statusEntry)} ${sq(socketPath)} ${sq(args.cwd)} ${sq(session)}`;
 
 // 6. Create tmux session with two panes
 const sessionName = `sparkflow-${randomBytes(4).toString("hex")}`;

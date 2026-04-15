@@ -98,16 +98,23 @@ export class IpcServer {
 
 /**
  * IPC client that connects to a Unix socket.
- * Used by the MCP server to send requests to the sparkflow engine.
+ *
+ * Tolerates the server restarting (e.g. sparkflow's dev-mode status daemon
+ * reloading): on close/error it reconnects with exponential backoff and
+ * re-issues any in-flight requests. Callers' promises stay pending across
+ * the reload rather than being rejected.
  */
 export class IpcClient {
   private socket: Socket | null = null;
   private socketPath: string;
   private pendingRequests = new Map<
     string,
-    { resolve: (msg: IpcMessage) => void; reject: (err: Error) => void }
+    { resolve: (msg: IpcMessage) => void; reject: (err: Error) => void; payload: string }
   >();
   private buffer = "";
+  private closed = false;
+  private reconnectDelay = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(socketPath: string) {
     this.socketPath = socketPath;
@@ -115,29 +122,57 @@ export class IpcClient {
 
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.socket = connect(this.socketPath, () => resolve());
-      this.socket.on("error", reject);
-
-      this.socket.on("data", (data) => {
-        this.buffer += data.toString();
-        let newlineIdx: number;
-        while ((newlineIdx = this.buffer.indexOf("\n")) !== -1) {
-          const line = this.buffer.slice(0, newlineIdx);
-          this.buffer = this.buffer.slice(newlineIdx + 1);
-          if (line.trim()) {
-            this.handleLine(line);
-          }
-        }
-      });
-
-      this.socket.on("close", () => {
-        // Reject all pending requests
+      const sock = connect(this.socketPath);
+      let settled = false;
+      sock.once("connect", () => {
+        settled = true;
+        this.attachSocket(sock);
+        this.reconnectDelay = 0;
+        // Re-issue any requests that were in flight when the previous socket died.
         for (const [, pending] of this.pendingRequests) {
-          pending.reject(new Error("IPC connection closed"));
+          try { sock.write(pending.payload); } catch { /* will retry on next reconnect */ }
         }
-        this.pendingRequests.clear();
+        resolve();
+      });
+      sock.once("error", (err) => {
+        if (!settled) reject(err);
       });
     });
+  }
+
+  private attachSocket(sock: Socket): void {
+    this.socket = sock;
+    this.buffer = "";
+
+    sock.on("data", (data) => {
+      this.buffer += data.toString();
+      let newlineIdx: number;
+      while ((newlineIdx = this.buffer.indexOf("\n")) !== -1) {
+        const line = this.buffer.slice(0, newlineIdx);
+        this.buffer = this.buffer.slice(newlineIdx + 1);
+        if (line.trim()) this.handleLine(line);
+      }
+    });
+
+    const onDisconnect = () => {
+      if (this.socket !== sock) return;
+      this.socket = null;
+      if (this.closed) return;
+      this.scheduleReconnect();
+    };
+    sock.on("close", onDisconnect);
+    sock.on("error", () => { /* handled via close */ });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.closed) return;
+    this.reconnectDelay = Math.min(Math.max(this.reconnectDelay * 2, 100), 2000);
+    const delay = this.reconnectDelay;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.closed) return;
+      this.connect().catch(() => this.scheduleReconnect());
+    }, delay);
   }
 
   private handleLine(line: string): void {
@@ -154,20 +189,34 @@ export class IpcClient {
   }
 
   async request(msg: IpcMessage): Promise<IpcMessage> {
-    if (!this.socket) {
-      throw new Error("IPC client not connected");
-    }
-
+    const payload = JSON.stringify(msg) + "\n";
     return new Promise((resolve, reject) => {
-      this.pendingRequests.set(msg.id, { resolve, reject });
-      this.socket!.write(JSON.stringify(msg) + "\n");
+      this.pendingRequests.set(msg.id, { resolve, reject, payload });
+      if (this.socket) {
+        try {
+          this.socket.write(payload);
+        } catch {
+          // Will be resent when the socket reconnects.
+        }
+      }
+      // If we have no socket, the request sits in pendingRequests and goes out
+      // on the next successful reconnect.
     });
   }
 
   close(): void {
+    this.closed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.socket) {
       this.socket.destroy();
       this.socket = null;
     }
+    for (const [, pending] of this.pendingRequests) {
+      pending.reject(new Error("IPC client closed"));
+    }
+    this.pendingRequests.clear();
   }
 }

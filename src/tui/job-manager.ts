@@ -1,11 +1,11 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import { createWriteStream, mkdirSync, writeFileSync, type WriteStream } from "node:fs";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join, basename } from "node:path";
-import { tmpdir } from "node:os";
 import type { JobInfo } from "./types.js";
+import { LogTailer } from "./log-tailer.js";
+import { StateStore, type PersistedJob } from "./state-store.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -15,48 +15,131 @@ const SPARKFLOW_RUN_PATH = resolve(__dirname, "../cli/index.js");
 
 interface ManagedJob {
   info: JobInfo;
-  process: ChildProcess;
-  stdinWriter: (data: string) => void;
+  pid: number;
+  // child is null for rehydrated jobs — we only have the pid, no pipes.
+  child: ChildProcess | null;
+  logPath: string;
+  tailer: LogTailer;
   outputBuffer: string[];
   pendingRequestId?: string;
-  logPath?: string;
-  logStream?: WriteStream;
+}
+
+const OUTPUT_BUFFER_MAX = 2000;
+const REHYDRATE_PING_MS = 2000;
+
+function logDirFor(cwd: string): string {
+  const dir = join(cwd, ".sparkflow", "logs");
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 export class JobManager {
   private jobs = new Map<string, ManagedJob>();
   private updateCallbacks: Array<() => void> = [];
   private tmuxSession: string | null = null;
+  private store: StateStore;
+  private cwd: string;
+  private persistTimers = new Map<string, NodeJS.Timeout>();
+  private rehydratedPingTimer: NodeJS.Timeout | null = null;
 
-  /**
-   * Set the tmux session name so job windows can be created.
-   */
+  constructor(cwd: string) {
+    this.cwd = cwd;
+    this.store = new StateStore(cwd);
+  }
+
   setTmuxSession(session: string): void {
     this.tmuxSession = session;
+  }
+
+  /**
+   * Load persisted jobs from disk and reattach log tailers.
+   * Dead pids are marked terminal; live pids continue streaming from their log offset.
+   */
+  rehydrate(): void {
+    const persisted = this.store.loadJobs();
+    for (const p of persisted) {
+      const alive = isAlive(p.pid);
+      const info: JobInfo = { ...p.info };
+      if (!alive && (info.state === "running" || info.state === "blocked")) {
+        info.state = "failed";
+        info.summary = info.summary || "process ended during reload";
+        info.endTime = info.endTime ?? Date.now();
+      }
+
+      const tailer = new LogTailer(p.logPath, p.logOffset, (line) => {
+        this.handleStatusLine(p.info.id, line);
+        this.handleVerboseLine(p.info.id, line);
+        this.appendOutput(p.info.id, line);
+      });
+
+      const managed: ManagedJob = {
+        info,
+        pid: p.pid,
+        child: null,
+        logPath: p.logPath,
+        tailer,
+        outputBuffer: [],
+        pendingRequestId: p.pendingRequestId,
+      };
+      this.jobs.set(info.id, managed);
+      tailer.start();
+      this.openTmuxWindow(info.id, info.workflowPath, p.logPath);
+      this.schedulePersist(info.id);
+    }
+
+    if (this.jobs.size > 0 && !this.rehydratedPingTimer) {
+      this.rehydratedPingTimer = setInterval(() => this.pingRehydrated(), REHYDRATE_PING_MS);
+    }
+
+    this.fireUpdate();
+  }
+
+  private pingRehydrated(): void {
+    for (const [id, job] of this.jobs) {
+      if (job.child) continue; // we get close events for owned children
+      if (job.info.state === "succeeded" || job.info.state === "failed") continue;
+      if (!isAlive(job.pid)) {
+        job.info.state = "failed";
+        job.info.summary = job.info.summary || "process exited";
+        job.info.endTime = Date.now();
+        this.schedulePersist(id);
+        this.fireUpdate();
+      }
+    }
   }
 
   startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string }): string {
     const id = randomBytes(6).toString("hex");
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
+    const jobCwd = opts?.cwd ?? this.cwd;
     if (opts?.cwd) args.push("--cwd", opts.cwd);
 
-    // Resolve plan path: explicit file path wins, otherwise write planText to logs dir
     let planPath = opts?.plan;
     if (!planPath && opts?.planText) {
       const workflowName = basename(workflowPath, ".json");
-      const logDir = join(opts?.cwd ?? process.cwd(), ".sparkflow", "logs", workflowName);
+      const logDir = join(jobCwd, ".sparkflow", "logs", workflowName);
       mkdirSync(logDir, { recursive: true });
       planPath = join(logDir, `plan-${id}.md`);
       writeFileSync(planPath, opts.planText);
     }
     if (planPath) args.push("--plan", planPath);
 
+    // Log file lives under the job cwd so it's project-local and survives daemon restart.
+    const logPath = join(logDirFor(jobCwd), `job-${id}.log`);
+    // Open append fd; the child inherits it as stdout+stderr and writes directly
+    // so the child survives the daemon process dying.
+    const logFd = openSync(logPath, "a");
+
     const child = spawn(process.execPath, [SPARKFLOW_RUN_PATH, ...args], {
-      cwd: opts?.cwd ?? process.cwd(),
-      stdio: ["pipe", "pipe", "pipe"],
+      cwd: jobCwd,
+      stdio: ["pipe", logFd, logFd],
       env: process.env as Record<string, string>,
+      detached: true,
     });
+
+    // We no longer need the parent's copy of the log fd.
+    try { closeSync(logFd); } catch { /* ignore */ }
 
     const info: JobInfo = {
       id,
@@ -67,84 +150,59 @@ export class JobManager {
       startTime: Date.now(),
     };
 
-    // Create log file for this job
-    const logPath = join(tmpdir(), `sparkflow-job-${id}.log`);
-    const logStream = createWriteStream(logPath, { flags: "a" });
+    const tailer = new LogTailer(logPath, 0, (line) => {
+      this.handleStatusLine(id, line);
+      this.handleVerboseLine(id, line);
+      this.appendOutput(id, line);
+    });
 
     const managed: ManagedJob = {
       info,
-      process: child,
-      stdinWriter: (data: string) => {
-        child.stdin?.write(data + "\n");
-      },
-      outputBuffer: [],
+      pid: child.pid ?? -1,
+      child,
       logPath,
-      logStream,
+      tailer,
+      outputBuffer: [],
     };
 
     this.jobs.set(id, managed);
-
-    // Open a tmux window with tail -f on the log
+    tailer.start();
     this.openTmuxWindow(id, workflowPath, logPath);
-
-    const safeLogWrite = (stream: WriteStream | undefined, msg: string) => {
-      if (stream && !stream.closed && stream.writable) stream.write(msg);
-    };
-
-    // Parse stderr for status-json events, and capture for output buffer
-    if (child.stderr) {
-      const rl = createInterface({ input: child.stderr });
-      rl.on("line", (line) => {
-        managed.outputBuffer.push(`[stderr] ${line}`);
-        safeLogWrite(managed.logStream, `${line}\n`);
-        this.handleStatusLine(id, line);
-      });
-    }
-
-    // Collect stdout for output buffer (verbose log)
-    if (child.stdout) {
-      const rl = createInterface({ input: child.stdout });
-      rl.on("line", (line) => {
-        managed.outputBuffer.push(line);
-        safeLogWrite(managed.logStream, `${line}\n`);
-        // Also try to parse verbose output for step info
-        this.handleVerboseLine(id, line);
-      });
-    }
-
-    const endLogStream = (job: ManagedJob, msg: string) => {
-      if (!job.logStream || job.logStream.closed || !job.logStream.writable) return;
-      job.logStream.write(msg);
-      job.logStream.end();
-      job.logStream = undefined;
-    };
 
     child.on("close", (code) => {
       const job = this.jobs.get(id);
-      if (job) {
-        job.info.endTime = Date.now();
-        if (job.info.state === "running" || job.info.state === "blocked") {
-          job.info.state = code === 0 ? "succeeded" : "failed";
-          job.info.summary = code === 0 ? "completed" : `exit code ${code}`;
-        }
-        endLogStream(job, `\n--- job ${id} ${job.info.state} ---\n`);
-        this.fireUpdate();
+      if (!job) return;
+      job.info.endTime = Date.now();
+      if (job.info.state === "running" || job.info.state === "blocked") {
+        job.info.state = code === 0 ? "succeeded" : "failed";
+        job.info.summary = code === 0 ? "completed" : `exit code ${code}`;
       }
+      this.schedulePersist(id);
+      this.fireUpdate();
     });
 
     child.on("error", (err) => {
       const job = this.jobs.get(id);
-      if (job) {
-        job.info.state = "failed";
-        job.info.summary = err.message;
-        job.info.endTime = Date.now();
-        endLogStream(job, `\n--- job ${id} error: ${err.message} ---\n`);
-        this.fireUpdate();
-      }
+      if (!job) return;
+      job.info.state = "failed";
+      job.info.summary = err.message;
+      job.info.endTime = Date.now();
+      this.schedulePersist(id);
+      this.fireUpdate();
     });
 
+    this.schedulePersist(id);
     this.fireUpdate();
     return id;
+  }
+
+  private appendOutput(jobId: string, line: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    job.outputBuffer.push(line);
+    if (job.outputBuffer.length > OUTPUT_BUFFER_MAX) {
+      job.outputBuffer.splice(0, job.outputBuffer.length - OUTPUT_BUFFER_MAX);
+    }
   }
 
   private handleStatusLine(jobId: string, line: string): void {
@@ -155,30 +213,30 @@ export class JobManager {
     try {
       event = JSON.parse(line);
     } catch {
-      return; // Not JSON, ignore
+      return;
     }
 
     const type = event.type as string;
+    let changed = false;
 
     if (type === "step_status") {
       job.info.currentStep = event.step as string;
       job.info.stepState = event.state as string;
       job.info.summary = `${event.step}: ${event.state}`;
-      if (event.state === "succeeded" || event.state === "failed") {
-        // Step completed, keep last known step
-      }
-      this.fireUpdate();
+      changed = true;
     } else if (type === "ask_user") {
       job.info.state = "blocked";
       job.info.pendingQuestion = event.question as string;
       job.info.summary = `waiting for answer: ${event.question}`;
-      // Store request_id for later answer
       job.pendingRequestId = event.request_id as string;
-      this.fireUpdate();
+      if (!job.child) {
+        job.info.summary = `orphaned question (reload): ${event.question}`;
+      }
+      changed = true;
     } else if (type === "workflow_start") {
       job.info.workflowName = event.name as string;
       job.info.summary = "running";
-      this.fireUpdate();
+      changed = true;
     } else if (type === "workflow_complete") {
       // A workflow_complete with success:false can arrive either because the
       // workflow really aborted, or because the process is wrapping up after a
@@ -188,6 +246,11 @@ export class JobManager {
       job.info.state = event.success ? "succeeded" : "failed";
       job.info.summary = event.success ? "completed" : "failed";
       job.info.endTime = Date.now();
+      changed = true;
+    }
+
+    if (changed) {
+      this.schedulePersist(jobId);
       this.fireUpdate();
     } else if (type === "job_failed") {
       const step = event.step as string;
@@ -207,8 +270,8 @@ export class JobManager {
   private handleVerboseLine(jobId: string, line: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
+    let changed = false;
 
-    // Parse verbose output like: [stepId] running (claude-code)
     const stepMatch = line.match(/^\[(\S+)\] (running|succeeded|failed)/);
     if (stepMatch) {
       const [, step, state] = stepMatch;
@@ -217,27 +280,30 @@ export class JobManager {
       if (job.info.state !== "blocked") {
         job.info.summary = `${step}: ${state}`;
       }
-      this.fireUpdate();
+      changed = true;
     }
 
-    // Parse workflow start: [sparkflow] Starting workflow "name"
     const startMatch = line.match(/^\[sparkflow\] Starting workflow "(.+)"/);
     if (startMatch) {
       job.info.workflowName = startMatch[1];
-      this.fireUpdate();
+      changed = true;
     }
 
-    // Parse workflow complete
     if (line.match(/^\[sparkflow\] Workflow .+ completed successfully/)) {
       job.info.state = "succeeded";
       job.info.summary = "completed";
       job.info.endTime = Date.now();
-      this.fireUpdate();
+      changed = true;
     }
     if (line.match(/^\[sparkflow\] Workflow .+ (failed|aborted)/)) {
       job.info.state = "failed";
       job.info.summary = "failed";
       job.info.endTime = Date.now();
+      changed = true;
+    }
+
+    if (changed) {
+      this.schedulePersist(jobId);
       this.fireUpdate();
     }
   }
@@ -245,15 +311,22 @@ export class JobManager {
   answerQuestion(jobId: string, answer: string): boolean {
     const job = this.jobs.get(jobId);
     if (!job || !job.info.pendingQuestion) return false;
+    if (!job.child || !job.child.stdin) {
+      // Rehydrated job — we lost the stdin pipe across reload.
+      return false;
+    }
 
     if (job.pendingRequestId) {
-      job.stdinWriter(JSON.stringify({ type: "answer", request_id: job.pendingRequestId, response: answer }));
+      job.child.stdin.write(
+        JSON.stringify({ type: "answer", request_id: job.pendingRequestId, response: answer }) + "\n",
+      );
     }
 
     job.info.state = "running";
     job.info.pendingQuestion = undefined;
     job.pendingRequestId = undefined;
     job.info.summary = job.info.currentStep ? `${job.info.currentStep}: running` : "running";
+    this.schedulePersist(jobId);
     this.fireUpdate();
     return true;
   }
@@ -300,6 +373,35 @@ export class JobManager {
     for (const cb of this.updateCallbacks) cb();
   }
 
+  private schedulePersist(jobId: string): void {
+    const existing = this.persistTimers.get(jobId);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      this.persistNow(jobId);
+      this.persistTimers.delete(jobId);
+    }, 250);
+    // Allow node to exit even with pending persist timers.
+    t.unref?.();
+    this.persistTimers.set(jobId, t);
+  }
+
+  private persistNow(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    const persisted: PersistedJob = {
+      info: { ...job.info },
+      pid: job.pid,
+      logPath: job.logPath,
+      logOffset: job.tailer.bytesRead,
+      pendingRequestId: job.pendingRequestId,
+    };
+    try {
+      this.store.saveJob(persisted);
+    } catch {
+      // non-fatal
+    }
+  }
+
   private openTmuxWindow(jobId: string, workflowPath: string, logPath: string): void {
     if (!this.tmuxSession) return;
     const name = basename(workflowPath, ".json").slice(0, 20);
@@ -312,22 +414,65 @@ export class JobManager {
         "tail", "-f", logPath,
       ], { stdio: "pipe" });
     } catch {
-      // tmux not available or session gone — non-fatal
+      // tmux unavailable, session gone, or window already exists — non-fatal
     }
   }
 
-  killAll(): void {
-    for (const [, job] of this.jobs) {
-      try {
-        job.process.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
-      try {
-        job.logStream?.end();
-      } catch {
-        // ignore
-      }
+  /**
+   * Flush all pending persists synchronously. Called before daemon exit.
+   */
+  flush(): void {
+    for (const [id, timer] of this.persistTimers) {
+      clearTimeout(timer);
+      this.persistNow(id);
     }
+    this.persistTimers.clear();
+  }
+
+  /**
+   * Detach from all jobs without killing them. Used on reload (SIGTERM).
+   */
+  release(): void {
+    this.flush();
+    for (const job of this.jobs.values()) {
+      job.tailer.stop();
+    }
+    if (this.rehydratedPingTimer) {
+      clearInterval(this.rehydratedPingTimer);
+      this.rehydratedPingTimer = null;
+    }
+  }
+
+  /**
+   * Kill all jobs and remove their persisted state. Used on true quit (SIGINT).
+   */
+  killAll(): void {
+    this.flush();
+    for (const [id, job] of this.jobs) {
+      try {
+        if (job.child) {
+          job.child.kill("SIGTERM");
+        } else if (job.pid > 0 && isAlive(job.pid)) {
+          process.kill(job.pid, "SIGTERM");
+        }
+      } catch { /* ignore */ }
+      job.tailer.stop();
+      this.store.removeJob(id);
+    }
+    if (this.rehydratedPingTimer) {
+      clearInterval(this.rehydratedPingTimer);
+      this.rehydratedPingTimer = null;
+    }
+  }
+}
+
+function isAlive(pid: number): boolean {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = exists but we can't signal (still alive)
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }

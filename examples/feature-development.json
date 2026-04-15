@@ -92,6 +92,7 @@
         "type": "pr-creator",
         "model": "sonnet"
       },
+      "retry": { "attempts": 3, "backoff_seconds": 5 },
       "on_success": [
         { "step": "pr-watch" }
       ],

@@ -47,6 +47,7 @@
           "minimum": 0,
           "description": "Default max times a step can be re-entered via feedback loops."
         },
+        "retry": { "$ref": "#/$defs/RetryConfig" },
         "timeout": {
           "type": "integer",
           "minimum": 1,
@@ -112,6 +113,7 @@
           "type": "boolean",
           "description": "When true, a terminal failure pauses the workflow and asks the outer console how to proceed instead of aborting. Requires status-json mode."
         },
+        "retry": { "$ref": "#/$defs/RetryConfig" },
         "timeout": {
           "type": "integer",
           "minimum": 1,
@@ -250,6 +252,24 @@
           "type": "object",
           "additionalProperties": { "type": "string" },
           "description": "Env vars passed to the child. Supports templates plus ${item}/${item.field} when foreach is set."
+        }
+      }
+    },
+    "RetryConfig": {
+      "type": "object",
+      "required": ["attempts"],
+      "additionalProperties": false,
+      "description": "In-place retry on intrinsic adapter failure. Distinct from max_retries.",
+      "properties": {
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total attempts including the first. 1 = no retry."
+        },
+        "backoff_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Seconds to wait between attempts."
         }
       }
     },

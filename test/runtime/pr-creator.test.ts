@@ -136,11 +136,6 @@ function setupBaseMocks(opts: { prCreateTitle?: (t: string) => void } = {}) {
       return Buffer.from("https://github.com/o/r/pull/99\n");
     }
 
-    // pr view
-    if (key.includes("pr view")) {
-      return Buffer.from(JSON.stringify({ number: 99, url: "https://github.com/o/r/pull/99" }) + "\n");
-    }
-
     throw new Error(`Unexpected gh command: ${key}`);
   });
 }
@@ -201,6 +196,28 @@ describe("PrCreatorAdapter", () => {
     expect(result.outputs.pr_url).toBe("https://github.com/o/r/pull/99");
     // Fallback title derived from branch name "sparkflow/developer"
     expect(capturedTitle).toBe("Sparkflow/Developer");
+  });
+
+  it("fails when gh pr create stdout has no PR URL", async () => {
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+      if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/dev\n");
+      if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc\n");
+      if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" f.ts | 1 +\n");
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+      if (key.includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      if (key.includes("pr create")) return Buffer.from("Creating pull request... done\n");
+      throw new Error(`Unexpected gh: ${key}`);
+    });
+    mockSpawnClaude({ title: "T", summary: "S" });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Could not parse PR URL");
   });
 
   it("handles gh pr create failure", async () => {

@@ -17,13 +17,12 @@ function ghJson<T>(args: string[], cwd: string): T {
   return JSON.parse(raw) as T;
 }
 
-interface PrView {
-  number: number;
-  url: string;
-}
-
 interface RepoView {
   defaultBranchRef: { name: string };
+}
+
+interface PrView {
+  url: string;
 }
 
 function generateTitleSummary(
@@ -229,54 +228,69 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       summary = fallback.summary;
     }
 
-    // Step 5: Create PR (or adopt an existing one for this branch)
+    // Step 5: Create PR (or adopt an existing one for this branch).
+    // `gh pr create` prints the new PR URL to stdout — capture it directly
+    // so we don't need a follow-up `gh pr view`, which is brittle when the
+    // branch isn't yet tracked.
+    let prUrl: string | undefined;
     try {
-      const createArgs = [
-        "pr",
-        "create",
-        ...repoArgs,
-        "--base",
-        baseBranch,
-        "--title",
-        title,
-        "--body",
-        summary,
-      ];
-      gh(createArgs, ctx.cwd);
+      const out = gh(
+        [
+          "pr",
+          "create",
+          ...repoArgs,
+          "--base",
+          baseBranch,
+          "--title",
+          title,
+          "--body",
+          summary,
+        ],
+        ctx.cwd,
+      );
+      const match = out.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
+      if (!match) {
+        return {
+          success: false,
+          outputs: {},
+          error: `Could not parse PR URL from gh output: ${out}`,
+        };
+      }
+      prUrl = match[0];
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const alreadyExists =
         errMsg.includes("already exists") ||
         errMsg.includes("A pull request already exists");
-      if (alreadyExists) {
-        ctx.logger?.info(`[${ctx.stepId}] PR already exists for this branch, using it`);
-      } else {
+      if (!alreadyExists) {
         return {
           success: false,
           outputs: {},
           error: `Failed to create PR: ${errMsg}`,
         };
       }
+      // PR already exists for this branch — look it up.
+      ctx.logger?.info(`[${ctx.stepId}] PR already exists for this branch, using it`);
+      try {
+        const pr = ghJson<PrView>(
+          ["pr", "view", ...repoArgs, "--json", "url"],
+          ctx.cwd,
+        );
+        prUrl = pr.url;
+      } catch (viewErr) {
+        const viewMsg = viewErr instanceof Error ? viewErr.message : String(viewErr);
+        return {
+          success: false,
+          outputs: {},
+          error: `PR exists but failed to retrieve URL: ${viewMsg}`,
+        };
+      }
     }
 
-    // Step 6: Get PR info
-    try {
-      const pr = ghJson<PrView>(
-        ["pr", "view", ...repoArgs, "--json", "number,url"],
-        ctx.cwd,
-      );
-      ctx.logger?.info(`[${ctx.stepId}] PR ready: ${pr.url}`);
-      return {
-        success: true,
-        outputs: { pr_url: pr.url },
-      };
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        outputs: {},
-        error: `PR created but failed to retrieve info: ${errMsg}`,
-      };
-    }
+    ctx.logger?.info(`[${ctx.stepId}] PR ready: ${prUrl}`);
+    return {
+      success: true,
+      outputs: { pr_url: prUrl },
+    };
   }
 }

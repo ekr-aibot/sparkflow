@@ -136,6 +136,7 @@ export class WorkflowEngine {
       this.stepStatuses.set(id, {
         state: "pending",
         retryCount: 0,
+        inPlaceAttempt: 0,
         outputs: {},
         completedJoins: new Set(),
         pendingMessages: [],
@@ -492,6 +493,7 @@ export class WorkflowEngine {
         status.state = "succeeded";
         status.outputs = result.outputs;
         status.lastError = undefined;
+        status.inPlaceAttempt = 0;
         this.stepOutputs.set(stepId, result.outputs);
 
         // Cleanup isolated worktree on success
@@ -502,17 +504,29 @@ export class WorkflowEngine {
         this.logger.info(`[${stepId}] succeeded`);
         this.onStepComplete(stepId);
       } else {
+        const errSuffix = result.error ? `: ${result.error}` : "";
+        if (await this.shouldInPlaceRetry(stepId, errSuffix)) {
+          // Re-enter execute without traversing on_failure or counting as upstream retry.
+          status.state = "running";
+          await this.executeStep(stepId, message);
+          return;
+        }
         status.state = "failed";
         status.lastError = result.error;
-        this.logger.error(
-          `[${stepId}] failed${result.error ? `: ${result.error}` : ""}`
-        );
+        status.inPlaceAttempt = 0;
+        this.logger.error(`[${stepId}] failed${errSuffix}`);
         await this.onStepFailure(stepId);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      if (await this.shouldInPlaceRetry(stepId, `: ${errMsg}`)) {
+        status.state = "running";
+        await this.executeStep(stepId, message);
+        return;
+      }
       status.state = "failed";
       status.lastError = errMsg;
+      status.inPlaceAttempt = 0;
       this.logger.error(`[${stepId}] error: ${errMsg}`);
       await this.onStepFailure(stepId);
     } finally {
@@ -632,6 +646,30 @@ export class WorkflowEngine {
       const message = status.pendingMessages.shift();
       this.triggerStep(stepId, message);
     }
+  }
+
+  private async shouldInPlaceRetry(stepId: string, errSuffix: string): Promise<boolean> {
+    const step = this.workflow.steps[stepId];
+    const retry = step.retry ?? this.workflow.defaults?.retry;
+    if (!retry) return false;
+
+    const status = this.stepStatuses.get(stepId)!;
+    status.inPlaceAttempt++;
+    if (status.inPlaceAttempt >= retry.attempts) {
+      this.logger.error(
+        `[${stepId}] retry exhausted after ${status.inPlaceAttempt} attempt(s)${errSuffix}`
+      );
+      return false;
+    }
+
+    const backoff = retry.backoff_seconds ?? 0;
+    this.logger.info(
+      `[${stepId}] failed${errSuffix} — retrying (${status.inPlaceAttempt}/${retry.attempts - 1})${backoff ? ` after ${backoff}s` : ""}`
+    );
+    if (backoff > 0) {
+      await new Promise((r) => setTimeout(r, backoff * 1000));
+    }
+    return true;
   }
 
   private resolveRuntime(step: Step): Runtime {

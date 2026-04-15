@@ -513,6 +513,130 @@ describe("WorkflowEngine", () => {
     expect(executionOrder.filter((s) => s === "author").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("in-place retry recovers transient failure without traversing on_failure", async () => {
+    let attempts = 0;
+    let onFailureFired = false;
+    const workflow = makeWorkflow({
+      steps: {
+        flaky: {
+          name: "Flaky",
+          interactive: false,
+          retry: { attempts: 3 },
+          on_failure: [{ step: "fallback" }],
+        },
+        fallback: {
+          name: "Fallback",
+          interactive: false,
+        },
+      },
+      entry: "flaky",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      if (ctx.stepId === "fallback") {
+        onFailureFired = true;
+        return { success: true, outputs: {} };
+      }
+      attempts++;
+      if (attempts < 3) return { success: false, outputs: {}, error: "transient" };
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    expect(attempts).toBe(3);
+    expect(onFailureFired).toBe(false);
+  });
+
+  it("retry exhaustion falls through to on_failure", async () => {
+    let attempts = 0;
+    let fallbackRan = false;
+    const workflow = makeWorkflow({
+      steps: {
+        flaky: {
+          name: "Flaky",
+          interactive: false,
+          retry: { attempts: 2 },
+          on_failure: [{ step: "fallback" }],
+        },
+        fallback: {
+          name: "Fallback",
+          interactive: false,
+        },
+      },
+      entry: "flaky",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      if (ctx.stepId === "fallback") {
+        fallbackRan = true;
+        return { success: true, outputs: {} };
+      }
+      attempts++;
+      return { success: false, outputs: {}, error: "always broken" };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    const result = await engine.run();
+
+    // Workflow fails because the flaky step's terminal state is `failed`,
+    // but on_failure transitions still fire and `fallback` runs.
+    expect(result.success).toBe(false);
+    expect(attempts).toBe(2);
+    expect(fallbackRan).toBe(true);
+  });
+
+  it("retry counter is independent of upstream re-entry counter", async () => {
+    // Reviewer fails once intrinsically (uses retry), then fails once on review (uses on_failure → developer).
+    let reviewerCalls = 0;
+    let developerCalls = 0;
+    const workflow = makeWorkflow({
+      defaults: {
+        runtime: { type: "shell", command: "echo" },
+        max_retries: 1, // tight max_retries to prove retry doesn't burn this budget
+      },
+      steps: {
+        developer: {
+          name: "Dev",
+          interactive: false,
+          on_success: [{ step: "reviewer" }],
+        },
+        reviewer: {
+          name: "Reviewer",
+          interactive: false,
+          retry: { attempts: 3 },
+          on_failure: [{ step: "developer", message: "fix it" }],
+        },
+      },
+      entry: "developer",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      if (ctx.stepId === "developer") {
+        developerCalls++;
+        return { success: true, outputs: {} };
+      }
+      reviewerCalls++;
+      // First call: 2 transient failures then real review failure. Retry handles transients.
+      if (reviewerCalls === 1) return { success: false, outputs: {}, error: "transient" };
+      if (reviewerCalls === 2) return { success: false, outputs: {}, error: "transient" };
+      if (reviewerCalls === 3) return { success: false, outputs: {}, error: "review failed" };
+      // After developer retry: succeed cleanly
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    // reviewer ran 3 times in first execution (2 retries + final), then once more after dev re-entry
+    expect(reviewerCalls).toBe(4);
+    // developer ran twice (initial + on_failure re-entry); max_retries=1 was not exceeded
+    expect(developerCalls).toBe(2);
+  });
+
   it("dry-run does not execute adapters", async () => {
     let adapterCalled = false;
     const workflow = makeWorkflow();

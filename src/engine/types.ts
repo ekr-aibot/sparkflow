@@ -3,6 +3,8 @@ export type StepState = "pending" | "waiting" | "running" | "succeeded" | "faile
 export interface StepStatus {
   state: StepState;
   retryCount: number;
+  /** In-place retry attempts used in the current execution (resets on success or upstream re-entry). */
+  inPlaceAttempt: number;
   outputs: Record<string, unknown>;
   completedJoins: Set<string>;
   pendingMessages: string[];

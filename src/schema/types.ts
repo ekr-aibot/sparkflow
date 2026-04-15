@@ -89,6 +89,15 @@ export interface Transition {
   message?: string;
 }
 
+// ── Retry ───────────────────────────────────────────────────────────
+
+export interface RetryConfig {
+  /** Total attempts (including the first). 1 = no retry. */
+  attempts: number;
+  /** Seconds to wait between attempts. Defaults to 0. */
+  backoff_seconds?: number;
+}
+
 // ── Step ────────────────────────────────────────────────────────────
 
 export interface Step {
@@ -123,6 +132,12 @@ export interface Step {
    * and ultimately to false.
    */
   ask_on_failure?: boolean;
+  /**
+   * In-place retry on intrinsic adapter failure. Distinct from `max_retries`,
+   * which counts re-entries from upstream. When attempts are exhausted the
+   * step falls through to `on_failure` (or aborts if none).
+   */
+  retry?: RetryConfig;
   /** Timeout in seconds for non-interactive steps. */
   timeout?: number;
   /** Named outputs this step produces. */
@@ -136,6 +151,8 @@ export interface Step {
 export interface StepDefaults {
   /** Default max retries for feedback loops. */
   max_retries?: number;
+  /** Default in-place retry config for intrinsic adapter failures. */
+  retry?: RetryConfig;
   /** Default timeout in seconds. */
   timeout?: number;
   /** Default runtime config. */

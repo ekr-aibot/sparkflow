@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -104,13 +105,22 @@ function checkTmux(): void {
 
 const args = parseArgs(process.argv.slice(2));
 
-// Validate --workflow if provided
-if (args.workflow) {
-  const workflowPath = resolve(args.cwd, args.workflow);
-  if (!existsSync(workflowPath)) {
-    console.error(`Error: workflow file not found: ${workflowPath}`);
-    process.exit(1);
+// Resolve workflow via .sparkflow/config.json when not provided on CLI,
+// and accept bare names as .sparkflow/workflows/<name>.json.
+let resolvedWorkflowPath: string | null = null;
+try {
+  const projectConfig = loadProjectConfig(args.cwd);
+  const candidate = args.workflow ?? projectConfig.defaultWorkflow;
+  if (candidate) {
+    resolvedWorkflowPath = resolveWorkflowPath(candidate, args.cwd, projectConfig);
   }
+} catch (err) {
+  console.error(`Error: ${(err as Error).message}`);
+  process.exit(1);
+}
+
+if (resolvedWorkflowPath) {
+  const workflowPath = resolvedWorkflowPath;
   try {
     const content = readFileSync(workflowPath, "utf-8");
     const data = JSON.parse(content);
@@ -130,6 +140,7 @@ if (args.workflow) {
     }
     throw err;
   }
+  args.workflow = workflowPath;
 }
 
 checkTmux();

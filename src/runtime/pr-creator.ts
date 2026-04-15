@@ -17,13 +17,12 @@ function ghJson<T>(args: string[], cwd: string): T {
   return JSON.parse(raw) as T;
 }
 
-interface PrView {
-  number: number;
-  url: string;
-}
-
 interface RepoView {
   defaultBranchRef: { name: string };
+}
+
+interface PrView {
+  url: string;
 }
 
 function generateTitleSummary(
@@ -134,36 +133,66 @@ export class PrCreatorAdapter implements RuntimeAdapter {
     }
 
     const model = runtime.model ?? DEFAULT_MODEL;
+    const pushRemote = ctx.git?.push_remote ?? "origin";
+    const targetRepo = ctx.git?.pr_repo;
+    const repoArgs = targetRepo ? ["--repo", targetRepo] : [];
 
-    // Step 1: Get base branch
+    // Step 1: Get base branch (from configured target repo, or fall back).
     let baseBranch: string;
-    try {
-      const repoInfo = ghJson<RepoView>(
-        ["repo", "view", "--json", "defaultBranchRef"],
-        ctx.cwd,
-      );
-      baseBranch = repoInfo.defaultBranchRef.name;
-    } catch {
-      baseBranch = "main";
+    if (ctx.git?.base) {
+      baseBranch = ctx.git.base;
+    } else {
+      try {
+        const repoInfo = ghJson<RepoView>(
+          ["repo", "view", ...repoArgs, "--json", "defaultBranchRef"],
+          ctx.cwd,
+        );
+        baseBranch = repoInfo.defaultBranchRef.name;
+      } catch {
+        baseBranch = "main";
+      }
     }
 
-    // Step 2: Push current branch to remote.
+    // Step 2: Push current branch to the configured remote.
     // Each workflow run uses an isolated worktree with its own branch,
     // so the branch is already unique — just push it.
+    // If the developer already pushed, warn but continue.
     try {
-      execFileSync("git", ["push", "-u", "origin", "HEAD"], {
+      execFileSync("git", ["push", "-u", pushRemote, "HEAD"], {
         cwd: ctx.cwd,
         stdio: "pipe",
         timeout: 60_000,
       });
-      ctx.logger?.info(`[${ctx.stepId}] pushed branch to remote`);
+      ctx.logger?.info(`[${ctx.stepId}] pushed branch to ${pushRemote}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        outputs: {},
-        error: `Failed to push: ${errMsg}`,
-      };
+      // If the remote already has this branch with the same commits, that's fine
+      const alreadyUpToDate =
+        errMsg.includes("Everything up-to-date") ||
+        errMsg.includes("everything up-to-date");
+      if (alreadyUpToDate) {
+        ctx.logger?.info(`[${ctx.stepId}] branch already pushed, continuing`);
+      } else {
+        // Try force-free push — maybe the developer pushed earlier commits
+        // and we just need to update. Attempt a regular push (non-force)
+        // one more time to surface the real error if it persists.
+        ctx.logger?.info(`[${ctx.stepId}] push failed (${errMsg}), retrying...`);
+        try {
+          execFileSync("git", ["push", "-u", "origin", "HEAD"], {
+            cwd: ctx.cwd,
+            stdio: "pipe",
+            timeout: 60_000,
+          });
+          ctx.logger?.info(`[${ctx.stepId}] pushed branch to remote on retry`);
+        } catch (retryErr) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          return {
+            success: false,
+            outputs: {},
+            error: `Failed to push: ${retryMsg}`,
+          };
+        }
+      }
     }
 
     // Step 3: Gather diff context
@@ -199,39 +228,75 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       summary = fallback.summary;
     }
 
-    // Step 5: Create PR
+    // Step 5: Create PR (or adopt an existing one for this branch).
+    // `gh pr create` prints the new PR URL to stdout — capture it directly
+    // so we don't need a follow-up `gh pr view`, which is brittle when the
+    // branch isn't yet tracked.
+    let prUrl: string | undefined;
     try {
-      gh(
-        ["pr", "create", "--title", title, "--body", summary],
+      const out = gh(
+        [
+          "pr",
+          "create",
+          ...repoArgs,
+          "--base",
+          baseBranch,
+          "--title",
+          title,
+          "--body",
+          summary,
+        ],
         ctx.cwd,
       );
+      const match = out.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
+      if (!match) {
+        return {
+          success: false,
+          outputs: {},
+          error: `Could not parse PR URL from gh output: ${out}`,
+        };
+      }
+      prUrl = match[0];
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        outputs: {},
-        error: `Failed to create PR: ${errMsg}`,
-      };
+      const alreadyExists =
+        errMsg.includes("already exists") ||
+        errMsg.includes("A pull request already exists");
+      if (!alreadyExists) {
+        return {
+          success: false,
+          outputs: {},
+          error: `Failed to create PR: ${errMsg}`,
+        };
+      }
+      // PR already exists for this branch — look it up.
+      // `gh pr view` requires a positional <branch> argument when --repo is set,
+      // so always pass the current branch name explicitly.
+      ctx.logger?.info(`[${ctx.stepId}] PR already exists for this branch, using it`);
+      try {
+        const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+          cwd: ctx.cwd,
+          stdio: "pipe",
+        }).toString().trim();
+        const pr = ghJson<PrView>(
+          ["pr", "view", branch, ...repoArgs, "--json", "url"],
+          ctx.cwd,
+        );
+        prUrl = pr.url;
+      } catch (viewErr) {
+        const viewMsg = viewErr instanceof Error ? viewErr.message : String(viewErr);
+        return {
+          success: false,
+          outputs: {},
+          error: `PR exists but failed to retrieve URL: ${viewMsg}`,
+        };
+      }
     }
 
-    // Step 6: Get PR info
-    try {
-      const pr = ghJson<PrView>(
-        ["pr", "view", "--json", "number,url"],
-        ctx.cwd,
-      );
-      ctx.logger?.info(`[${ctx.stepId}] created PR: ${pr.url}`);
-      return {
-        success: true,
-        outputs: { pr_url: pr.url },
-      };
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        outputs: {},
-        error: `PR created but failed to retrieve info: ${errMsg}`,
-      };
-    }
+    ctx.logger?.info(`[${ctx.stepId}] PR ready: ${prUrl}`);
+    return {
+      success: true,
+      outputs: { pr_url: prUrl },
+    };
   }
 }

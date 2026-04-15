@@ -270,10 +270,16 @@ export class PrCreatorAdapter implements RuntimeAdapter {
         };
       }
       // PR already exists for this branch — look it up.
+      // `gh pr view` requires a positional <branch> argument when --repo is set,
+      // so always pass the current branch name explicitly.
       ctx.logger?.info(`[${ctx.stepId}] PR already exists for this branch, using it`);
       try {
+        const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+          cwd: ctx.cwd,
+          stdio: "pipe",
+        }).toString().trim();
         const pr = ghJson<PrView>(
-          ["pr", "view", ...repoArgs, "--json", "url"],
+          ["pr", "view", branch, ...repoArgs, "--json", "url"],
           ctx.cwd,
         );
         prUrl = pr.url;

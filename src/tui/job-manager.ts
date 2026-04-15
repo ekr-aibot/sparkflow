@@ -180,9 +180,26 @@ export class JobManager {
       job.info.summary = "running";
       this.fireUpdate();
     } else if (type === "workflow_complete") {
+      // A workflow_complete with success:false can arrive either because the
+      // workflow really aborted, or because the process is wrapping up after a
+      // recovery. Don't overwrite a failed_waiting state — we're intentionally
+      // pausing to collect user input.
+      if (job.info.state === "failed_waiting") return;
       job.info.state = event.success ? "succeeded" : "failed";
       job.info.summary = event.success ? "completed" : "failed";
       job.info.endTime = Date.now();
+      this.fireUpdate();
+    } else if (type === "job_failed") {
+      const step = event.step as string;
+      const error = (event.error as string) ?? "step failed";
+      job.info.state = "failed_waiting";
+      job.info.failedStep = step;
+      job.info.failedError = error;
+      job.info.currentStep = step;
+      job.info.stepState = "failed";
+      job.info.summary = `${step} failed — awaiting recovery: ${error.slice(0, 80)}`;
+      job.info.pendingQuestion = `recover: ${step}`;
+      job.pendingRequestId = event.request_id as string;
       this.fireUpdate();
     }
   }
@@ -237,6 +254,30 @@ export class JobManager {
     job.info.pendingQuestion = undefined;
     job.pendingRequestId = undefined;
     job.info.summary = job.info.currentStep ? `${job.info.currentStep}: running` : "running";
+    this.fireUpdate();
+    return true;
+  }
+
+  answerRecovery(jobId: string, action: "retry" | "skip" | "abort", message?: string): boolean {
+    const job = this.jobs.get(jobId);
+    if (!job || job.info.state !== "failed_waiting" || !job.pendingRequestId) return false;
+
+    const payload = JSON.stringify({ action, message });
+    job.stdinWriter(JSON.stringify({ type: "answer", request_id: job.pendingRequestId, response: payload }));
+
+    if (action === "abort") {
+      job.info.state = "failed";
+      job.info.summary = `aborted by user after ${job.info.failedStep ?? "failure"}`;
+    } else {
+      job.info.state = "running";
+      job.info.summary = action === "retry"
+        ? `retrying ${job.info.failedStep ?? "step"}…`
+        : `skipped ${job.info.failedStep ?? "step"}`;
+    }
+    job.info.pendingQuestion = undefined;
+    job.pendingRequestId = undefined;
+    job.info.failedStep = undefined;
+    job.info.failedError = undefined;
     this.fireUpdate();
     return true;
   }

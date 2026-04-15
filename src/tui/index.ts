@@ -21,14 +21,18 @@ You have MCP tools from the sparkflow-dashboard server to manage workflow jobs:
 - start_workflow: Start a sparkflow-run job from a workflow JSON file. Returns a job ID.
 - list_jobs: List all jobs with current status (state, step, elapsed time).
 - get_job_detail: Get the full output log from a specific job.
+- answer_job_recovery: Resolve a job paused in failed_waiting state. Pass action=retry|skip|abort and an optional message.
 
 The user has slash commands:
 - /project:sf-plan — Enter planning mode. Help the user think through what they want to build. Produce a project plan for workflow agents to execute.
 - /project:sf-dispatch <workflow_path> — Write the plan to disk and start the specified workflow with it via --plan.
 - /sf-detail <job_id> — Show output from a job and diagnose failures (MCP prompt).
+- /sf-recover <job_id> — Diagnose a failed_waiting job, work with the user on a fix, then resolve it.
 - /sf-jobs — Quick summary of all running jobs (MCP prompt).
 
-If a job becomes blocked (needs user input), it will show in the status pane at the bottom of the terminal. The user will handle blocked jobs directly.`;
+If a job becomes blocked (needs user input), it will show in the status pane at the bottom of the terminal. The user will handle blocked jobs directly.
+
+**IMPORTANT — failed jobs:** When a job enters \`FAILED_WAITING\` state in the status pane, the workflow has paused because a step opted in (via \`ask_on_failure\`) to ask for help rather than abort. Proactively run \`/sf-recover <job_id>\` without being asked. Work with the user to understand what went wrong and craft a concrete correction, then call \`answer_job_recovery\`. For a retry of a claude-code step, the agent's conversation resumes with your correction message — phrase it as a direct instruction. Jobs that simply fail (state \`FAILED\`) did not opt in; don't try to recover them.`;
 
 function usage(): never {
   console.log(`Usage: sparkflow [options]

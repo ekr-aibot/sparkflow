@@ -23,6 +23,7 @@ const STATE_COLORS: Record<string, string> = {
   running: COLORS.yellow,
   succeeded: COLORS.green,
   failed: COLORS.red,
+  failed_waiting: COLORS.red,
   blocked: COLORS.magenta,
 };
 
@@ -102,6 +103,16 @@ function handleIpcRequest(msg: IpcMessage, jobManager: JobManager, cwd: string):
       const { jobId, answer } = msg.payload as { jobId: string; answer: string };
       const ok = jobManager.answerQuestion(jobId, answer);
       if (!ok) return errorResponse(`No pending question for job: ${jobId}`);
+      return response({});
+    }
+    case "answer_recovery": {
+      const { jobId, action, message } = msg.payload as {
+        jobId: string;
+        action: "retry" | "skip" | "abort";
+        message?: string;
+      };
+      const ok = jobManager.answerRecovery(jobId, action, message);
+      if (!ok) return errorResponse(`Job ${jobId} is not waiting for recovery`);
       return response({});
     }
     default:

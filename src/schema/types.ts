@@ -101,6 +101,14 @@ export interface Step {
   on_failure?: Transition[];
   /** Max re-entries via feedback loops before workflow aborts. */
   max_retries?: number;
+  /**
+   * When true, a failure with no effective on_failure transition (or after
+   * retries are exhausted) pauses the workflow and asks the outer console how
+   * to proceed instead of aborting. Requires status-json mode (i.e. running
+   * under the dashboard). Defaults to the workflow's `defaults.ask_on_failure`,
+   * and ultimately to false.
+   */
+  ask_on_failure?: boolean;
   /** Timeout in seconds for non-interactive steps. */
   timeout?: number;
   /** Named outputs this step produces. */
@@ -120,6 +128,8 @@ export interface StepDefaults {
   runtime?: Runtime;
   /** Default worktree settings. */
   worktree?: WorktreeConfig;
+  /** Default ask_on_failure for steps that don't set it. */
+  ask_on_failure?: boolean;
 }
 
 // ── Workflow (top-level) ────────────────────────────────────────────

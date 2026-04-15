@@ -53,7 +53,11 @@
           "description": "Default timeout in seconds for non-interactive steps."
         },
         "runtime": { "$ref": "#/$defs/Runtime" },
-        "worktree": { "$ref": "#/$defs/WorktreeConfig" }
+        "worktree": { "$ref": "#/$defs/WorktreeConfig" },
+        "ask_on_failure": {
+          "type": "boolean",
+          "description": "Default ask_on_failure for steps that don't set it."
+        }
       }
     },
     "Step": {
@@ -103,6 +107,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "Max re-entries via feedback loops before workflow aborts."
+        },
+        "ask_on_failure": {
+          "type": "boolean",
+          "description": "When true, a terminal failure pauses the workflow and asks the outer console how to proceed instead of aborting. Requires status-json mode."
         },
         "timeout": {
           "type": "integer",

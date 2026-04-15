@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -79,6 +80,19 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push("--print", "--output-format", "json");
     }
 
+    // Session handling: on first run, mint a uuid and pass --session-id so we
+    // know it for future resumes. On recovery-retry, pass --resume <id> and
+    // send only the correction message (no original prompt).
+    let sessionId: string;
+    const resuming = Boolean(ctx.resume && ctx.sessionId);
+    if (resuming) {
+      sessionId = ctx.sessionId!;
+      args.push("--resume", sessionId);
+    } else {
+      sessionId = ctx.sessionId ?? randomUUID();
+      args.push("--session-id", sessionId);
+    }
+
     // Use a temp dir for any files we need to pass to claude
     const tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-mcp-"));
     const tempFiles: string[] = [];
@@ -102,9 +116,10 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push("--mcp-config", mcpConfigPath);
     }
 
-    // Build prompt: step prompt + transition message
+    // Build prompt: step prompt + transition message.
+    // When resuming, skip the original prompt — the conversation already has it.
     const parts: string[] = [];
-    if (ctx.prompt) parts.push(ctx.prompt);
+    if (!resuming && ctx.prompt) parts.push(ctx.prompt);
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
     const fullPrompt = parts.join("\n\n");
 
@@ -229,6 +244,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           outputs,
           exitCode,
           error: success ? undefined : stderr.trim() || `Exit code ${exitCode}`,
+          sessionId,
         });
       });
 
@@ -241,6 +257,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           success: false,
           outputs: {},
           error: err.message,
+          sessionId,
         });
       });
     });

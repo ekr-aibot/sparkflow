@@ -439,7 +439,10 @@ export class WorkflowEngine {
       }
     }
 
-    // Build runtime context
+    // Build runtime context. If this is a retry of a claude-code step with
+    // a captured session id, resume that conversation so the agent keeps its
+    // prior reasoning and tool history.
+    const resuming = runtime.type === "claude-code" && status.retryCount > 0 && !!status.sessionId;
     const ctx: RuntimeContext = {
       stepId,
       step,
@@ -453,7 +456,12 @@ export class WorkflowEngine {
       ipcSocketPath,
       verbose: this.verbose,
       logger: this.logger,
+      sessionId: status.sessionId,
+      resume: resuming,
     };
+    if (resuming) {
+      this.logger.info(`[${stepId}] resuming session ${status.sessionId}`);
+    }
 
     // Get adapter
     const adapter = this.adapters.get(runtime.type);
@@ -468,9 +476,17 @@ export class WorkflowEngine {
     try {
       const result = await adapter.run(ctx);
 
+      // Remember the session id whether the step succeeded or failed —
+      // recovery-retry needs it on failure, and future on_failure loops
+      // can reuse it too.
+      if (result.sessionId) {
+        status.sessionId = result.sessionId;
+      }
+
       if (result.success) {
         status.state = "succeeded";
         status.outputs = result.outputs;
+        status.lastError = undefined;
         this.stepOutputs.set(stepId, result.outputs);
 
         // Cleanup isolated worktree on success
@@ -482,16 +498,18 @@ export class WorkflowEngine {
         this.onStepComplete(stepId);
       } else {
         status.state = "failed";
+        status.lastError = result.error;
         this.logger.error(
           `[${stepId}] failed${result.error ? `: ${result.error}` : ""}`
         );
-        this.onStepFailure(stepId);
+        await this.onStepFailure(stepId);
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       status.state = "failed";
+      status.lastError = errMsg;
       this.logger.error(`[${stepId}] error: ${errMsg}`);
-      this.onStepFailure(stepId);
+      await this.onStepFailure(stepId);
     } finally {
       // Clean up IPC server after step completes
       const ipc = this.ipcServers.get(stepId);
@@ -519,17 +537,67 @@ export class WorkflowEngine {
     this.checkWaitingJoins();
   }
 
-  private onStepFailure(stepId: string): void {
+  private async onStepFailure(stepId: string): Promise<void> {
     const step = this.workflow.steps[stepId];
 
     if (step.on_failure && step.on_failure.length > 0) {
       for (const transition of step.on_failure) {
         this.triggerStep(transition.step, transition.message);
       }
-    } else {
-      // No on_failure transitions → workflow fails
+      return;
+    }
+
+    // No declared recovery. Pause-and-ask only if the step (or workflow
+    // default) opts in via ask_on_failure, and we're running under the
+    // dashboard (status-json). Otherwise abort like before — unattended
+    // runs must still fail fast.
+    const askOnFailure = step.ask_on_failure ?? this.workflow.defaults?.ask_on_failure ?? false;
+    if (!askOnFailure || !this.statusJson) {
       this.aborted = true;
       this.abortError = `Step "${stepId}" failed with no on_failure transition`;
+      return;
+    }
+
+    const status = this.stepStatuses.get(stepId)!;
+    const requestId = randomBytes(8).toString("hex");
+    const event = {
+      type: "job_failed",
+      step: stepId,
+      error: status.lastError ?? "step failed",
+      request_id: requestId,
+    };
+    process.stderr.write(JSON.stringify(event) + "\n");
+
+    const answer = await new Promise<string>((resolve) => {
+      this.pendingAnswers.set(requestId, resolve);
+    });
+
+    let decision: { action?: string; message?: string };
+    try {
+      decision = JSON.parse(answer);
+    } catch {
+      decision = { action: "abort" };
+    }
+
+    const action = decision.action ?? "abort";
+    const message = decision.message;
+
+    if (action === "retry") {
+      // Reset the step so triggerStep will re-run it. retryCount is bumped
+      // inside triggerStep because state !== "pending" | "waiting".
+      status.state = "failed";
+      status.outputs = {};
+      this.triggerStep(stepId, message);
+    } else if (action === "skip") {
+      status.state = "succeeded";
+      status.outputs = {};
+      status.lastError = undefined;
+      this.stepOutputs.set(stepId, {});
+      this.logger.info(`[${stepId}] skipped by user`);
+      this.onStepComplete(stepId);
+    } else {
+      this.aborted = true;
+      this.abortError = `Step "${stepId}" failed; user aborted`;
     }
   }
 

@@ -102,6 +102,33 @@ server.tool(
   }
 );
 
+server.tool(
+  "answer_job_recovery",
+  "Resolve a sparkflow job that is paused in 'failed_waiting' state after a step failed. Action 'retry' re-runs the failed step (for claude-code, the agent's session resumes with the correction message). Action 'skip' marks the step succeeded and continues. Action 'abort' fails the workflow.",
+  {
+    job_id: z.string().describe("The job ID shown in the status pane"),
+    action: z.enum(["retry", "skip", "abort"]).describe("What to do with the failed step"),
+    message: z.string().optional().describe("Correction or guidance message; required for retry, ignored for skip/abort"),
+  },
+  async ({ job_id, action, message }) => {
+    const msg: IpcMessage = {
+      type: "answer_recovery",
+      id: randomBytes(8).toString("hex"),
+      payload: { jobId: job_id, action, message },
+    };
+    const response = await ipc.request(msg);
+    if (response.type === "error") {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${response.payload.error}` }],
+        isError: true,
+      };
+    }
+    return {
+      content: [{ type: "text" as const, text: `Recovery ${action} sent to job ${job_id}.` }],
+    };
+  }
+);
+
 // --- MCP Prompts (for commands that need live IPC data) ---
 // sf-plan and sf-dispatch are injected as Claude Code slash commands
 // in .claude/commands/ by the sparkflow entry point.
@@ -166,6 +193,54 @@ server.prompt(
     }).join("\n");
     return {
       messages: [{ role: "user" as const, content: { type: "text" as const, text: `Current sparkflow jobs:\n${summary}\n\nUse get_job_detail tool to see full output. Blocked jobs are shown in the status pane for the user to handle directly.` } }],
+    };
+  }
+);
+
+server.prompt(
+  "sf-recover",
+  "Recover a sparkflow job whose step failed and is awaiting user input",
+  { job_id: z.string().describe("The failed job ID shown in the status pane") },
+  async ({ job_id }) => {
+    const msg: IpcMessage = {
+      type: "get_job_detail",
+      id: randomBytes(8).toString("hex"),
+      payload: { jobId: job_id },
+    };
+    const response = await ipc.request(msg);
+    if (response.type === "error") {
+      return {
+        messages: [{ role: "user" as const, content: { type: "text" as const, text: `Error: ${response.payload.error}` } }],
+      };
+    }
+    const info = response.payload.info as Record<string, unknown>;
+    const output = response.payload.output as string[];
+
+    const state = (info.state as string) ?? "unknown";
+    const failedStep = (info.failedStep as string) ?? (info.currentStep as string) ?? "unknown";
+    const failedError = (info.failedError as string) ?? "";
+    const tail = output.slice(-80).join("\n");
+
+    const header = `Job ${info.id} is in state ${state.toUpperCase()} — step \`${failedStep}\` failed.`;
+    const errLine = failedError ? `\n\nError: ${failedError}` : "";
+
+    const instructions = state === "failed_waiting"
+      ? `The workflow is paused waiting for your decision. Work with the user to decide the fix, then call the \`answer_job_recovery\` tool with:
+  - job_id: ${info.id}
+  - action: one of "retry" | "skip" | "abort"
+  - message: (for retry) a specific correction/guidance string that will be delivered to the failed step. For a claude-code step, the agent's conversation resumes with this message as the next turn, so phrase it as a direct instruction to the agent.
+
+Ask the user what went wrong and how to fix it before calling the tool. Do NOT call the tool until you have a concrete correction.`
+      : `This job is not currently waiting for recovery (state: ${state}). You can still use get_job_detail to inspect it.`;
+
+    return {
+      messages: [{
+        role: "user" as const,
+        content: {
+          type: "text" as const,
+          text: `${header}${errLine}\n\nRecent output:\n\`\`\`\n${tail}\n\`\`\`\n\n${instructions}`,
+        },
+      }],
     };
   }
 );

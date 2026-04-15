@@ -16,6 +16,10 @@ export interface RuntimeContext {
   verbose?: boolean;
   /** Logger for verbose output, prefixed with step ID. */
   logger?: import("../engine/types.js").Logger;
+  /** Conversation session id — set it on a fresh run, or resume an existing one. */
+  sessionId?: string;
+  /** When true and sessionId is set, resume that session instead of starting fresh. */
+  resume?: boolean;
 }
 
 export interface RuntimeResult {
@@ -23,6 +27,8 @@ export interface RuntimeResult {
   outputs: Record<string, unknown>;
   exitCode?: number;
   error?: string;
+  /** For claude-code: the session id actually used (so engine can persist it for retries). */
+  sessionId?: string;
 }
 
 export interface RuntimeAdapter {

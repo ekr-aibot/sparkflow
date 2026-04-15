@@ -6,6 +6,10 @@ export interface StepStatus {
   outputs: Record<string, unknown>;
   completedJoins: Set<string>;
   pendingMessages: string[];
+  /** Claude conversation session id captured from first run; used by recovery-retry to resume. */
+  sessionId?: string;
+  /** Last error message, preserved for recovery prompts. */
+  lastError?: string;
 }
 
 export interface EngineOptions {

@@ -5,6 +5,7 @@
  * Hosts the IPC server and job manager, renders status to stdout.
  */
 
+import { unlinkSync } from "node:fs";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
 import { JobManager } from "./job-manager.js";
 import type { JobInfo } from "./types.js";
@@ -119,10 +120,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const jobManager = new JobManager();
+  const jobManager = new JobManager(cwd);
   if (tmuxSession) {
     jobManager.setTmuxSession(tmuxSession);
   }
+
+  // Rehydrate any jobs that were running before a reload.
+  jobManager.rehydrate();
+
+  // The previous daemon's socket file may still exist — remove it so listen() succeeds.
+  try { unlinkSync(socketPath); } catch { /* not present */ }
+
   const ipcServer = new IpcServer(socketPath);
 
   ipcServer.onRequest(async (msg) => {
@@ -139,16 +147,27 @@ async function main(): Promise<void> {
     renderJobs(jobManager.getJobs());
   }, 1000);
 
-  // Initial render
-  renderJobs([]);
+  // Initial render (shows rehydrated jobs immediately)
+  renderJobs(jobManager.getJobs());
 
-  // Cleanup on exit
-  const cleanup = () => {
-    jobManager.killAll();
-    ipcServer.close().catch(() => {});
+  // SIGTERM = supervisor requesting reload: detach from jobs, let them keep running.
+  // SIGINT = user quitting: kill everything and clear state.
+  let exiting = false;
+  const onReload = () => {
+    if (exiting) return;
+    exiting = true;
+    jobManager.release();
+    ipcServer.close().finally(() => process.exit(0));
   };
-  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
-  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+  const onQuit = () => {
+    if (exiting) return;
+    exiting = true;
+    jobManager.killAll();
+    ipcServer.close().finally(() => process.exit(0));
+  };
+  process.on("SIGTERM", onReload);
+  process.on("SIGHUP", onReload);
+  process.on("SIGINT", onQuit);
 }
 
 main().catch((err) => {

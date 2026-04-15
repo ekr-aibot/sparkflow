@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { IpcServer, IpcClient, type IpcMessage } from "../../src/mcp/ipc.js";
 import { JobManager } from "../../src/tui/job-manager.js";
 
@@ -79,7 +82,7 @@ describe("App IPC handler", () => {
   });
 
   async function setup(): Promise<void> {
-    jobManager = new JobManager();
+    jobManager = new JobManager(mkdtempSync(join(tmpdir(), "sparkflow-appipc-")));
     server = new IpcServer();
     server.onRequest(createIpcHandler(jobManager));
     await server.listen();

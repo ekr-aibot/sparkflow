@@ -83,7 +83,7 @@ export class JobManager {
       };
       this.jobs.set(info.id, managed);
       tailer.start();
-      this.openTmuxWindow(info.id, info.workflowPath, p.logPath);
+      this.openTmuxWindow(info.id, info.workflowPath, p.logPath, info.slug);
       this.schedulePersist(info.id);
     }
 
@@ -108,7 +108,7 @@ export class JobManager {
     }
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string }): string {
     const id = randomBytes(6).toString("hex");
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
@@ -145,6 +145,7 @@ export class JobManager {
       id,
       workflowPath,
       workflowName: workflowPath,
+      slug: opts?.slug,
       state: "running",
       summary: "starting…",
       startTime: Date.now(),
@@ -167,7 +168,7 @@ export class JobManager {
 
     this.jobs.set(id, managed);
     tailer.start();
-    this.openTmuxWindow(id, workflowPath, logPath);
+    this.openTmuxWindow(id, workflowPath, logPath, opts?.slug);
 
     child.on("close", (code) => {
       const job = this.jobs.get(id);
@@ -408,9 +409,11 @@ export class JobManager {
     }
   }
 
-  private openTmuxWindow(jobId: string, workflowPath: string, logPath: string): void {
+  private openTmuxWindow(jobId: string, workflowPath: string, logPath: string, slug?: string): void {
     if (!this.tmuxSession) return;
-    const name = basename(workflowPath, ".json").slice(0, 20);
+    const workflowLabel = basename(workflowPath, ".json").slice(0, 20);
+    const slugLabel = slug ? slug.replace(/\s+/g, "-").slice(0, 20) : "";
+    const name = slugLabel ? `${workflowLabel}-${slugLabel}` : workflowLabel;
     const windowName = `${name}:${jobId.slice(0, 6)}`;
     try {
       execFileSync("tmux", [

@@ -134,30 +134,37 @@ export class PrCreatorAdapter implements RuntimeAdapter {
     }
 
     const model = runtime.model ?? DEFAULT_MODEL;
+    const pushRemote = ctx.git?.push_remote ?? "origin";
+    const targetRepo = ctx.git?.pr_repo;
+    const repoArgs = targetRepo ? ["--repo", targetRepo] : [];
 
-    // Step 1: Get base branch
+    // Step 1: Get base branch (from configured target repo, or fall back).
     let baseBranch: string;
-    try {
-      const repoInfo = ghJson<RepoView>(
-        ["repo", "view", "--json", "defaultBranchRef"],
-        ctx.cwd,
-      );
-      baseBranch = repoInfo.defaultBranchRef.name;
-    } catch {
-      baseBranch = "main";
+    if (ctx.git?.base) {
+      baseBranch = ctx.git.base;
+    } else {
+      try {
+        const repoInfo = ghJson<RepoView>(
+          ["repo", "view", ...repoArgs, "--json", "defaultBranchRef"],
+          ctx.cwd,
+        );
+        baseBranch = repoInfo.defaultBranchRef.name;
+      } catch {
+        baseBranch = "main";
+      }
     }
 
-    // Step 2: Push current branch to remote.
+    // Step 2: Push current branch to the configured remote.
     // Each workflow run uses an isolated worktree with its own branch,
     // so the branch is already unique — just push it.
     // If the developer already pushed, warn but continue.
     try {
-      execFileSync("git", ["push", "-u", "origin", "HEAD"], {
+      execFileSync("git", ["push", "-u", pushRemote, "HEAD"], {
         cwd: ctx.cwd,
         stdio: "pipe",
         timeout: 60_000,
       });
-      ctx.logger?.info(`[${ctx.stepId}] pushed branch to remote`);
+      ctx.logger?.info(`[${ctx.stepId}] pushed branch to ${pushRemote}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       // If the remote already has this branch with the same commits, that's fine
@@ -224,10 +231,18 @@ export class PrCreatorAdapter implements RuntimeAdapter {
 
     // Step 5: Create PR (or adopt an existing one for this branch)
     try {
-      gh(
-        ["pr", "create", "--title", title, "--body", summary],
-        ctx.cwd,
-      );
+      const createArgs = [
+        "pr",
+        "create",
+        ...repoArgs,
+        "--base",
+        baseBranch,
+        "--title",
+        title,
+        "--body",
+        summary,
+      ];
+      gh(createArgs, ctx.cwd);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const alreadyExists =
@@ -247,7 +262,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
     // Step 6: Get PR info
     try {
       const pr = ghJson<PrView>(
-        ["pr", "view", "--json", "number,url"],
+        ["pr", "view", ...repoArgs, "--json", "number,url"],
         ctx.cwd,
       );
       ctx.logger?.info(`[${ctx.stepId}] PR ready: ${pr.url}`);

@@ -41,6 +41,14 @@ function ghJson<T>(args: string[], cwd: string): T {
   return JSON.parse(raw) as T;
 }
 
+function parseOwnerRepo(spec: string): { owner: string; repo: string } {
+  const parts = spec.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(`Invalid pr_repo "${spec}" — expected OWNER/NAME`);
+  }
+  return { owner: parts[0], repo: parts[1] };
+}
+
 function getOwnerRepo(cwd: string): { owner: string; repo: string } {
   const url = execFileSync("git", ["remote", "get-url", "origin"], {
     cwd,
@@ -55,17 +63,17 @@ function getOwnerRepo(cwd: string): { owner: string; repo: string } {
   return { owner: match[1], repo: match[2] };
 }
 
-function getPrInfo(cwd: string): PrInfo {
+function getPrInfo(cwd: string, repoArgs: string[]): PrInfo {
   return ghJson<PrInfo>(
-    ["pr", "view", "--json", "number,url,state,mergedAt"],
+    ["pr", "view", ...repoArgs, "--json", "number,url,state,mergedAt"],
     cwd,
   );
 }
 
-function getChecks(num: number, cwd: string): CheckResult[] {
+function getChecks(num: number, cwd: string, repoArgs: string[]): CheckResult[] {
   try {
     return ghJson<CheckResult[]>(
-      ["pr", "checks", String(num), "--json", "name,state,conclusion"],
+      ["pr", "checks", String(num), ...repoArgs, "--json", "name,state,conclusion"],
       cwd,
     );
   } catch {
@@ -124,11 +132,13 @@ export class PrWatcherAdapter implements RuntimeAdapter {
     const pollInterval = (runtime.poll_interval ?? DEFAULT_POLL_INTERVAL) * 1000;
     const timeoutMs = ctx.timeout ? ctx.timeout * 1000 : undefined;
     const startTime = Date.now();
+    const targetRepo = ctx.git?.pr_repo;
+    const repoArgs = targetRepo ? ["--repo", targetRepo] : [];
 
     // Discover PR from current branch
     let pr: PrInfo;
     try {
-      pr = getPrInfo(ctx.cwd);
+      pr = getPrInfo(ctx.cwd, repoArgs);
     } catch {
       return {
         success: false,
@@ -148,10 +158,12 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       };
     }
 
-    // Snapshot initial state
-    const { owner, repo } = getOwnerRepo(ctx.cwd);
+    // Snapshot initial state. Prefer the configured pr_repo over parsing origin.
+    const { owner, repo } = targetRepo
+      ? parseOwnerRepo(targetRepo)
+      : getOwnerRepo(ctx.cwd);
 
-    const initialChecks = getChecks(pr.number, ctx.cwd);
+    const initialChecks = getChecks(pr.number, ctx.cwd, repoArgs);
     const initialFailedChecks = new Set(
       initialChecks
         .filter((c) => c.conclusion === "failure" || c.conclusion === "FAILURE")
@@ -184,7 +196,7 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       let current: PrInfo;
       try {
         current = ghJson<PrInfo>(
-          ["pr", "view", String(pr.number), "--json", "state,mergedAt,url"],
+          ["pr", "view", String(pr.number), ...repoArgs, "--json", "state,mergedAt,url"],
           ctx.cwd,
         );
       } catch (err) {
@@ -211,7 +223,7 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       }
 
       // Check for new CI failures
-      const checks = getChecks(pr.number, ctx.cwd);
+      const checks = getChecks(pr.number, ctx.cwd, repoArgs);
       const newFailures = checks.filter(
         (c) =>
           (c.conclusion === "failure" || c.conclusion === "FAILURE") &&

@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import type { SparkflowWorkflow, Step, Runtime } from "../schema/types.js";
+import type { ProjectConfig } from "../config/project-config.js";
 import type { RuntimeAdapter } from "../runtime/types.js";
 import type { RuntimeContext } from "../runtime/types.js";
 import { ShellAdapter } from "../runtime/shell.js";
@@ -82,6 +83,7 @@ export class UserInteractionManager {
 
 export class WorkflowEngine {
   private workflow: SparkflowWorkflow;
+  private config?: ProjectConfig;
   private adapters: Map<string, RuntimeAdapter>;
   private logger: Logger;
   private cwd: string;
@@ -109,6 +111,7 @@ export class WorkflowEngine {
     adapters?: Map<string, RuntimeAdapter>
   ) {
     this.workflow = workflow;
+    this.config = options.config;
     this.logger = options.logger ?? new ConsoleLogger();
     this.cwd = options.cwd ?? process.cwd();
     this.workflowDir = options.workflowDir ?? this.cwd;
@@ -450,6 +453,7 @@ export class WorkflowEngine {
       transitionMessage,
       cwd,
       env,
+      git: this.config?.git,
       interactive: step.interactive,
       timeout: step.timeout ?? this.workflow.defaults?.timeout,
       ipcSocketPath,

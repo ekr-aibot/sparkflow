@@ -12,11 +12,15 @@ export interface StepStatus {
   lastError?: string;
 }
 
+import type { ProjectConfig } from "../config/project-config.js";
+
 export interface EngineOptions {
   cwd?: string;
   workflowDir?: string;
   dryRun?: boolean;
   logger?: Logger;
+  /** Project config loaded from .sparkflow/config.json. */
+  config?: ProjectConfig;
   /** Project plan prepended to every step's prompt. */
   plan?: string;
   /** Stream sub-agent stdout/stderr to the console in real time. */

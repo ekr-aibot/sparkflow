@@ -162,3 +162,4 @@ export interface SparkflowWorkflow {
   /** Steps in the workflow, keyed by unique step ID. */
   steps: Record<string, Step>;
 }
+

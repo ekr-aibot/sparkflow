@@ -1,8 +1,18 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve, join, isAbsolute } from "node:path";
 
+export interface GitConfig {
+  /** Git remote name pr-creator pushes the branch to. Defaults to "origin". */
+  push_remote?: string;
+  /** GitHub repo (OWNER/NAME) that pr-creator opens the PR against and pr-watcher polls. Defaults to gh's auto-detection. */
+  pr_repo?: string;
+  /** Base branch for the PR. Defaults to the target repo's default branch. */
+  base?: string;
+}
+
 export interface ProjectConfig {
   defaultWorkflow?: string;
+  git?: GitConfig;
 }
 
 const CONFIG_PATH = ".sparkflow/config.json";
@@ -33,6 +43,22 @@ export function loadProjectConfig(cwd: string): ProjectConfig {
       throw new Error(`${CONFIG_PATH}: "defaultWorkflow" must be a string`);
     }
     config.defaultWorkflow = obj.defaultWorkflow;
+  }
+  if (obj.git !== undefined) {
+    if (typeof obj.git !== "object" || obj.git === null || Array.isArray(obj.git)) {
+      throw new Error(`${CONFIG_PATH}: "git" must be an object`);
+    }
+    const gitObj = obj.git as Record<string, unknown>;
+    const git: GitConfig = {};
+    for (const key of ["push_remote", "pr_repo", "base"] as const) {
+      const value = gitObj[key];
+      if (value === undefined) continue;
+      if (typeof value !== "string") {
+        throw new Error(`${CONFIG_PATH}: "git.${key}" must be a string`);
+      }
+      git[key] = value;
+    }
+    config.git = git;
   }
   return config;
 }

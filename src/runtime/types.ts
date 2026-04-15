@@ -1,9 +1,12 @@
 import type { Runtime, Step } from "../schema/types.js";
+import type { GitConfig } from "../config/project-config.js";
 
 export interface RuntimeContext {
   stepId: string;
   step: Step;
   runtime: Runtime;
+  /** Project-level git/GitHub config (from .sparkflow/config.json). Used by pr-creator and pr-watcher. */
+  git?: GitConfig;
   prompt?: string;
   transitionMessage?: string;
   cwd: string;

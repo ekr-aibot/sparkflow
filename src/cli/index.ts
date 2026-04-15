@@ -5,7 +5,7 @@ import { resolve, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { validate } from "../schema/validate.js";
 import { WorkflowEngine } from "../engine/engine.js";
-import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
+import { loadProjectConfig, resolveWorkflowPath, type ProjectConfig } from "../config/project-config.js";
 import type { SparkflowWorkflow } from "../schema/types.js";
 import type { Logger } from "../engine/types.js";
 
@@ -96,10 +96,11 @@ async function main(): Promise<void> {
   // Treat the second positional arg as the workflow name/path if it's not a flag.
   const positional = args[1] && !args[1].startsWith("--") ? args[1] : undefined;
 
+  let projectConfig: ProjectConfig;
   let resolvedWorkflowPath: string;
   try {
-    const config = loadProjectConfig(effectiveCwd);
-    resolvedWorkflowPath = resolveWorkflowPath(positional, effectiveCwd, config);
+    projectConfig = loadProjectConfig(effectiveCwd);
+    resolvedWorkflowPath = resolveWorkflowPath(positional, effectiveCwd, projectConfig);
   } catch (err) {
     console.error(`Error: ${(err as Error).message}`);
     process.exit(1);
@@ -163,6 +164,7 @@ async function main(): Promise<void> {
       verbose,
       logger,
       statusJson,
+      config: projectConfig,
     });
 
     if (statusJson) {

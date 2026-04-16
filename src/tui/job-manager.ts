@@ -551,6 +551,44 @@ export class JobManager {
   }
 
   /**
+   * Drop a terminal (succeeded/failed) job from the dashboard and persisted store.
+   * Stops its log tailer and clears any pending persist timer.
+   */
+  removeJob(jobId: string): { ok: boolean; error?: string } {
+    const job = this.jobs.get(jobId);
+    if (!job) return { ok: false, error: `Job not found: ${jobId}` };
+    if (job.info.state !== "succeeded" && job.info.state !== "failed") {
+      return { ok: false, error: `Cannot remove job in state ${job.info.state} — kill it first` };
+    }
+
+    job.tailer.stop();
+    const timer = this.persistTimers.get(jobId);
+    if (timer) {
+      clearTimeout(timer);
+      this.persistTimers.delete(jobId);
+    }
+    try { this.store.removeJob(jobId); } catch { /* non-fatal */ }
+    this.jobs.delete(jobId);
+    this.fireUpdate();
+    return { ok: true };
+  }
+
+  /**
+   * Drop all terminal jobs from the dashboard. Leaves running / blocked /
+   * failed_waiting jobs alone. Returns how many were removed.
+   */
+  clearTerminalJobs(): number {
+    const ids: string[] = [];
+    for (const [id, job] of this.jobs) {
+      if (job.info.state === "succeeded" || job.info.state === "failed") {
+        ids.push(id);
+      }
+    }
+    for (const id of ids) this.removeJob(id);
+    return ids.length;
+  }
+
+  /**
    * Kill all jobs and remove their persisted state. Used on true quit (SIGINT).
    */
   killAll(): void {

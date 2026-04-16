@@ -131,6 +131,16 @@ async function handleIpcRequest(msg: IpcMessage, jobManager: JobManager, cwd: st
       if (!result.ok) return errorResponse(result.error ?? "restart failed");
       return response({ oldJobId: jobId, newJobId: result.newJobId });
     }
+    case "remove_job": {
+      const { jobId } = msg.payload as { jobId: string };
+      const result = jobManager.removeJob(jobId);
+      if (!result.ok) return errorResponse(result.error ?? "remove failed");
+      return response({ jobId });
+    }
+    case "clear_terminal_jobs": {
+      const removed = jobManager.clearTerminalJobs();
+      return response({ removed });
+    }
     default:
       return errorResponse(`Unknown message type: ${msg.type}`);
   }

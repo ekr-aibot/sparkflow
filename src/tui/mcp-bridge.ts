@@ -182,6 +182,55 @@ server.tool(
   }
 );
 
+server.tool(
+  "remove_job",
+  "Drop a terminal (succeeded / failed) job from the dashboard and its persisted state. Fails if the job is still live (running, blocked, failed_waiting) — kill it first. Logs on disk are not deleted; only the dashboard entry is cleared.",
+  {
+    job_id: z.string().describe("The job ID to remove"),
+  },
+  async ({ job_id }) => {
+    const msg: IpcMessage = {
+      type: "remove_job",
+      id: randomBytes(8).toString("hex"),
+      payload: { jobId: job_id },
+    };
+    const response = await ipc.request(msg);
+    if (response.type === "error") {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${response.payload.error}` }],
+        isError: true,
+      };
+    }
+    return {
+      content: [{ type: "text" as const, text: `Removed job ${job_id} from the dashboard.` }],
+    };
+  }
+);
+
+server.tool(
+  "clear_terminal_jobs",
+  "Drop every succeeded / failed job from the dashboard in one call. Leaves running, blocked, and failed_waiting jobs alone. Returns how many entries were removed.",
+  {},
+  async () => {
+    const msg: IpcMessage = {
+      type: "clear_terminal_jobs",
+      id: randomBytes(8).toString("hex"),
+      payload: {},
+    };
+    const response = await ipc.request(msg);
+    if (response.type === "error") {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${response.payload.error}` }],
+        isError: true,
+      };
+    }
+    const removed = response.payload.removed as number;
+    return {
+      content: [{ type: "text" as const, text: `Cleared ${removed} terminal job${removed === 1 ? "" : "s"} from the dashboard.` }],
+    };
+  }
+);
+
 // --- MCP Prompts (for commands that need live IPC data) ---
 // sf-plan and sf-dispatch are injected as Claude Code slash commands
 // in .claude/commands/ by the sparkflow entry point.

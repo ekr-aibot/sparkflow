@@ -23,7 +23,9 @@ export type DashboardRequest =
   | { type: "answer_question"; id: string; payload: { jobId: string; answer: string } }
   | { type: "answer_recovery"; id: string; payload: { jobId: string; action: "retry" | "skip" | "abort"; message?: string } }
   | { type: "kill_job"; id: string; payload: { jobId: string } }
-  | { type: "restart_job"; id: string; payload: { jobId: string; mode?: "fresh" | "resume" } };
+  | { type: "restart_job"; id: string; payload: { jobId: string; mode?: "fresh" | "resume" } }
+  | { type: "remove_job"; id: string; payload: { jobId: string } }
+  | { type: "clear_terminal_jobs"; id: string; payload: Record<string, never> };
 
 export type DashboardResponse = {
   type: string;

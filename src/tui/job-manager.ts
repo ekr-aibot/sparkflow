@@ -22,6 +22,10 @@ interface ManagedJob {
   tailer: LogTailer;
   outputBuffer: string[];
   pendingRequestId?: string;
+  originalPlan?: string;
+  originalPlanText?: string;
+  originalCwd?: string;
+  killedByUser?: boolean;
 }
 
 const OUTPUT_BUFFER_MAX = 2000;
@@ -164,6 +168,9 @@ export class JobManager {
       logPath,
       tailer,
       outputBuffer: [],
+      originalPlan: opts?.plan,
+      originalPlanText: opts?.planText,
+      originalCwd: opts?.cwd,
     };
 
     this.jobs.set(id, managed);
@@ -176,7 +183,9 @@ export class JobManager {
       job.info.endTime = Date.now();
       if (job.info.state === "running" || job.info.state === "blocked") {
         job.info.state = code === 0 ? "succeeded" : "failed";
-        job.info.summary = code === 0 ? "completed" : `exit code ${code}`;
+        job.info.summary = job.killedByUser
+          ? "killed by user"
+          : code === 0 ? "completed" : `exit code ${code}`;
       }
       this.schedulePersist(id);
       this.fireUpdate();
@@ -450,6 +459,95 @@ export class JobManager {
       clearInterval(this.rehydratedPingTimer);
       this.rehydratedPingTimer = null;
     }
+  }
+
+  killJob(jobId: string): { ok: boolean; error?: string } {
+    const job = this.jobs.get(jobId);
+    if (!job) return { ok: false, error: `Job not found: ${jobId}` };
+
+    if (job.info.state === "succeeded" || job.info.state === "failed") {
+      return { ok: true };
+    }
+
+    job.killedByUser = true;
+    job.info.summary = "killed by user";
+    this.fireUpdate();
+    try {
+      if (job.child) {
+        job.child.kill("SIGTERM");
+      } else if (job.pid > 0) {
+        process.kill(job.pid, "SIGTERM");
+      }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+    return { ok: true };
+  }
+
+  private killJobAndWait(jobId: string, timeoutMs = 5000): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (!job || !job.child) return Promise.resolve();
+    if (job.info.state === "succeeded" || job.info.state === "failed") {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const onClose = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      job.child!.once("close", onClose);
+
+      job.killedByUser = true;
+      job.info.summary = "killed by user";
+      this.fireUpdate();
+      try {
+        job.child!.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+
+      setTimeout(() => {
+        if (settled) return;
+        try {
+          job.child?.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, timeoutMs);
+    });
+  }
+
+  async restartJob(
+    jobId: string,
+    mode: "fresh" | "resume" = "fresh",
+  ): Promise<{ ok: boolean; newJobId?: string; error?: string }> {
+    if (mode === "resume") {
+      return { ok: false, error: "resume mode not yet implemented — use mode=fresh" };
+    }
+
+    const job = this.jobs.get(jobId);
+    if (!job) return { ok: false, error: `Job not found: ${jobId}` };
+    if (!job.child) {
+      return {
+        ok: false,
+        error: "cannot restart a rehydrated job — original plan text was not persisted; re-dispatch manually",
+      };
+    }
+
+    if (job.info.state !== "succeeded" && job.info.state !== "failed") {
+      await this.killJobAndWait(jobId);
+    }
+
+    const newJobId = this.startJob(job.info.workflowPath, {
+      cwd: job.originalCwd,
+      plan: job.originalPlan,
+      planText: job.originalPlanText,
+      slug: job.info.slug,
+    });
+    return { ok: true, newJobId };
   }
 
   /**

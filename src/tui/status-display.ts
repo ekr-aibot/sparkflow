@@ -66,7 +66,7 @@ function renderJobs(jobs: JobInfo[]): void {
   process.stdout.write(out);
 }
 
-function handleIpcRequest(msg: IpcMessage, jobManager: JobManager, cwd: string): IpcMessage {
+async function handleIpcRequest(msg: IpcMessage, jobManager: JobManager, cwd: string): Promise<IpcMessage> {
   const response = (payload: Record<string, unknown>): IpcMessage => ({
     type: "response",
     id: msg.id,
@@ -118,6 +118,18 @@ function handleIpcRequest(msg: IpcMessage, jobManager: JobManager, cwd: string):
       const ok = jobManager.answerRecovery(jobId, action, message);
       if (!ok) return errorResponse(`Job ${jobId} is not waiting for recovery`);
       return response({});
+    }
+    case "kill_job": {
+      const { jobId } = msg.payload as { jobId: string };
+      const result = jobManager.killJob(jobId);
+      if (!result.ok) return errorResponse(result.error ?? "kill failed");
+      return response({ jobId });
+    }
+    case "restart_job": {
+      const { jobId, mode } = msg.payload as { jobId: string; mode?: "fresh" | "resume" };
+      const result = await jobManager.restartJob(jobId, mode ?? "fresh");
+      if (!result.ok) return errorResponse(result.error ?? "restart failed");
+      return response({ oldJobId: jobId, newJobId: result.newJobId });
     }
     default:
       return errorResponse(`Unknown message type: ${msg.type}`);

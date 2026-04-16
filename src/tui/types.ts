@@ -21,7 +21,9 @@ export type DashboardRequest =
   | { type: "list_jobs"; id: string; payload: Record<string, never> }
   | { type: "get_job_detail"; id: string; payload: { jobId: string } }
   | { type: "answer_question"; id: string; payload: { jobId: string; answer: string } }
-  | { type: "answer_recovery"; id: string; payload: { jobId: string; action: "retry" | "skip" | "abort"; message?: string } };
+  | { type: "answer_recovery"; id: string; payload: { jobId: string; action: "retry" | "skip" | "abort"; message?: string } }
+  | { type: "kill_job"; id: string; payload: { jobId: string } }
+  | { type: "restart_job"; id: string; payload: { jobId: string; mode?: "fresh" | "resume" } };
 
 export type DashboardResponse = {
   type: string;

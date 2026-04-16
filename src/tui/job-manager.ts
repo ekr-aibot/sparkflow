@@ -21,6 +21,10 @@ interface ManagedJob {
   pendingRequestId?: string;
   logPath?: string;
   logStream?: WriteStream;
+  originalPlan?: string;
+  originalPlanText?: string;
+  originalCwd?: string;
+  killedByUser?: boolean;
 }
 
 export class JobManager {
@@ -80,6 +84,9 @@ export class JobManager {
       outputBuffer: [],
       logPath,
       logStream,
+      originalPlan: opts?.plan,
+      originalPlanText: opts?.planText,
+      originalCwd: opts?.cwd,
     };
 
     this.jobs.set(id, managed);
@@ -125,7 +132,9 @@ export class JobManager {
         job.info.endTime = Date.now();
         if (job.info.state === "running" || job.info.state === "blocked") {
           job.info.state = code === 0 ? "succeeded" : "failed";
-          job.info.summary = code === 0 ? "completed" : `exit code ${code}`;
+          job.info.summary = job.killedByUser
+            ? "killed by user"
+            : code === 0 ? "completed" : `exit code ${code}`;
         }
         endLogStream(job, `\n--- job ${id} ${job.info.state} ---\n`);
         this.fireUpdate();
@@ -273,6 +282,84 @@ export class JobManager {
     } catch {
       // tmux not available or session gone — non-fatal
     }
+  }
+
+  killJob(jobId: string): { ok: boolean; error?: string } {
+    const job = this.jobs.get(jobId);
+    if (!job) return { ok: false, error: `Job not found: ${jobId}` };
+
+    if (job.info.state === "succeeded" || job.info.state === "failed") {
+      return { ok: true };
+    }
+
+    job.killedByUser = true;
+    job.info.summary = "killed by user";
+    this.fireUpdate();
+    try {
+      job.process.kill("SIGTERM");
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+    return { ok: true };
+  }
+
+  private killJobAndWait(jobId: string, timeoutMs = 5000): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (!job) return Promise.resolve();
+    if (job.info.state === "succeeded" || job.info.state === "failed") {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const onClose = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      job.process.once("close", onClose);
+
+      job.killedByUser = true;
+      job.info.summary = "killed by user";
+      this.fireUpdate();
+      try {
+        job.process.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+
+      setTimeout(() => {
+        if (settled) return;
+        try {
+          job.process.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, timeoutMs);
+    });
+  }
+
+  async restartJob(
+    jobId: string,
+    mode: "fresh" | "resume" = "fresh",
+  ): Promise<{ ok: boolean; newJobId?: string; error?: string }> {
+    if (mode === "resume") {
+      return { ok: false, error: "resume mode not yet implemented — use mode=fresh" };
+    }
+
+    const job = this.jobs.get(jobId);
+    if (!job) return { ok: false, error: `Job not found: ${jobId}` };
+
+    if (job.info.state === "running" || job.info.state === "blocked") {
+      await this.killJobAndWait(jobId);
+    }
+
+    const newJobId = this.startJob(job.info.workflowPath, {
+      cwd: job.originalCwd,
+      plan: job.originalPlan,
+      planText: job.originalPlanText,
+    });
+    return { ok: true, newJobId };
   }
 
   killAll(): void {

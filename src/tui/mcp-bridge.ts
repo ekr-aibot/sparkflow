@@ -102,6 +102,58 @@ server.tool(
   }
 );
 
+server.tool(
+  "kill_job",
+  "Terminate a running sparkflow-run job (SIGTERM). The job transitions to FAILED with summary 'killed by user'. Idempotent: calling on an already-terminal job is a no-op. Worktrees and logs are preserved for inspection.",
+  {
+    job_id: z.string().describe("The job ID to kill (shown in status pane or list_jobs output)"),
+  },
+  async ({ job_id }) => {
+    const msg: IpcMessage = {
+      type: "kill_job",
+      id: randomBytes(8).toString("hex"),
+      payload: { jobId: job_id },
+    };
+    const response = await ipc.request(msg);
+    if (response.type === "error") {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${response.payload.error}` }],
+        isError: true,
+      };
+    }
+    return {
+      content: [{ type: "text" as const, text: `Killed job ${job_id}.` }],
+    };
+  }
+);
+
+server.tool(
+  "restart_job",
+  "Restart a sparkflow-run job. mode='fresh' (default) re-runs the workflow from step one with the original plan and cwd; if the job is still running it is killed first. mode='resume' is reserved for future checkpoint-based resume and currently returns an error. The old job's log/worktree are preserved; a new job id is returned.",
+  {
+    job_id: z.string().describe("The job ID to restart"),
+    mode: z.enum(["fresh", "resume"]).optional().describe("fresh (default) re-runs from scratch; resume is not yet implemented"),
+  },
+  async ({ job_id, mode }) => {
+    const msg: IpcMessage = {
+      type: "restart_job",
+      id: randomBytes(8).toString("hex"),
+      payload: { jobId: job_id, mode: mode ?? "fresh" },
+    };
+    const response = await ipc.request(msg);
+    if (response.type === "error") {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${response.payload.error}` }],
+        isError: true,
+      };
+    }
+    const newJobId = response.payload.newJobId as string;
+    return {
+      content: [{ type: "text" as const, text: `Restarted job ${job_id} as new job ${newJobId}.` }],
+    };
+  }
+);
+
 // --- MCP Prompts (for commands that need live IPC data) ---
 // sf-plan and sf-dispatch are injected as Claude Code slash commands
 // in .claude/commands/ by the sparkflow entry point.

@@ -2,6 +2,7 @@ import { createServer, connect, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 
 export interface IpcMessage {
   type: string;
@@ -104,7 +105,11 @@ export class IpcServer {
  * re-issues any in-flight requests. Callers' promises stay pending across
  * the reload rather than being rejected.
  */
-export class IpcClient {
+export interface IpcClientEvents {
+  reconnect: () => void;
+}
+
+export class IpcClient extends EventEmitter {
   private socket: Socket | null = null;
   private socketPath: string;
   private pendingRequests = new Map<
@@ -115,8 +120,10 @@ export class IpcClient {
   private closed = false;
   private reconnectDelay = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private hasConnectedOnce = false;
 
   constructor(socketPath: string) {
+    super();
     this.socketPath = socketPath;
   }
 
@@ -131,6 +138,12 @@ export class IpcClient {
         // Re-issue any requests that were in flight when the previous socket died.
         for (const [, pending] of this.pendingRequests) {
           try { sock.write(pending.payload); } catch { /* will retry on next reconnect */ }
+        }
+        const isReconnect = this.hasConnectedOnce;
+        this.hasConnectedOnce = true;
+        if (isReconnect) {
+          // Defer so listeners see a fully-connected client.
+          setImmediate(() => this.emit("reconnect"));
         }
         resolve();
       });

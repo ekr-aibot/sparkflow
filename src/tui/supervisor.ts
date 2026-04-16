@@ -9,8 +9,18 @@
  */
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, watch, type FSWatcher } from "node:fs";
-import { dirname, resolve } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  watch,
+  writeFileSync,
+  type FSWatcher,
+} from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,10 +30,115 @@ const STATUS_DISPLAY = resolve(__dirname, "status-display.js");
 // supervisor.js lives at <pkg>/dist/src/tui/; dist/ is two up, pkg root is three up.
 const DIST_DIR = resolve(__dirname, "..", "..");
 const PKG_ROOT = resolve(DIST_DIR, "..");
+const DOC_DIR = resolve(PKG_ROOT, "doc");
 const WATCH_DIR = DIST_DIR;
 const TSC_BIN = resolve(PKG_ROOT, "node_modules", ".bin", "tsc");
 const DEBOUNCE_MS = 200;
 const SHUTDOWN_GRACE_MS = 3000;
+
+type DocSnapshot = Map<string, string>;
+
+function readDocDir(): DocSnapshot {
+  const snapshot: DocSnapshot = new Map();
+  if (!existsSync(DOC_DIR)) return snapshot;
+  const walk = (abs: string) => {
+    let entries: string[];
+    try {
+      entries = readdirSync(abs);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(abs, entry);
+      let s;
+      try { s = statSync(full); } catch { continue; }
+      if (s.isDirectory()) {
+        walk(full);
+      } else if (s.isFile()) {
+        try {
+          const rel = relative(DOC_DIR, full);
+          snapshot.set(rel, readFileSync(full, "utf-8"));
+        } catch {
+          // Unreadable file — skip.
+        }
+      }
+    }
+  };
+  walk(DOC_DIR);
+  return snapshot;
+}
+
+function lineDiff(before: string, after: string): string {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const out: string[] = [];
+  let i = m, j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      out.push(`  ${a[i - 1]}`);
+      i--; j--;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      out.push(`- ${a[i - 1]}`);
+      i--;
+    } else {
+      out.push(`+ ${b[j - 1]}`);
+      j--;
+    }
+  }
+  while (i > 0) { out.push(`- ${a[i - 1]}`); i--; }
+  while (j > 0) { out.push(`+ ${b[j - 1]}`); j--; }
+  return out.reverse().join("\n");
+}
+
+function buildDocDiff(prev: DocSnapshot, next: DocSnapshot): { changed: string[]; markdown: string } {
+  const changed: string[] = [];
+  const sections: string[] = [];
+  const allKeys = new Set<string>([...prev.keys(), ...next.keys()]);
+  for (const key of [...allKeys].sort()) {
+    const before = prev.get(key);
+    const after = next.get(key);
+    if (before === after) continue;
+    changed.push(key);
+    if (before === undefined) {
+      sections.push(`### ${key} (added)\n\n\`\`\`\n${after}\n\`\`\``);
+    } else if (after === undefined) {
+      sections.push(`### ${key} (removed)\n\nFile was deleted.`);
+    } else {
+      sections.push(`### ${key} (changed)\n\n\`\`\`diff\n${lineDiff(before, after)}\n\`\`\``);
+    }
+  }
+  return { changed, markdown: sections.join("\n\n") };
+}
+
+function writeReloadNotice(cwd: string, prev: DocSnapshot, next: DocSnapshot): void {
+  const stateDir = join(cwd, ".sparkflow", "state");
+  try {
+    mkdirSync(stateDir, { recursive: true });
+  } catch {
+    return;
+  }
+  const { changed, markdown } = buildDocDiff(prev, next);
+  const ts = new Date().toISOString();
+  const header = changed.length === 0
+    ? `# sparkflow reloaded at ${ts}\n\nNo documentation changes.\n`
+    : `# sparkflow reloaded at ${ts}\n\nDocumentation files changed: ${changed.join(", ")}\n\n${markdown}\n`;
+  try {
+    writeFileSync(join(stateDir, "reload-doc-diff.md"), header);
+  } catch { /* ignore */ }
+  try {
+    const record = JSON.stringify({ ts, changedDocs: changed }) + "\n";
+    appendFileSync(join(stateDir, "reload-log.jsonl"), record);
+  } catch { /* ignore */ }
+}
 
 function log(msg: string): void {
   // Write above the status pane render area with CR to avoid interfering.
@@ -85,6 +200,7 @@ function shellQuote(s: string): string {
 
 async function main(): Promise<void> {
   const childArgs = process.argv.slice(2);
+  const supervisedCwd = childArgs[1] ?? process.cwd();
   const tmuxSession = childArgs[2];
 
   let child: ChildProcess | null = null;
@@ -92,6 +208,7 @@ async function main(): Promise<void> {
   let shuttingDown = false;
   let restartPending = false;
   let restarting = false;
+  let docSnapshot: DocSnapshot = readDocDir();
 
   // Kick off TypeScript watcher so source edits auto-rebuild.
   tscChild = startTscWatch(tmuxSession);
@@ -123,6 +240,11 @@ async function main(): Promise<void> {
       try { child.kill("SIGTERM"); } catch { /* ignore */ }
       await waitForExit(child, SHUTDOWN_GRACE_MS);
     }
+    // Compute doc diff between the snapshot we have and current doc/ contents,
+    // so the MCP bridge can inject "what changed" into Claude's next response.
+    const nextDocs = readDocDir();
+    writeReloadNotice(supervisedCwd, docSnapshot, nextDocs);
+    docSnapshot = nextDocs;
     child = spawnChild();
     restarting = false;
     if (restartPending) {

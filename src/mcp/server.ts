@@ -11,6 +11,26 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { IpcClient, type IpcMessage } from "./ipc.js";
 import { randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// server.js lives at <pkg>/dist/src/mcp/. Package root is three up.
+const PKG_ROOT = resolve(__dirname, "..", "..", "..");
+const PKG_JSON_PATH = resolve(PKG_ROOT, "package.json");
+
+function readPackageVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(PKG_JSON_PATH, "utf-8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+const PKG_VERSION = readPackageVersion();
 
 const socketPath = process.env.SPARKFLOW_SOCKET;
 if (!socketPath) {
@@ -23,7 +43,7 @@ await ipc.connect();
 
 const server = new McpServer({
   name: "sparkflow",
-  version: "0.1.0",
+  version: PKG_VERSION,
 });
 
 server.tool(
@@ -57,6 +77,30 @@ server.tool(
           text: String(response.payload.response),
         },
       ],
+    };
+  }
+);
+
+server.tool(
+  "sparkflow_version",
+  "Return the running sparkflow version, build mode, and (when available) git commit. Use this to confirm which sparkflow you're talking to.",
+  {},
+  async () => {
+    let gitCommit: string | undefined;
+    try {
+      gitCommit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+        cwd: PKG_ROOT,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+      if (!gitCommit) gitCommit = undefined;
+    } catch {
+      gitCommit = undefined;
+    }
+    const buildMode = process.env.SPARKFLOW_DEV === "1" ? "dev" : "prod";
+    const info: Record<string, unknown> = { version: PKG_VERSION, buildMode };
+    if (gitCommit) info.gitCommit = gitCommit;
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(info, null, 2) }],
     };
   }
 );

@@ -34,7 +34,11 @@ The user has slash commands:
 
 If a job becomes blocked (needs user input), it will show in the status pane at the bottom of the terminal. The user will handle blocked jobs directly.
 
-**IMPORTANT — failed jobs:** When a job enters \`FAILED_WAITING\` state in the status pane, the workflow has paused because a step opted in (via \`ask_on_failure\`) to ask for help rather than abort. Proactively run \`/sf-recover <job_id>\` without being asked. Work with the user to understand what went wrong and craft a concrete correction, then call \`answer_job_recovery\`. For a retry of a claude-code step, the agent's conversation resumes with your correction message — phrase it as a direct instruction. Jobs that simply fail (state \`FAILED\`) did not opt in; don't try to recover them.`;
+**IMPORTANT — failed jobs:** When a job enters \`FAILED_WAITING\` state in the status pane, the workflow has paused because a step opted in (via \`ask_on_failure\`) to ask for help rather than abort. Proactively run \`/sf-recover <job_id>\` without being asked. Work with the user to understand what went wrong and craft a concrete correction, then call \`answer_job_recovery\`. For a retry of a claude-code step, the agent's conversation resumes with your correction message — phrase it as a direct instruction. Jobs that simply fail (state \`FAILED\`) did not opt in; don't try to recover them.
+
+Call \`sparkflow_capabilities\` for the full command/tool reference whenever you're unsure what sparkflow can do, and \`sparkflow_version\` to confirm which build is running.
+
+If a tool response starts with \`[sparkflow reloaded — documentation updates follow]\`, sparkflow's daemon restarted under hot-reload and the diff that follows shows what changed in the documentation. Read the diff and incorporate any capability changes before continuing.`;
 
 function usage(): never {
   console.log(`Usage: sparkflow [options]
@@ -171,6 +175,8 @@ const mcpConfig = {
       args: [MCP_BRIDGE_PATH],
       env: {
         SPARKFLOW_DASHBOARD_SOCKET: socketPath,
+        SPARKFLOW_CWD: args.cwd,
+        ...(args.dev ? { SPARKFLOW_DEV: "1" } : {}),
       },
     },
   },

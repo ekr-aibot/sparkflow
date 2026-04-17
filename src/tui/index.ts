@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
+import { buildChatSpawn } from "./chat-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -51,7 +52,11 @@ function usage(): never {
   console.log(`Usage: sparkflow [options]
 
 Options:
-  --chat-command <cmd>   Chat tool command (default: "claude")
+  --chat-tool <name>     Chat tool: "claude" (default) or "gemini"
+  --chat-command <cmd>   Chat tool binary override. Default: matches --chat-tool
+                         (claude → "claude", gemini → "npx"). When gemini runs
+                         via npx, the package spec @google/gemini-cli@latest is
+                         injected automatically.
   --chat-args <args>     Extra args for chat tool (comma-separated)
   --cwd <dir>            Working directory (default: current directory)
   --workflow <path>      Default workflow for /project:sf-dispatch (default: none)
@@ -67,6 +72,7 @@ Options:
 }
 
 function parseArgs(argv: string[]): {
+  chatTool: "claude" | "gemini";
   chatCommand: string;
   chatArgs: string[];
   cwd: string;
@@ -76,7 +82,9 @@ function parseArgs(argv: string[]): {
   web: boolean;
   port: number;
 } {
-  let chatCommand = "claude";
+  let chatTool: "claude" | "gemini" = "claude";
+  let chatCommand = "";
+  let chatCommandSet = false;
   let chatArgs: string[] = [];
   let cwd = process.cwd();
   let workflow: string | null = null;
@@ -93,8 +101,18 @@ function parseArgs(argv: string[]): {
       case "-h":
         usage();
         break;
+      case "--chat-tool": {
+        const v = argv[++i];
+        if (v !== "claude" && v !== "gemini") {
+          console.error(`Error: --chat-tool must be "claude" or "gemini", got: ${v}`);
+          process.exit(1);
+        }
+        chatTool = v;
+        break;
+      }
       case "--chat-command":
         chatCommand = argv[++i];
+        chatCommandSet = true;
         if (!chatCommand) {
           console.error("Error: --chat-command requires a value");
           process.exit(1);
@@ -153,7 +171,12 @@ function parseArgs(argv: string[]): {
   // child on change while keeping the claude PTY alive. Handled via env var
   // at spawn-time below.
 
-  return { chatCommand, chatArgs, cwd, workflow, statusLines, dev, web, port };
+  // Default chat command based on the chosen chat tool.
+  if (!chatCommandSet) {
+    chatCommand = chatTool === "gemini" ? "npx" : "claude";
+  }
+
+  return { chatTool, chatCommand, chatArgs, cwd, workflow, statusLines, dev, web, port };
 }
 
 function checkTmux(): void {
@@ -275,17 +298,22 @@ Do the following:
 
 The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`;
 
-// Shell-escape a single argument
+// Shell-escape a single argument (used for tmux sh -c strings below).
 const sq = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
-// 4. Build chat command — use $(cat ...) for the system prompt to avoid quoting newlines
-const chatCmdParts = [
-  sq(args.chatCommand),
-  ...args.chatArgs.map(sq),
-  "--mcp-config", sq(mcpConfigPath),
-  "--append-system-prompt", `"$(cat ${sq(systemPromptPath)})"`,
-];
-const chatCmd = chatCmdParts.join(" ");
+// 4. Build chat command — tool-specific (claude gets flags, gemini gets files).
+const chatSpawn = buildChatSpawn({
+  tool: args.chatTool,
+  command: args.chatCommand,
+  chatArgs: args.chatArgs,
+  mcpServerSpec: mcpConfig.mcpServers["sparkflow-dashboard"],
+  mcpServerName: "sparkflow-dashboard",
+  mcpConfigPath,
+  systemPromptText,
+  systemPromptPath,
+  cwd: args.cwd,
+});
+const chatCmd = chatSpawn.shellCmd;
 
 // 5. Build status display command (session name added after it's generated below).
 // In --dev mode we route through the supervisor so code changes under dist/ auto-reload.
@@ -328,13 +356,7 @@ const rows = process.stdout.rows || 24;
 try {
   if (args.web) {
     // Web mode: spawn the web server directly, passing the chat command + its
-    // args so the server can exec it under a PTY. No shell, so we pass the
-    // system prompt text as a literal arg rather than via $(cat …).
-    const chatToolArgs = [
-      ...args.chatArgs,
-      "--mcp-config", mcpConfigPath,
-      "--append-system-prompt", systemPromptText,
-    ];
+    // tool-appropriate args so the server can exec it under a PTY.
     const webEnv = args.dev
       ? { ...process.env, SPARKFLOW_WEB_DEV: "1" }
       : (process.env as Record<string, string>);
@@ -345,8 +367,8 @@ try {
         socketPath,
         args.cwd,
         String(args.port),
-        args.chatCommand,
-        ...chatToolArgs,
+        chatSpawn.cmd,
+        ...chatSpawn.args,
       ],
       { cwd: args.cwd, stdio: "inherit", env: webEnv },
     );
@@ -394,6 +416,7 @@ try {
       execFileSync("tmux", ["kill-session", "-t", sessionName], { stdio: "pipe" });
     } catch { /* already dead */ }
   }
+  try { chatSpawn.cleanup(); } catch { /* ignore */ }
   try { unlinkSync(mcpConfigPath); } catch { /* ignore */ }
   try { unlinkSync(systemPromptPath); } catch { /* ignore */ }
   try { unlinkSync(socketPath); } catch { /* ignore */ }

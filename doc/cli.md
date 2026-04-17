@@ -14,7 +14,8 @@ sparkflow [options]
 
 | Flag | Description |
 | --- | --- |
-| `--chat-command <cmd>` | Chat tool command. Default: `claude`. |
+| `--chat-tool <name>` | Which LLM CLI powers the chat pane: `claude` (default) or `gemini`. Drives the spawn shape: Claude gets `--mcp-config`/`--append-system-prompt` flags; Gemini gets `.gemini/settings.json` + `GEMINI.md` written to `cwd` and cleaned up on exit. |
+| `--chat-command <cmd>` | Chat tool binary override. Default follows `--chat-tool` (claude → `claude`; gemini → `npx`, with `@google/gemini-cli@latest -y` prepended automatically). |
 | `--chat-args <args>` | Extra args for the chat tool, comma-separated. |
 | `--cwd <dir>` | Working directory. Default: current directory. |
 | `--workflow <path>` | Default workflow for `/project:sf-dispatch`. May be a path or a bare name resolved as `.sparkflow/workflows/<name>.json`. |
@@ -38,6 +39,16 @@ The chat panel is a real `claude` (or whatever `--chat-command` you set) running
 The status panel below the chat mirrors what the tmux pane would show: live job list with state, current step, and elapsed time.
 
 Same MCP tools and slash commands as tmux mode — the only difference is the surface. `/sf-quit` is omitted in web mode (Ctrl-C the `sparkflow --web` server console to quit).
+
+#### Chat-tool differences (`--chat-tool`)
+
+| Aspect | Claude (default) | Gemini (`--chat-tool gemini`) |
+| --- | --- | --- |
+| Default binary | `claude` | `npx` (with `@google/gemini-cli@latest -y` auto-prepended) |
+| MCP wiring | `--mcp-config <path>` CLI flag | `.gemini/settings.json` written in `cwd`, restoring any pre-existing file on exit |
+| System prompt | `--append-system-prompt <text>` CLI flag | `GEMINI.md` written in `cwd`, restoring any pre-existing file on exit |
+| Slash commands (`/project:sf-plan`, `/project:sf-dispatch`) | Supported via `.claude/commands/` | Not supported — Gemini users invoke `start_workflow` etc. through MCP tool calls directly |
+| Session resume across retries | UUID-based via `--session-id`/`--resume` | Not wired — retries replay the full prompt + transition message |
 
 ### `sparkflow-run` — workflow runner
 

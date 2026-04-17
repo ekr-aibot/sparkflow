@@ -78,7 +78,22 @@ export interface WorkflowRuntime {
   inputs?: Record<string, string>;
 }
 
-export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime | WorkflowRuntime;
+export interface GeminiRuntime {
+  type: "gemini";
+  /**
+   * Binary to invoke. Defaults to `npx` with the arg prefix
+   * `["@google/gemini-cli@latest"]` added automatically.
+   */
+  command?: string;
+  /** Model id, e.g. `gemini-2.5-pro` or `gemini-2.5-flash`. */
+  model?: string;
+  /** Extra CLI args appended after sparkflow's own flags. */
+  args?: string[];
+  /** Names of MCP servers to whitelist for this session (maps to --allowed-mcp-server-names). */
+  mcp_servers?: string[];
+}
+
+export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime | WorkflowRuntime | GeminiRuntime;
 
 // ── Transition ──────────────────────────────────────────────────────
 

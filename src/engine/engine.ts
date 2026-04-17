@@ -12,6 +12,7 @@ import { CustomAdapter } from "../runtime/custom.js";
 import { PrWatcherAdapter } from "../runtime/pr-watcher.js";
 import { PrCreatorAdapter } from "../runtime/pr-creator.js";
 import { WorkflowAdapter } from "../runtime/workflow.js";
+import { GeminiAdapter } from "../runtime/gemini.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
@@ -129,6 +130,7 @@ export class WorkflowEngine {
       ["pr-watcher", new PrWatcherAdapter()],
       ["pr-creator", new PrCreatorAdapter()],
       ["workflow", new WorkflowAdapter()],
+      ["gemini", new GeminiAdapter()],
     ]);
 
     // Initialize step statuses

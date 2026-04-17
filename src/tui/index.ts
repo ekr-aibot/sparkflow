@@ -149,10 +149,9 @@ function parseArgs(argv: string[]): {
     console.error("Error: --status-lines is tmux-only; not valid with --web");
     process.exit(1);
   }
-  if (web && dev) {
-    console.error("Error: --dev is not yet supported in web mode");
-    process.exit(1);
-  }
+  // --web + --dev: the web supervisor watches dist/ and respawns the server
+  // child on change while keeping the claude PTY alive. Handled via env var
+  // at spawn-time below.
 
   return { chatCommand, chatArgs, cwd, workflow, statusLines, dev, web, port };
 }
@@ -336,6 +335,9 @@ try {
       "--mcp-config", mcpConfigPath,
       "--append-system-prompt", systemPromptText,
     ];
+    const webEnv = args.dev
+      ? { ...process.env, SPARKFLOW_WEB_DEV: "1" }
+      : (process.env as Record<string, string>);
     const result = spawnSync(
       process.execPath,
       [
@@ -346,7 +348,7 @@ try {
         args.chatCommand,
         ...chatToolArgs,
       ],
-      { cwd: args.cwd, stdio: "inherit" },
+      { cwd: args.cwd, stdio: "inherit", env: webEnv },
     );
     process.exitCode = result.status ?? 0;
   } else {

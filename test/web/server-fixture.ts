@@ -19,7 +19,7 @@ export interface WebServerHandle {
 const READY_RE = /ready at (http:\/\/127\.0\.0\.1:(\d+)\/\?token=([0-9a-f]+))/;
 
 /** Spawns `sparkflow --web` with fake-chat as the chat command and waits for the ready banner. */
-export async function startWebServer(): Promise<WebServerHandle> {
+export async function startWebServer(opts: { extraArgs?: string[]; extraEnv?: Record<string, string> } = {}): Promise<WebServerHandle> {
   const repoRoot = resolve(__dirname, "..", "..");
   const sparkflowEntry = join(repoRoot, "dist", "src", "tui", "index.js");
   const fakeChat = join(repoRoot, "test", "web", "fake-chat.mjs");
@@ -33,8 +33,12 @@ export async function startWebServer(): Promise<WebServerHandle> {
       "--cwd", cwd,
       "--chat-command", process.execPath,
       "--chat-args", fakeChat,
+      ...(opts.extraArgs ?? []),
     ],
-    { stdio: ["ignore", "pipe", "pipe"], env: process.env },
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...(opts.extraEnv ?? {}) },
+    },
   );
 
   const errChunks: string[] = [];

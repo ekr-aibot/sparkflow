@@ -393,19 +393,32 @@ async function main(): Promise<void> {
     );
   });
 
-  let shuttingDown = false;
-  function shutdown(code: number): void {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    jobManager.killAll();
+  // SIGTERM/SIGHUP = supervisor requesting a hot-reload: detach from jobs and
+  // let the detached sparkflow-run processes keep running. The next server
+  // child will rehydrate them.
+  // SIGINT (Ctrl-C) = user really quitting: kill running jobs and clear state.
+  let exiting = false;
+  function finishExit(code: number): void {
     ipcServer.close().finally(() => {
       server.close(() => process.exit(code));
       setTimeout(() => process.exit(code), 1000).unref();
     });
   }
-  process.on("SIGINT", () => shutdown(0));
-  process.on("SIGTERM", () => shutdown(0));
-  process.on("SIGHUP", () => shutdown(0));
+  function onReload(): void {
+    if (exiting) return;
+    exiting = true;
+    jobManager.release();
+    finishExit(0);
+  }
+  function onQuit(): void {
+    if (exiting) return;
+    exiting = true;
+    jobManager.killAll();
+    finishExit(0);
+  }
+  process.on("SIGINT", onQuit);
+  process.on("SIGTERM", onReload);
+  process.on("SIGHUP", onReload);
 }
 
 main().catch((err) => {

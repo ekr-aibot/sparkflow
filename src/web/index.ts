@@ -110,7 +110,8 @@ async function main(): Promise<void> {
 
   pty.onExit(({ exitCode }) => {
     console.error(`[sparkflow web] chat process exited (code=${exitCode}); shutting down`);
-    shutdown(0);
+    // Treat the PTY dying like a user quit: tear down running workflows too.
+    shutdown(0, "SIGINT");
   });
 
   // --- PTY bridge unix socket. Child reconnects here after each restart. --
@@ -167,7 +168,9 @@ async function main(): Promise<void> {
     child.on("exit", (code, signal) => {
       if (shuttingDown) return;
       if (!dev) {
-        shutdown(code ?? 0);
+        // Server child exited on its own (not supervisor-initiated). Tear
+        // everything down. No child to signal — it's already gone.
+        shutdownSelf(code ?? 0);
         return;
       }
       // Dev mode: respawn. Exponential backoff if the child keeps crashing
@@ -208,21 +211,37 @@ async function main(): Promise<void> {
   }
 
   // --- Lifecycle. ---------------------------------------------------------
-  function shutdown(code: number): void {
-    if (shuttingDown) return;
-    shuttingDown = true;
+  function closeSupervisorResources(): void {
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
     try { pty.kill(); } catch { /* ignore */ }
-    if (child) { try { child.kill("SIGTERM"); } catch { /* ignore */ } }
     try { bridgeServer.close(); } catch { /* ignore */ }
     try { unlinkSync(ptyBridgePath); } catch { /* ignore */ }
-    // Give everything a moment to flush then exit.
+  }
+
+  // Relay the received signal to the server child so it can decide whether
+  // to kill running jobs (SIGINT = user really quit) or just release them
+  // (SIGTERM/SIGHUP = external shutdown; detached sparkflow-run processes
+  // keep going, the next supervisor launch rehydrates them).
+  function shutdown(code: number, signal: "SIGINT" | "SIGTERM"): void {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    closeSupervisorResources();
+    if (child) { try { child.kill(signal); } catch { /* ignore */ } }
+    // Give the child a moment to flush state / kill jobs before we exit.
+    setTimeout(() => process.exit(code), 500).unref();
+  }
+
+  // Used when the server child died on its own (not via supervisor signal).
+  function shutdownSelf(code: number): void {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    closeSupervisorResources();
     setTimeout(() => process.exit(code), 150).unref();
   }
 
-  process.on("SIGINT", () => shutdown(0));
-  process.on("SIGTERM", () => shutdown(0));
-  process.on("SIGHUP", () => shutdown(0));
+  process.on("SIGINT", () => shutdown(0, "SIGINT"));
+  process.on("SIGTERM", () => shutdown(0, "SIGTERM"));
+  process.on("SIGHUP", () => shutdown(0, "SIGTERM"));
 }
 
 main().catch((err) => {

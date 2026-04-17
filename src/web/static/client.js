@@ -291,13 +291,17 @@ async function pollJobLog(jobId) {
 
 function findJob(id) { return state.jobs.find((j) => j.id === id); }
 
-// Build an ordered list of [stepName, stepState] pairs to show on the card.
-// Prefers `activeSteps` (computed server-side from the log, supports parallel
-// steps). Falls back to the legacy single currentStep/stepState fields.
+// Build an ordered list of [stepName, "running"] pairs to show on the card.
+// Only *currently-running* steps get a chip — once a step succeeds or fails,
+// the server-computed activeSteps drops it. The state pill shows terminal
+// outcomes at the job level, so step chips for completed steps would be
+// noise.
 function stepsForJob(job) {
-  const entries = job.activeSteps ? Object.entries(job.activeSteps) : [];
-  if (entries.length > 0) return entries;
-  if (job.currentStep) return [[job.currentStep, job.stepState || "running"]];
+  if (job.activeSteps) return Object.entries(job.activeSteps);
+  // Legacy payloads: only show the single currentStep while it's running.
+  if (job.currentStep && (job.stepState ?? "running") === "running") {
+    return [[job.currentStep, "running"]];
+  }
   return [];
 }
 
@@ -385,11 +389,11 @@ function renderJobCard(job) {
   meta.appendChild(id);
 
   const steps = stepsForJob(job);
-  for (const [stepName, stepState] of steps) {
+  for (const [stepName] of steps) {
     const chip = document.createElement("span");
     chip.className = "step";
-    chip.textContent = stepState === "running" ? stepName : `${stepName} (${stepState})`;
-    attachTooltip(chip, `${stepName} — ${stepState}`);
+    chip.textContent = stepName;
+    attachTooltip(chip, `${stepName} — running`);
     meta.appendChild(chip);
   }
 

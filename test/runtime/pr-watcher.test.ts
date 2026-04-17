@@ -84,6 +84,47 @@ describe("PrWatcherAdapter", () => {
     expect(result.error).toContain("No PR found");
   });
 
+  it("uses upstream step's pr_url instead of branch lookup (cross-fork PR)", async () => {
+    // Simulate the cross-fork case where `gh pr view <branch>` fails but
+    // `gh pr view <number>` works — pr-create emitted pr_url, pr-watch
+    // should consume it via stepOutputs.
+    const seenArgs: string[][] = [];
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        // Should NOT be called — we skip branch discovery when upstream URL is present.
+        throw new Error("unexpected rev-parse call");
+      }
+      if (cmd === "gh") {
+        seenArgs.push([...argsArr]);
+        const key = argsArr.join(" ");
+        // Discovery call by PR number — succeeds and returns merged PR.
+        if (key.startsWith("pr view 60 ") && key.includes("number,url,state,mergedAt")) {
+          return Buffer.from(JSON.stringify({
+            number: 60,
+            url: "https://github.com/ekr/runner-up/pull/60",
+            state: "MERGED",
+            mergedAt: "2026-01-02T12:00:00Z",
+          }) + "\n");
+        }
+      }
+      throw new Error(`Unexpected: ${cmd} ${argsArr?.join(" ")}`);
+    });
+
+    const stepOutputs = new Map<string, Record<string, unknown>>([
+      ["pr-create", { pr_url: "https://github.com/ekr/runner-up/pull/60" }],
+    ]);
+
+    const result = await adapter.run(makeCtx({ stepOutputs }));
+    expect(result.success).toBe(true);
+    expect(result.outputs.pr_url).toBe("https://github.com/ekr/runner-up/pull/60");
+    // Exactly one gh call: the initial by-number discovery. No branch fallback.
+    expect(seenArgs.length).toBe(1);
+    expect(seenArgs[0][0]).toBe("pr");
+    expect(seenArgs[0][1]).toBe("view");
+    expect(seenArgs[0][2]).toBe("60");
+  });
+
   it("detects new CI failure and returns feedback", async () => {
     let pollCount = 0;
 

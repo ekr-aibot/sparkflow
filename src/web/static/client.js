@@ -72,21 +72,25 @@ function transformLogLine(line, verbose) {
     } catch { /* not JSON — fall through */ }
   }
 
-  // `[stepId] content` or `[stepId:stderr] content`
-  const m = line.match(/^\[([^\]:]+)(:stderr)?\]\s?(.*)$/);
+  // `[step]` / `[step:stderr]` / `[step:tool]` / `[step:tool_result]` / `[step:meta]`
+  const m = line.match(/^\[([^\]:]+)(?::([a-z_]+))?\]\s?(.*)$/);
   if (m) {
     const step = m[1];
-    const isStderr = !!m[2];
+    const suffix = m[2]; // undefined | "stderr" | "tool" | "tool_result" | "meta"
     const content = m[3];
     if (!verbose) {
       // Sparkflow meta lines are infrastructure; hide them.
       if (step === "sparkflow") return null;
-      // `[step] running (runtime)` / `[step] succeeded` / `[step] failed` —
-      // just the status transition, already shown as chips/pills.
+      // Pure status transitions are already represented by card chips/pills.
       if (/^(running|succeeded|failed)(\s*\(.+\))?$/.test(content)) return null;
+      // Tool-use / tool-result / result-summary lines (new suffix-based format).
+      if (suffix === "tool" || suffix === "tool_result" || suffix === "meta") return null;
+      // Legacy format (pre–suffix rollout): text + tool-use flattened on one
+      // line with a `[tool:` marker somewhere in the content. Filter those too.
+      if (content.includes("[tool: ") || content.includes("[tool_result]")) return null;
     }
     const ansi = STEP_PALETTE_ANSI[stepColorIndex(step)];
-    const label = `${ansi}[${step}${isStderr ? ":stderr" : ""}]${ANSI_RESET}`;
+    const label = `${ansi}[${step}${suffix ? ":" + suffix : ""}]${ANSI_RESET}`;
     return `${label} ${content}`;
   }
 

@@ -164,6 +164,43 @@ button {
   height: 100%;
 }
 
+/* Job-view pane: xterm fills pane, toolbar overlays top-right. */
+.pane.job-pane { padding: 0; }
+.pane-xterm {
+  position: absolute;
+  inset: 0;
+  padding: 6px;
+}
+
+.pane-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: rgba(22, 23, 31, 0.90);
+  backdrop-filter: blur(4px);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.pane-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.pane-toolbar input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0;
+}
+
 /* ---- jobs panel ---- */
 
 #status {
@@ -294,13 +331,28 @@ button {
 .job-card .meta .step {
   font-family: var(--mono-font);
   font-size: 11px;
-  color: var(--cyan);
   padding: 1px 6px;
   border-radius: 3px;
+  /* Default (no data-step-color): cyan. Overridden per step below. */
+  color: var(--cyan);
   background: rgba(125, 207, 255, 0.08);
   border: 1px solid rgba(125, 207, 255, 0.18);
 }
-.job-card .meta .step + .step { /* gap between multiple step chips */ }
+.job-card .meta .step[data-step-color="0"] {
+  color: var(--cyan); background: rgba(125, 207, 255, 0.08); border-color: rgba(125, 207, 255, 0.22);
+}
+.job-card .meta .step[data-step-color="1"] {
+  color: var(--green); background: rgba(158, 206, 106, 0.10); border-color: rgba(158, 206, 106, 0.24);
+}
+.job-card .meta .step[data-step-color="2"] {
+  color: var(--yellow); background: rgba(224, 175, 104, 0.10); border-color: rgba(224, 175, 104, 0.26);
+}
+.job-card .meta .step[data-step-color="3"] {
+  color: var(--magenta); background: rgba(187, 154, 247, 0.10); border-color: rgba(187, 154, 247, 0.24);
+}
+.job-card .meta .step[data-step-color="4"] {
+  color: var(--accent); background: rgba(122, 162, 247, 0.10); border-color: rgba(122, 162, 247, 0.26);
+}
 .job-card .meta .elapsed::before {
   content: "· ";
   color: var(--fg-dim);

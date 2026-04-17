@@ -28,6 +28,73 @@ const els = {
   tooltip: document.getElementById("tooltip"),
 };
 
+// --------------------------- step colors ---------------------------
+// Each step gets a stable color derived from its name so the chip on the card
+// and the label in the job log view agree. Five colors (we skip red to avoid
+// conflating with failure).
+const STEP_PALETTE_SIZE = 5;
+const STEP_PALETTE_ANSI = [
+  "\x1b[38;5;117m", // cyan   → --cyan    #7dcfff
+  "\x1b[38;5;149m", // green  → --green   #9ece6a
+  "\x1b[38;5;179m", // yellow → --yellow  #e0af68
+  "\x1b[38;5;141m", // magenta→ --magenta #bb9af7
+  "\x1b[38;5;111m", // blue   → --accent  #7aa2f7
+];
+const ANSI_RESET = "\x1b[0m";
+const ANSI_DIM = "\x1b[2m";
+
+function stepColorIndex(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return Math.abs(h) % STEP_PALETTE_SIZE;
+}
+
+// --------------------------- log line transform ---------------------------
+// Parse a raw log line; return the string to write to xterm (with ANSI step
+// label) or null to skip.
+function transformLogLine(line, verbose) {
+  // JSON status events. In non-verbose we hide them entirely; in verbose we
+  // render a compact, dim form.
+  if (line.startsWith("{") && line.endsWith("}")) {
+    try {
+      const ev = JSON.parse(line);
+      if (!verbose) return null;
+      if (ev.type === "step_status" && typeof ev.step === "string") {
+        const ansi = STEP_PALETTE_ANSI[stepColorIndex(ev.step)];
+        return `${ANSI_DIM}${ansi}[${ev.step}]${ANSI_RESET}${ANSI_DIM} ${ev.state ?? ""}${ANSI_RESET}`;
+      }
+      if (ev.type === "workflow_start") return `${ANSI_DIM}[sparkflow] workflow started${ANSI_RESET}`;
+      if (ev.type === "workflow_complete") {
+        return `${ANSI_DIM}[sparkflow] workflow ${ev.success ? "succeeded" : "failed"}${ANSI_RESET}`;
+      }
+      if (ev.type === "ask_user") return `${ANSI_DIM}[sparkflow] ask_user: ${ev.question ?? ""}${ANSI_RESET}`;
+      return `${ANSI_DIM}${line}${ANSI_RESET}`;
+    } catch { /* not JSON — fall through */ }
+  }
+
+  // `[stepId] content` or `[stepId:stderr] content`
+  const m = line.match(/^\[([^\]:]+)(:stderr)?\]\s?(.*)$/);
+  if (m) {
+    const step = m[1];
+    const isStderr = !!m[2];
+    const content = m[3];
+    if (!verbose) {
+      // Sparkflow meta lines are infrastructure; hide them.
+      if (step === "sparkflow") return null;
+      // `[step] running (runtime)` / `[step] succeeded` / `[step] failed` —
+      // just the status transition, already shown as chips/pills.
+      if (/^(running|succeeded|failed)(\s*\(.+\))?$/.test(content)) return null;
+    }
+    const ansi = STEP_PALETTE_ANSI[stepColorIndex(step)];
+    const label = `${ansi}[${step}${isStderr ? ":stderr" : ""}]${ANSI_RESET}`;
+    return `${label} ${content}`;
+  }
+
+  // Untagged line. In non-verbose, skip; in verbose, dim it.
+  if (!verbose) return null;
+  return `${ANSI_DIM}${line}${ANSI_RESET}`;
+}
+
 // Floating toast host, injected once.
 let toastsEl = document.getElementById("toasts");
 if (!toastsEl) {
@@ -197,14 +264,30 @@ function openJobTab(jobId) {
   const label = jobTabLabel(job, jobId);
   state.tabs.push({ id: jobId, kind: "job", label });
 
-  // Pane element.
   const pane = document.createElement("div");
   pane.className = "pane job-pane";
   pane.dataset.tabId = jobId;
   pane.setAttribute("role", "tabpanel");
   els.main.appendChild(pane);
 
-  // Dedicated xterm for this job log.
+  // Floating toolbar — overlays the top-right corner of the xterm.
+  const toolbar = document.createElement("div");
+  toolbar.className = "pane-toolbar";
+  const verboseLabel = document.createElement("label");
+  const verboseCheckbox = document.createElement("input");
+  verboseCheckbox.type = "checkbox";
+  verboseCheckbox.checked = false; // default: non-verbose (just step output)
+  const verboseText = document.createElement("span");
+  verboseText.textContent = "Verbose";
+  verboseLabel.append(verboseCheckbox, verboseText);
+  attachTooltip(verboseLabel, "Verbose: show JSON status events, sparkflow meta, and step-transition lines. Off: just the running step's output.");
+  toolbar.appendChild(verboseLabel);
+  pane.appendChild(toolbar);
+
+  const termContainer = document.createElement("div");
+  termContainer.className = "pane-xterm";
+  pane.appendChild(termContainer);
+
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
     fontSize: 12,
@@ -216,13 +299,39 @@ function openJobTab(jobId) {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  term.open(pane);
+  term.open(termContainer);
 
-  const view = { term, fit, pane, lineLength: 0, polling: false, pollTimer: null, stopped: false };
+  const view = {
+    term,
+    fit,
+    pane,
+    termContainer,
+    rawLines: [],
+    lineLength: 0,
+    verbose: false,
+    verboseCheckbox,
+    polling: false,
+    pollTimer: null,
+    stopped: false,
+  };
   state.jobViews.set(jobId, view);
+
+  verboseCheckbox.addEventListener("change", () => {
+    view.verbose = verboseCheckbox.checked;
+    rerenderJobView(view);
+  });
 
   activateTab(jobId);
   pollJobLog(jobId);
+}
+
+function rerenderJobView(view) {
+  // xterm.reset() clears both the screen and the scrollback buffer.
+  try { view.term.reset(); } catch { /* ignore */ }
+  for (const line of view.rawLines) {
+    const out = transformLogLine(line, view.verbose);
+    if (out !== null) view.term.write(out + "\r\n");
+  }
 }
 
 function closeJobTab(jobId) {
@@ -256,6 +365,8 @@ function updateJobTabLabels() {
 
 // --------------------------- job log polling ---------------------------
 
+const RAW_LINES_CAP = 10000;
+
 async function pollJobLog(jobId) {
   const view = state.jobViews.get(jobId);
   if (!view || view.stopped) return;
@@ -266,7 +377,16 @@ async function pollJobLog(jobId) {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.lines) && data.lines.length > 0) {
-        view.term.write(data.lines.join("\r\n") + "\r\n");
+        // Keep a cap on the in-memory raw buffer so re-render on verbose
+        // toggle doesn't turn pathological.
+        for (const line of data.lines) {
+          view.rawLines.push(line);
+          const out = transformLogLine(line, view.verbose);
+          if (out !== null) view.term.write(out + "\r\n");
+        }
+        if (view.rawLines.length > RAW_LINES_CAP) {
+          view.rawLines.splice(0, view.rawLines.length - RAW_LINES_CAP);
+        }
       }
       if (typeof data.length === "number") view.lineLength = data.length;
       // Slow the poll once the job is terminal.
@@ -390,6 +510,7 @@ function renderJobCard(job) {
   for (const [stepName] of steps) {
     const chip = document.createElement("span");
     chip.className = "step";
+    chip.dataset.stepColor = String(stepColorIndex(stepName));
     chip.textContent = stepName;
     attachTooltip(chip, `${stepName} — running`);
     meta.appendChild(chip);

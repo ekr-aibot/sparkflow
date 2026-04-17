@@ -90,6 +90,47 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
+/**
+ * Enrich each job in the feed with `activeSteps` (stepName → state for every
+ * step currently running) derived from the job's output buffer. Scanning the
+ * ring buffer on each broadcast is cheap — the buffer caps at ~2000 lines and
+ * SSE broadcasts are triggered by state changes, not per-line.
+ */
+function enrichJobs(jobManager: JobManager): Array<Record<string, unknown>> {
+  return jobManager.getJobs().map((info) => {
+    const detail = jobManager.getJobDetail(info.id);
+    const activeSteps = detail ? deriveActiveSteps(detail.output) : {};
+    return { ...info, activeSteps };
+  });
+}
+
+function deriveActiveSteps(output: string[]): Record<string, string> {
+  const active: Record<string, string> = {};
+  for (const line of output) {
+    // JSON status events
+    if (line.startsWith("{")) {
+      try {
+        const ev = JSON.parse(line) as { type?: string; step?: string; state?: string };
+        if (ev.type === "step_status" && typeof ev.step === "string" && typeof ev.state === "string") {
+          if (ev.state === "running") active[ev.step] = "running";
+          else delete active[ev.step];
+        } else if (ev.type === "workflow_start" || ev.type === "workflow_complete") {
+          for (const k of Object.keys(active)) delete active[k];
+        }
+        continue;
+      } catch { /* not JSON; fall through */ }
+    }
+    // Verbose text events, e.g. "[review] running" / "[test] succeeded"
+    const m = line.match(/^\[(\S+)\] (running|succeeded|failed)/);
+    if (m) {
+      const [, step, state] = m;
+      if (state === "running") active[step] = "running";
+      else delete active[step];
+    }
+  }
+  return active;
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = Buffer.from(JSON.stringify(body), "utf-8");
   res.writeHead(status, {
@@ -199,7 +240,7 @@ async function main(): Promise<void> {
       });
       const send = () => {
         try {
-          res.write(`data: ${JSON.stringify({ jobs: jobManager.getJobs() })}\n\n`);
+          res.write(`data: ${JSON.stringify({ jobs: enrichJobs(jobManager) })}\n\n`);
         } catch { /* client gone */ }
       };
       send();
@@ -243,6 +284,12 @@ async function main(): Promise<void> {
         sendJson(res, 500, { error: msg });
       });
       return;
+    }
+
+    const removeMatch = pathname.match(/^\/api\/jobs\/([A-Za-z0-9_-]+)\/remove$/);
+    if (removeMatch && req.method === "POST") {
+      const r = jobManager.removeJob(removeMatch[1]);
+      return r.ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 400, { error: r.error ?? "remove failed" });
     }
 
     res.writeHead(404, { "content-type": "text/plain" });

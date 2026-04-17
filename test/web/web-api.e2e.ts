@@ -174,6 +174,16 @@ test("POST /api/jobs/unknown/restart → 400 with error", async () => {
   expect(body.error).toMatch(/not found/i);
 });
 
+test("POST /api/jobs/unknown/remove → 400 with error", async () => {
+  const res = await fetch(`${httpBase()}/api/jobs/bogus/remove`, {
+    method: "POST",
+    headers: { Cookie: cookieHeader() },
+  });
+  expect(res.status).toBe(400);
+  const body = await res.json();
+  expect(body.error).toMatch(/not found/i);
+});
+
 test("401 on /api/* without token", async () => {
   const res = await fetch(`${httpBase()}/api/jobs/bogus/log`);
   expect(res.status).toBe(401);

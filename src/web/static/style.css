@@ -227,6 +227,19 @@ button {
   min-width: 0;
 }
 
+.job-card .close-btn {
+  flex: none;
+  padding: 2px 6px;
+  margin: -2px -4px -2px 0;
+  border-radius: 3px;
+  color: var(--fg-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.job-card .close-btn:hover { background: var(--border-strong); color: var(--fg); }
+.job-card .close-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .job-card .name {
   font-weight: 600;
   color: var(--fg);
@@ -282,7 +295,12 @@ button {
   font-family: var(--mono-font);
   font-size: 11px;
   color: var(--cyan);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(125, 207, 255, 0.08);
+  border: 1px solid rgba(125, 207, 255, 0.18);
 }
+.job-card .meta .step + .step { /* gap between multiple step chips */ }
 .job-card .meta .elapsed::before {
   content: "· ";
   color: var(--fg-dim);
@@ -354,6 +372,34 @@ button {
   border: 1px dashed var(--border);
   border-radius: var(--radius);
 }
+
+/* ---- tooltip (rich hover info for truncated text) ---- */
+
+#tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--fg);
+  box-shadow: var(--shadow);
+  max-width: min(520px, 80vw);
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-9999px, -9999px);
+  transition: opacity 120ms ease;
+  z-index: 1001;
+  line-height: 1.45;
+}
+#tooltip.visible { opacity: 1; }
+
+/* Visual cue that text is truncated and has more on hover. */
+.has-tooltip { cursor: help; }
 
 /* ---- toasts for action feedback ---- */
 

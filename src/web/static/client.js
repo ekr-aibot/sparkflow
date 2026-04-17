@@ -25,6 +25,7 @@ const els = {
   chat: document.getElementById("chat"),
   list: document.getElementById("job-list"),
   count: document.getElementById("job-count"),
+  tooltip: document.getElementById("tooltip"),
 };
 
 // Floating toast host, injected once.
@@ -33,6 +34,49 @@ if (!toastsEl) {
   toastsEl = document.createElement("div");
   toastsEl.id = "toasts";
   document.body.appendChild(toastsEl);
+}
+
+// --------------------------- tooltip ---------------------------
+
+function attachTooltip(el, text) {
+  if (!text) return;
+  el.classList.add("has-tooltip");
+  el.addEventListener("mouseenter", () => showTooltip(el, text));
+  el.addEventListener("mouseleave", hideTooltip);
+  el.addEventListener("focus", () => showTooltip(el, text));
+  el.addEventListener("blur", hideTooltip);
+}
+
+function showTooltip(anchor, text) {
+  const tip = els.tooltip;
+  tip.textContent = text;
+  tip.setAttribute("aria-hidden", "false");
+  tip.classList.add("visible");
+  // Measure first so we can position off the anchor's bottom-left,
+  // nudging left/up if we'd overflow the viewport.
+  const anchorRect = anchor.getBoundingClientRect();
+  const tipRect = tip.getBoundingClientRect();
+  const pad = 8;
+  let top = anchorRect.bottom + 6;
+  let left = anchorRect.left;
+  if (left + tipRect.width > window.innerWidth - pad) {
+    left = Math.max(pad, window.innerWidth - tipRect.width - pad);
+  }
+  if (top + tipRect.height > window.innerHeight - pad) {
+    top = Math.max(pad, anchorRect.top - tipRect.height - 6);
+  }
+  tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+}
+
+function hideTooltip() {
+  els.tooltip.classList.remove("visible");
+  els.tooltip.setAttribute("aria-hidden", "true");
+  // Move offscreen on next frame so stale position doesn't flash on re-show.
+  requestAnimationFrame(() => {
+    if (!els.tooltip.classList.contains("visible")) {
+      els.tooltip.style.transform = "translate(-9999px, -9999px)";
+    }
+  });
 }
 
 // --------------------------- chat terminal ---------------------------
@@ -247,6 +291,16 @@ async function pollJobLog(jobId) {
 
 function findJob(id) { return state.jobs.find((j) => j.id === id); }
 
+// Build an ordered list of [stepName, stepState] pairs to show on the card.
+// Prefers `activeSteps` (computed server-side from the log, supports parallel
+// steps). Falls back to the legacy single currentStep/stepState fields.
+function stepsForJob(job) {
+  const entries = job.activeSteps ? Object.entries(job.activeSteps) : [];
+  if (entries.length > 0) return entries;
+  if (job.currentStep) return [[job.currentStep, job.stepState || "running"]];
+  return [];
+}
+
 function elapsed(startTime, endTime) {
   const ms = (endTime ?? Date.now()) - startTime;
   const secs = Math.floor(ms / 1000);
@@ -278,14 +332,16 @@ function renderJobCard(job) {
   li.className = "job-card";
   if (state.activeTabId === job.id) li.classList.add("viewing");
 
-  // Top row: name + state pill.
+  const terminal = job.state === "succeeded" || job.state === "failed";
+
+  // Top row: name + state pill + (× for terminal jobs).
   const top = document.createElement("div");
   top.className = "row";
   const name = document.createElement("span");
   name.className = "name";
   const base = job.workflowName || job.workflowPath || "workflow";
   name.textContent = job.slug ? `${base}: ${job.slug}` : base;
-  name.title = name.textContent;
+  attachTooltip(name, name.textContent);
   top.appendChild(name);
 
   const pill = document.createElement("span");
@@ -293,9 +349,23 @@ function renderJobCard(job) {
   pill.textContent = (job.state || "?").replace("_", " ");
   top.appendChild(pill);
 
+  if (terminal) {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "close-btn";
+    close.textContent = "×";
+    close.setAttribute("aria-label", `Remove job ${job.id.slice(0, 8)}`);
+    attachTooltip(close, "Remove from dashboard");
+    close.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      removeJob(job.id);
+    });
+    top.appendChild(close);
+  }
+
   li.appendChild(top);
 
-  // Meta: id · step · elapsed.
+  // Meta: id · step(s) · elapsed. Multiple chips when parallel steps run.
   const meta = document.createElement("div");
   meta.className = "meta";
   const id = document.createElement("span");
@@ -303,11 +373,13 @@ function renderJobCard(job) {
   id.textContent = job.id.slice(0, 8);
   meta.appendChild(id);
 
-  if (job.currentStep) {
-    const step = document.createElement("span");
-    step.className = "step";
-    step.textContent = job.currentStep + (job.stepState ? ` (${job.stepState})` : "");
-    meta.appendChild(step);
+  const steps = stepsForJob(job);
+  for (const [stepName, stepState] of steps) {
+    const chip = document.createElement("span");
+    chip.className = "step";
+    chip.textContent = stepState === "running" ? stepName : `${stepName} (${stepState})`;
+    attachTooltip(chip, `${stepName} — ${stepState}`);
+    meta.appendChild(chip);
   }
 
   const time = document.createElement("span");
@@ -317,12 +389,12 @@ function renderJobCard(job) {
 
   li.appendChild(meta);
 
-  // Summary — includes pending question if any.
+  // Summary — includes pending question if any. Tooltip gives the un-truncated text.
   const summary = document.createElement("div");
   summary.className = "summary" + (job.pendingQuestion ? " question" : "");
   const text = job.pendingQuestion ? `Q: ${job.pendingQuestion}` : (job.summary || "");
   summary.textContent = text;
-  summary.title = text;
+  if (text) attachTooltip(summary, text);
   li.appendChild(summary);
 
   // Actions.
@@ -341,7 +413,6 @@ function renderJobCard(job) {
   killBtn.type = "button";
   killBtn.className = "btn danger";
   killBtn.textContent = "Kill";
-  const terminal = job.state === "succeeded" || job.state === "failed";
   killBtn.disabled = terminal;
   killBtn.addEventListener("click", () => killJob(job.id));
   actions.appendChild(killBtn);
@@ -369,6 +440,17 @@ async function restartJob(jobId) {
   const res = await postAction(`/api/jobs/${encodeURIComponent(jobId)}/restart`);
   if (res.ok) toast("success", `Restarted ${jobId.slice(0, 8)} as ${res.newJobId?.slice(0, 8)}.`);
   else toast("error", `Restart failed: ${res.error}`);
+}
+
+async function removeJob(jobId) {
+  const res = await postAction(`/api/jobs/${encodeURIComponent(jobId)}/remove`);
+  if (res.ok) {
+    toast("success", `Removed ${jobId.slice(0, 8)}.`);
+    // Close the viewing tab if we had one open — it's gone.
+    if (state.jobViews.has(jobId)) closeJobTab(jobId);
+  } else {
+    toast("error", `Remove failed: ${res.error}`);
+  }
 }
 
 async function postAction(url) {

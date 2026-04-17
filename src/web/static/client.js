@@ -301,6 +301,17 @@ function stepsForJob(job) {
   return [];
 }
 
+// The JobManager sets summary to `"<step>: <state>"` on every step_status
+// event. That's a duplicate of the step chips we already render on the card,
+// so hide it. Non-matching summaries ("completed", "killed by user", etc.)
+// fall through and are shown.
+function isStepStatusDuplicate(job, summary) {
+  if (!summary) return false;
+  const m = summary.match(/^(\S+):\s*(running|succeeded|failed|queued|starting)$/);
+  if (!m) return false;
+  return stepsForJob(job).some(([name]) => name === m[1]);
+}
+
 function elapsed(startTime, endTime) {
   const ms = (endTime ?? Date.now()) - startTime;
   const secs = Math.floor(ms / 1000);
@@ -389,13 +400,18 @@ function renderJobCard(job) {
 
   li.appendChild(meta);
 
-  // Summary — includes pending question if any. Tooltip gives the un-truncated text.
-  const summary = document.createElement("div");
-  summary.className = "summary" + (job.pendingQuestion ? " question" : "");
-  const text = job.pendingQuestion ? `Q: ${job.pendingQuestion}` : (job.summary || "");
-  summary.textContent = text;
-  if (text) attachTooltip(summary, text);
-  li.appendChild(summary);
+  // Summary — pending question takes precedence. Otherwise show job.summary,
+  // but suppress the redundant "<stepName>: <state>" status line when the step
+  // chips already convey that information.
+  const rawSummary = job.pendingQuestion ? `Q: ${job.pendingQuestion}` : (job.summary || "");
+  const text = job.pendingQuestion ? rawSummary : (isStepStatusDuplicate(job, rawSummary) ? "" : rawSummary);
+  if (text) {
+    const summary = document.createElement("div");
+    summary.className = "summary" + (job.pendingQuestion ? " question" : "");
+    summary.textContent = text;
+    attachTooltip(summary, text);
+    li.appendChild(summary);
+  }
 
   // Actions.
   const actions = document.createElement("div");

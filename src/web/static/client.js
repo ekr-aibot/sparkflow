@@ -643,13 +643,25 @@ connectEvents();
 
 // --------------------------- layout ---------------------------
 
-window.addEventListener("resize", () => {
-  chatFit.fit();
-  sendResize();
+function refitAllPanes() {
+  try { chatFit.fit(); sendResize(); } catch { /* ignore */ }
   for (const view of state.jobViews.values()) {
     try { view.fit.fit(); } catch { /* ignore */ }
   }
+}
+
+window.addEventListener("resize", refitAllPanes);
+
+// #main's height changes whenever the status panel grows or shrinks
+// (new jobs arrive, cards toggle, toolbar appears, etc.). xterm doesn't
+// observe its container natively — if we don't refit on those changes,
+// the bottom rows render beneath the dashboard. Guarded with
+// requestAnimationFrame because ResizeObserver callbacks fire synchronously
+// inside layout.
+const mainResizeObs = new ResizeObserver(() => {
+  requestAnimationFrame(refitAllPanes);
 });
+mainResizeObs.observe(els.main);
 
 // Re-render every second so the elapsed-time column ticks between SSE pushes.
 setInterval(() => renderJobs(), 1000);

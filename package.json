@@ -13,7 +13,7 @@
     "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/ && mkdir -p dist/src/web/static && cp src/web/static/* dist/src/web/static/",
     "check": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test",
+    "test:e2e": "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/run/current-system/sw/bin/chromium playwright test",
     "dev": "tsc --watch"
   },
   "devDependencies": {

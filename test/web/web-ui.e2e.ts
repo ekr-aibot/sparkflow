@@ -75,7 +75,10 @@ test("loads the page, terminal renders, and chat WS receives PTY output", async 
   const page = await ctx.newPage();
 
   // First navigation with token in URL → 302 → cookie + reload of /. Playwright follows redirects.
-  await page.goto(server.url, { waitUntil: "networkidle" });
+  // Don't wait for "networkidle": the page holds an SSE stream + chat WebSocket
+  // open indefinitely, so "network idle" never fires. The subsequent
+  // waitForSelector / waitForFunction calls below handle actual readiness.
+  await page.goto(server.url, { waitUntil: "domcontentloaded" });
 
   // Layout sanity.
   await expect(page.locator("#chat")).toBeVisible();

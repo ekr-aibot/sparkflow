@@ -113,3 +113,23 @@ test("loads the page, terminal renders, and chat WS receives PTY output", async 
 
   await ctx.close();
 });
+
+test("header has brand and an active Chat tab", async ({ browser }) => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await page.goto(server.url, { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator("#brand")).toContainText("sparkflow");
+
+  // The Chat tab is always present and active by default.
+  const chatTab = page.locator('#tabs .tab[data-tab-id="chat"]');
+  await expect(chatTab).toBeVisible();
+  await expect(chatTab).toHaveClass(/active/);
+  await expect(chatTab).toContainText("Chat");
+
+  // Only the chat pane is shown; no job panes exist yet.
+  await expect(page.locator("#chat")).toHaveClass(/active/);
+  await expect(page.locator(".pane.job-pane")).toHaveCount(0);
+
+  await ctx.close();
+});

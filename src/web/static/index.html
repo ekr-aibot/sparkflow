@@ -9,10 +9,24 @@
   </head>
   <body>
     <div id="app">
-      <header id="header">sparkflow</header>
-      <main id="chat" aria-label="chat"></main>
+      <header id="header">
+        <div id="brand">
+          <span class="brand-mark">◈</span>
+          <span class="brand-name">sparkflow</span>
+        </div>
+        <nav id="tabs" role="tablist" aria-label="open views"></nav>
+      </header>
+
+      <main id="main">
+        <div id="chat" class="pane active" role="tabpanel" aria-label="chat"></div>
+        <!-- job view panes are injected here as <div class="pane job-pane"> -->
+      </main>
+
       <section id="status" aria-label="jobs">
-        <h2 id="status-title">jobs</h2>
+        <div class="status-header">
+          <h2 id="status-title">jobs</h2>
+          <span id="job-count" class="job-count"></span>
+        </div>
         <ul id="job-list"></ul>
       </section>
     </div>

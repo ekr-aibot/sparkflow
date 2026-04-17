@@ -85,6 +85,16 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  const payload = Buffer.from(JSON.stringify(body), "utf-8");
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": payload.byteLength,
+    "cache-control": "no-store",
+  });
+  res.end(payload);
+}
+
 function serveFile(res: ServerResponse, absPath: string): void {
   try {
     const stat = statSync(absPath);
@@ -189,6 +199,39 @@ async function main(): Promise<void> {
         try { res.write(": ping\n\n"); } catch { /* ignore */ }
       }, 15000);
       req.on("close", () => clearInterval(heartbeat));
+      return;
+    }
+
+    // ---- JSON API ----
+    // GET /api/jobs/:id/log?since=N  → { lines: string[], length: number, state: JobState }
+    const logMatch = pathname.match(/^\/api\/jobs\/([A-Za-z0-9_-]+)\/log$/);
+    if (logMatch && req.method === "GET") {
+      const jobId = logMatch[1];
+      const detail = jobManager.getJobDetail(jobId);
+      if (!detail) return sendJson(res, 404, { error: `Job not found: ${jobId}` });
+      const params = new URLSearchParams(url.includes("?") ? url.slice(url.indexOf("?") + 1) : "");
+      const sinceRaw = parseInt(params.get("since") ?? "0", 10);
+      const length = detail.output.length;
+      const since = Number.isFinite(sinceRaw) && sinceRaw >= 0 && sinceRaw <= length ? sinceRaw : 0;
+      const lines = detail.output.slice(since);
+      return sendJson(res, 200, { lines, length, state: detail.info.state });
+    }
+
+    const killMatch = pathname.match(/^\/api\/jobs\/([A-Za-z0-9_-]+)\/kill$/);
+    if (killMatch && req.method === "POST") {
+      const r = jobManager.killJob(killMatch[1]);
+      return r.ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 400, { error: r.error ?? "kill failed" });
+    }
+
+    const restartMatch = pathname.match(/^\/api\/jobs\/([A-Za-z0-9_-]+)\/restart$/);
+    if (restartMatch && req.method === "POST") {
+      jobManager.restartJob(restartMatch[1], "fresh").then((r) => {
+        if (r.ok) sendJson(res, 200, { ok: true, newJobId: r.newJobId });
+        else sendJson(res, 400, { error: r.error ?? "restart failed" });
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 500, { error: msg });
+      });
       return;
     }
 

@@ -656,4 +656,79 @@ describe("WorkflowEngine", () => {
     expect(result.success).toBe(true);
     expect(adapterCalled).toBe(false);
   });
+
+  // Regression: when a claude-code step is re-entered via on_success fan-out
+  // (not via failure retry), the engine must not reuse the prior sessionId.
+  // Reusing it caused claude-code to reject the spawn with "Session ID X is
+  // already in use." See the workflow-loopback bug report for context.
+  it("does not pass a stale sessionId when a claude-code step re-runs via on_success", async () => {
+    // Track the ctx each claude-code step sees per invocation.
+    const invocations: Array<{ stepId: string; sessionId: string | undefined; resume: boolean }> = [];
+    const workflow: SparkflowWorkflow = {
+      version: "1",
+      name: "loopback-test",
+      entry: "author",
+      defaults: { runtime: { type: "shell", command: "echo" }, max_retries: 5 },
+      steps: {
+        author: {
+          name: "Author",
+          interactive: true,
+          runtime: { type: "claude-code" },
+          on_success: [{ step: "reviewer" }],
+        },
+        reviewer: {
+          name: "Reviewer",
+          interactive: false,
+          runtime: { type: "claude-code" },
+          on_success: [{ step: "gate" }],
+        },
+        gate: {
+          // Succeeds on the first pass, fails on the second to loop the
+          // workflow back to author → reviewer. Third pass stops the loop.
+          name: "Gate",
+          interactive: false,
+          runtime: { type: "shell", command: "echo" },
+          on_failure: [{ step: "author" }],
+        },
+      },
+    };
+
+    let gateHits = 0;
+    const adapters = new Map<string, RuntimeAdapter>([
+      ["claude-code", new MockAdapter(async (ctx) => {
+        invocations.push({
+          stepId: ctx.stepId,
+          sessionId: ctx.sessionId,
+          resume: !!ctx.resume,
+        });
+        // Mimic claude-code's contract: always return a session id.
+        return { success: true, outputs: {}, sessionId: ctx.sessionId ?? `session-${ctx.stepId}-${invocations.length}` };
+      })],
+      ["shell", new MockAdapter(async () => {
+        gateHits++;
+        return { success: gateHits !== 1, outputs: {} };
+      })],
+    ]);
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    await engine.run();
+
+    // Second reviewer invocation (the one triggered via author's on_success
+    // after the loopback) must NOT carry the stale sessionId from the first
+    // review. It should be undefined — a fresh, non-resuming run.
+    const reviewerRuns = invocations.filter((i) => i.stepId === "reviewer");
+    expect(reviewerRuns.length).toBeGreaterThanOrEqual(2);
+    expect(reviewerRuns[0].sessionId).toBeUndefined();
+    expect(reviewerRuns[0].resume).toBe(false);
+    expect(reviewerRuns[1].sessionId).toBeUndefined();
+    expect(reviewerRuns[1].resume).toBe(false);
+
+    // The author step, in contrast, IS re-entered via on_failure — so after
+    // its first run it should resume its prior session on the retry.
+    const authorRuns = invocations.filter((i) => i.stepId === "author");
+    expect(authorRuns.length).toBeGreaterThanOrEqual(2);
+    expect(authorRuns[0].resume).toBe(false);
+    expect(authorRuns[1].resume).toBe(true);
+    expect(authorRuns[1].sessionId).toBe("session-author-1");
+  });
 });

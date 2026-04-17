@@ -63,9 +63,23 @@ function getOwnerRepo(cwd: string): { owner: string; repo: string } {
   return { owner: match[1], repo: match[2] };
 }
 
+function currentBranch(cwd: string): string {
+  return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    cwd,
+    stdio: "pipe",
+  }).toString().trim();
+}
+
+/**
+ * Discover the PR for the current branch. Passing the branch name explicitly
+ * matters when the branch isn't tracking origin — e.g. pr-create pushed to
+ * an `aibot` remote on a fork. `gh pr view` without an argument looks up the
+ * PR via branch tracking, which returns "No PR found" in that setup.
+ */
 function getPrInfo(cwd: string, repoArgs: string[]): PrInfo {
+  const branch = currentBranch(cwd);
   return ghJson<PrInfo>(
-    ["pr", "view", ...repoArgs, "--json", "number,url,state,mergedAt"],
+    ["pr", "view", branch, ...repoArgs, "--json", "number,url,state,mergedAt"],
     cwd,
   );
 }

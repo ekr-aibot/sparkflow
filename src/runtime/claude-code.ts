@@ -80,16 +80,19 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push("--print", "--output-format", "json");
     }
 
-    // Session handling: on first run, mint a uuid and pass --session-id so we
-    // know it for future resumes. On recovery-retry, pass --resume <id> and
-    // send only the correction message (no original prompt).
+    // Session handling: on a fresh run, always mint a new uuid and pass
+    // --session-id so we can --resume it later. On recovery-retry (ctx.resume
+    // with ctx.sessionId), --resume <id> and skip the original prompt. We
+    // deliberately ignore ctx.sessionId when ctx.resume is false — reusing a
+    // prior id with --session-id would make claude-code reject the spawn as
+    // "already in use".
     let sessionId: string;
     const resuming = Boolean(ctx.resume && ctx.sessionId);
     if (resuming) {
       sessionId = ctx.sessionId!;
       args.push("--resume", sessionId);
     } else {
-      sessionId = ctx.sessionId ?? randomUUID();
+      sessionId = randomUUID();
       args.push("--session-id", sessionId);
     }
 

@@ -446,7 +446,11 @@ export class WorkflowEngine {
 
     // Build runtime context. If this is a retry of a claude-code step with
     // a captured session id, resume that conversation so the agent keeps its
-    // prior reasoning and tool history.
+    // prior reasoning and tool history. Otherwise, leave sessionId unset — the
+    // adapter will mint a fresh UUID. Passing the stale id on a non-resume
+    // re-invocation (e.g. when the step is re-entered via on_success after an
+    // upstream loop) would cause claude-code to reject the session-id as
+    // "already in use".
     const resuming = runtime.type === "claude-code" && status.retryCount > 0 && !!status.sessionId;
     const ctx: RuntimeContext = {
       stepId,
@@ -462,7 +466,7 @@ export class WorkflowEngine {
       ipcSocketPath,
       verbose: this.verbose,
       logger: this.logger,
-      sessionId: status.sessionId,
+      sessionId: resuming ? status.sessionId : undefined,
       resume: resuming,
       stepOutputs: this.stepOutputs,
       workflowDir: this.workflowDir,

@@ -33,7 +33,11 @@ function mockGh(responses: Map<string, unknown>) {
   mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
     const argsArr = args as string[];
 
-    // git remote get-url origin
+    // git rev-parse --abbrev-ref HEAD: pr-watcher passes the branch name
+    // explicitly to `gh pr view` so it works when the branch isn't tracking origin.
+    if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+      return Buffer.from("test-branch\n");
+    }
     if (cmd === "git" && argsArr?.[0] === "remote") {
       return Buffer.from("git@github.com:test-owner/test-repo.git\n");
     }
@@ -86,6 +90,9 @@ describe("PrWatcherAdapter", () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
 
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
       if (cmd === "git" && argsArr?.[0] === "remote") {
         return Buffer.from("https://github.com/test-owner/test-repo.git\n");
       }
@@ -134,6 +141,9 @@ describe("PrWatcherAdapter", () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
 
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
       if (cmd === "git" && argsArr?.[0] === "remote") {
         return Buffer.from("https://github.com/test-owner/test-repo.git\n");
       }
@@ -180,6 +190,9 @@ describe("PrWatcherAdapter", () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
 
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
       if (cmd === "git" && argsArr?.[0] === "remote") {
         return Buffer.from("https://github.com/test-owner/test-repo.git\n");
       }

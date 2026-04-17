@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 import WebSocket from "ws";
+import { readFileSync, writeFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { startWebServer, type WebServerHandle } from "./server-fixture.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 let server: WebServerHandle;
 
@@ -171,4 +177,22 @@ test("POST /api/jobs/unknown/restart → 400 with error", async () => {
 test("401 on /api/* without token", async () => {
   const res = await fetch(`${httpBase()}/api/jobs/bogus/log`);
   expect(res.status).toBe(401);
+});
+
+// ---- Live reload: edits to src/web/static/* are picked up without a rebuild ----
+
+test("serves app files from src/ — editing src is visible on next request", async () => {
+  const repoRoot = resolve(__dirname, "..", "..");
+  const srcPath = resolve(repoRoot, "src", "web", "static", "client.js");
+  const original = readFileSync(srcPath, "utf-8");
+  const marker = `/* live-reload-check-${Date.now()} */`;
+  writeFileSync(srcPath, `${original}\n${marker}\n`);
+  try {
+    const res = await fetch(`${httpBase()}/static/client.js`, { headers: { Cookie: cookieHeader() } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain(marker);
+  } finally {
+    writeFileSync(srcPath, original);
+  }
 });

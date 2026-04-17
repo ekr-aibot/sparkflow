@@ -12,7 +12,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { extname, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -27,6 +27,11 @@ const __dirname = dirname(__filename);
 // index.js lives at <pkg>/dist/src/web/. Package root is three up.
 const PKG_ROOT = resolve(__dirname, "..", "..", "..");
 const STATIC_DIR = resolve(__dirname, "static");
+// When running from a linked checkout, src/web/static/ is on disk alongside
+// the built dist/. Prefer it so edits are live-reloadable on a page refresh
+// without needing `npm run build`. For a packaged install that ships only
+// dist/, we fall back to STATIC_DIR.
+const SRC_STATIC_DIR = resolve(PKG_ROOT, "src", "web", "static");
 const NODE_MODULES = resolve(PKG_ROOT, "node_modules");
 
 const RING_BUFFER_BYTES = 64 * 1024;
@@ -117,18 +122,23 @@ function serveFile(res: ServerResponse, absPath: string): void {
   }
 }
 
+const APP_FILES = new Set(["index.html", "client.js", "style.css"]);
+const VENDOR_FILES: Record<string, string> = {
+  "xterm.css": join(NODE_MODULES, "@xterm", "xterm", "css", "xterm.css"),
+  "xterm.mjs": join(NODE_MODULES, "@xterm", "xterm", "lib", "xterm.mjs"),
+  "addon-fit.mjs": join(NODE_MODULES, "@xterm", "addon-fit", "lib", "addon-fit.mjs"),
+};
+
 function resolveStatic(name: string): string | null {
-  // Static files served from src/web/static/ and from node_modules/ for xterm assets.
   const safe = name.replace(/^\/+/, "").replace(/\.\./g, "");
-  const localCandidates: Record<string, string> = {
-    "index.html": join(STATIC_DIR, "index.html"),
-    "client.js": join(STATIC_DIR, "client.js"),
-    "style.css": join(STATIC_DIR, "style.css"),
-    "xterm.css": join(NODE_MODULES, "@xterm", "xterm", "css", "xterm.css"),
-    "xterm.mjs": join(NODE_MODULES, "@xterm", "xterm", "lib", "xterm.mjs"),
-    "addon-fit.mjs": join(NODE_MODULES, "@xterm", "addon-fit", "lib", "addon-fit.mjs"),
-  };
-  return localCandidates[safe] ?? null;
+  // App-owned files: prefer the live src/ copy when it exists (dev / linked
+  // installs) so refreshing the page picks up edits with no rebuild.
+  if (APP_FILES.has(safe)) {
+    const srcPath = join(SRC_STATIC_DIR, safe);
+    if (existsSync(srcPath)) return srcPath;
+    return join(STATIC_DIR, safe);
+  }
+  return VENDOR_FILES[safe] ?? null;
 }
 
 async function main(): Promise<void> {

@@ -10,19 +10,26 @@
     "sparkflow-run": "dist/src/cli/index.js"
   },
   "scripts": {
-    "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/",
+    "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/ && mkdir -p dist/src/web/static && cp src/web/static/* dist/src/web/static/",
     "check": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "dev": "tsc --watch"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "ajv": "^8.17.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.20.0",
     "zod": "^4.3.6"
   }
 }

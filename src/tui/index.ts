@@ -16,8 +16,13 @@ const __dirname = dirname(__filename);
 const MCP_BRIDGE_PATH = resolve(__dirname, "mcp-bridge.js");
 const STATUS_DISPLAY_PATH = resolve(__dirname, "status-display.js");
 const SUPERVISOR_PATH = resolve(__dirname, "supervisor.js");
+const WEB_ENTRY_PATH = resolve(__dirname, "..", "web", "index.js");
 
-const DEFAULT_SYSTEM_PROMPT = `You are running inside the sparkflow dashboard. The bottom tmux pane shows live status for all running workflow jobs.
+function defaultSystemPrompt(mode: "tmux" | "web"): string {
+  const surface = mode === "web"
+    ? "the status panel below the chat in your browser"
+    : "the bottom tmux pane";
+  return `You are running inside the sparkflow dashboard. ${cap(surface)} shows live status for all running workflow jobs.
 
 You have MCP tools from the sparkflow-dashboard server to manage workflow jobs:
 - start_workflow: Start a sparkflow-run job from a workflow JSON file. Returns a job ID.
@@ -32,13 +37,15 @@ The user has slash commands:
 - /sf-recover <job_id> — Diagnose a failed_waiting job, work with the user on a fix, then resolve it.
 - /sf-jobs — Quick summary of all running jobs (MCP prompt).
 
-If a job becomes blocked (needs user input), it will show in the status pane at the bottom of the terminal. The user will handle blocked jobs directly.
+If a job becomes blocked (needs user input), it will show in ${surface}. The user will handle blocked jobs directly.
 
-**IMPORTANT — failed jobs:** When a job enters \`FAILED_WAITING\` state in the status pane, the workflow has paused because a step opted in (via \`ask_on_failure\`) to ask for help rather than abort. Proactively run \`/sf-recover <job_id>\` without being asked. Work with the user to understand what went wrong and craft a concrete correction, then call \`answer_job_recovery\`. For a retry of a claude-code step, the agent's conversation resumes with your correction message — phrase it as a direct instruction. Jobs that simply fail (state \`FAILED\`) did not opt in; don't try to recover them.
+**IMPORTANT — failed jobs:** When a job enters \`FAILED_WAITING\` state in ${surface}, the workflow has paused because a step opted in (via \`ask_on_failure\`) to ask for help rather than abort. Proactively run \`/sf-recover <job_id>\` without being asked. Work with the user to understand what went wrong and craft a concrete correction, then call \`answer_job_recovery\`. For a retry of a claude-code step, the agent's conversation resumes with your correction message — phrase it as a direct instruction. Jobs that simply fail (state \`FAILED\`) did not opt in; don't try to recover them.
 
 Call \`sparkflow_capabilities\` for the full command/tool reference whenever you're unsure what sparkflow can do, and \`sparkflow_version\` to confirm which build is running.
 
 If a tool response starts with \`[sparkflow reloaded — documentation updates follow]\`, sparkflow's daemon restarted under hot-reload and the diff that follows shows what changed in the documentation. Read the diff and incorporate any capability changes before continuing.`;
+}
+function cap(s: string): string { return s[0].toUpperCase() + s.slice(1); }
 
 function usage(): never {
   console.log(`Usage: sparkflow [options]
@@ -48,10 +55,14 @@ Options:
   --chat-args <args>     Extra args for chat tool (comma-separated)
   --cwd <dir>            Working directory (default: current directory)
   --workflow <path>      Default workflow for /project:sf-dispatch (default: none)
-  --status-lines <n>     Height of status pane in lines (default: 5)
+  --status-lines <n>     Height of status pane in lines (default: 5; tmux only)
   --dev                  Hot-reload: run status daemon under a supervisor that
                          watches dist/ and respawns on change (run tsc --watch
-                         separately). In-flight jobs survive reloads.`);
+                         separately). In-flight jobs survive reloads. Tmux only.
+  --web                  Start the web UI alternative (browser-based dashboard,
+                         single shared token printed at startup) instead of the
+                         tmux dashboard.
+  --port <n>             Port for the web UI (default: ephemeral). Requires --web.`);
   process.exit(0);
 }
 
@@ -62,6 +73,8 @@ function parseArgs(argv: string[]): {
   workflow: string | null;
   statusLines: number;
   dev: boolean;
+  web: boolean;
+  port: number;
 } {
   let chatCommand = "claude";
   let chatArgs: string[] = [];
@@ -69,6 +82,10 @@ function parseArgs(argv: string[]): {
   let workflow: string | null = null;
   let statusLines = 5;
   let dev = process.env.SPARKFLOW_DEV === "1";
+  let web = false;
+  let port = 0;
+  let portSet = false;
+  let statusLinesSet = false;
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -98,17 +115,46 @@ function parseArgs(argv: string[]): {
         break;
       case "--status-lines":
         statusLines = parseInt(argv[++i] ?? "5", 10);
+        statusLinesSet = true;
         break;
       case "--dev":
         dev = true;
         break;
+      case "--web":
+        web = true;
+        break;
+      case "--port": {
+        const raw = argv[++i];
+        const n = parseInt(raw ?? "", 10);
+        if (Number.isNaN(n) || n < 0 || n > 65535) {
+          console.error(`Error: --port requires a number 0-65535, got: ${raw}`);
+          process.exit(1);
+        }
+        port = n;
+        portSet = true;
+        break;
+      }
       default:
         console.error(`Unknown option: ${argv[i]}`);
         process.exit(1);
     }
   }
 
-  return { chatCommand, chatArgs, cwd, workflow, statusLines, dev };
+  // Mutual-exclusion checks.
+  if (portSet && !web) {
+    console.error("Error: --port requires --web");
+    process.exit(1);
+  }
+  if (web && statusLinesSet) {
+    console.error("Error: --status-lines is tmux-only; not valid with --web");
+    process.exit(1);
+  }
+  if (web && dev) {
+    console.error("Error: --dev is not yet supported in web mode");
+    process.exit(1);
+  }
+
+  return { chatCommand, chatArgs, cwd, workflow, statusLines, dev, web, port };
 }
 
 function checkTmux(): void {
@@ -160,7 +206,7 @@ if (resolvedWorkflowPath) {
   args.workflow = workflowPath;
 }
 
-checkTmux();
+if (!args.web) checkTmux();
 
 // 1. Create temp dir for IPC socket and MCP config
 const tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-dashboard-"));
@@ -185,7 +231,8 @@ writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig));
 
 // 3. Write system prompt to temp file (avoids shell quoting issues with newlines)
 const systemPromptPath = join(tmpDir, "system-prompt.txt");
-writeFileSync(systemPromptPath, DEFAULT_SYSTEM_PROMPT);
+const systemPromptText = defaultSystemPrompt(args.web ? "web" : "tmux");
+writeFileSync(systemPromptPath, systemPromptText);
 
 // 4. Inject slash commands into .claude/commands/ in the working directory
 const SLASH_COMMANDS: Record<string, string> = {
@@ -251,8 +298,9 @@ const buildStatusCmd = (session: string) =>
 const sessionName = `sparkflow-${randomBytes(4).toString("hex")}`;
 const attachName = `${sessionName}-attach`;
 
-// sf-quit needs the session name
-SLASH_COMMANDS["sf-quit"] = `Shut down the sparkflow dashboard session.
+// sf-quit needs the session name; web mode has no tmux session to kill — skip it.
+if (!args.web) {
+  SLASH_COMMANDS["sf-quit"] = `Shut down the sparkflow dashboard session.
 
 Run this command:
 \`\`\`
@@ -260,6 +308,7 @@ tmux kill-session -t '${sessionName}'
 \`\`\`
 
 This will terminate all running jobs and close the dashboard.`;
+}
 
 // Write slash command files to .claude/commands/
 const commandsDir = join(args.cwd, ".claude", "commands");
@@ -278,50 +327,71 @@ const cols = process.stdout.columns || 80;
 const rows = process.stdout.rows || 24;
 
 try {
-  // Create and attach to session in one shot.
-  // tmux new-session without -d attaches immediately and blocks.
-  // The chat command runs in the initial pane.
-  // We use a hook to split the status pane once the session is ready.
+  if (args.web) {
+    // Web mode: spawn the web server directly, passing the chat command + its
+    // args so the server can exec it under a PTY. No shell, so we pass the
+    // system prompt text as a literal arg rather than via $(cat …).
+    const chatToolArgs = [
+      ...args.chatArgs,
+      "--mcp-config", mcpConfigPath,
+      "--append-system-prompt", systemPromptText,
+    ];
+    const result = spawnSync(
+      process.execPath,
+      [
+        WEB_ENTRY_PATH,
+        socketPath,
+        args.cwd,
+        String(args.port),
+        args.chatCommand,
+        ...chatToolArgs,
+      ],
+      { cwd: args.cwd, stdio: "inherit" },
+    );
+    process.exitCode = result.status ?? 0;
+  } else {
+    // Tmux mode (existing flow).
+    execFileSync("tmux", [
+      "new-session", "-d",
+      "-s", sessionName,
+      "-x", String(cols),
+      "-y", String(rows),
+      "sh", "-c", chatCmd,
+    ], { cwd: args.cwd, stdio: "pipe" });
 
-  // Create session detached, split, then attach
-  execFileSync("tmux", [
-    "new-session", "-d",
-    "-s", sessionName,
-    "-x", String(cols),
-    "-y", String(rows),
-    "sh", "-c", chatCmd,
-  ], { cwd: args.cwd, stdio: "pipe" });
+    // Split horizontally to create status pane (bottom)
+    execFileSync("tmux", [
+      "split-window", "-v",
+      "-t", sessionName,
+      "-l", String(args.statusLines),
+      "sh", "-c", buildStatusCmd(sessionName),
+    ], { cwd: args.cwd, stdio: "pipe" });
 
-  // Split horizontally to create status pane (bottom)
-  execFileSync("tmux", [
-    "split-window", "-v",
-    "-t", sessionName,
-    "-l", String(args.statusLines),
-    "sh", "-c", buildStatusCmd(sessionName),
-  ], { cwd: args.cwd, stdio: "pipe" });
+    // Focus the top pane (chat)
+    execFileSync("tmux", ["select-pane", "-t", `${sessionName}:.0`], { stdio: "pipe" });
 
-  // Focus the top pane (chat)
-  execFileSync("tmux", ["select-pane", "-t", `${sessionName}:.0`], { stdio: "pipe" });
+    // Attach by creating a grouped session that shares the same windows.
+    // This works both inside and outside tmux. The grouped session is
+    // destroyed when we detach/exit, but the original session persists
+    // until its processes end (handled by cleanup in finally block).
+    const result = spawnSync("tmux", [
+      "new-session", "-s", attachName, "-t", sessionName,
+    ], {
+      stdio: "inherit",
+    });
 
-  // Attach by creating a grouped session that shares the same windows.
-  // This works both inside and outside tmux. The grouped session is
-  // destroyed when we detach/exit, but the original session persists
-  // until its processes end (handled by cleanup in finally block).
-  const result = spawnSync("tmux", [
-    "new-session", "-s", attachName, "-t", sessionName,
-  ], {
-    stdio: "inherit",
-  });
-
-  process.exitCode = result.status ?? 0;
+    process.exitCode = result.status ?? 0;
+  }
 } finally {
-  // Cleanup: kill session if still alive, remove temp files
-  try {
-    execFileSync("tmux", ["kill-session", "-t", attachName], { stdio: "pipe" });
-  } catch { /* already dead */ }
-  try {
-    execFileSync("tmux", ["kill-session", "-t", sessionName], { stdio: "pipe" });
-  } catch { /* already dead */ }
+  // Cleanup: kill tmux sessions if any, remove temp files
+  if (!args.web) {
+    try {
+      execFileSync("tmux", ["kill-session", "-t", attachName], { stdio: "pipe" });
+    } catch { /* already dead */ }
+    try {
+      execFileSync("tmux", ["kill-session", "-t", sessionName], { stdio: "pipe" });
+    } catch { /* already dead */ }
+  }
   try { unlinkSync(mcpConfigPath); } catch { /* ignore */ }
   try { unlinkSync(systemPromptPath); } catch { /* ignore */ }
   try { unlinkSync(socketPath); } catch { /* ignore */ }

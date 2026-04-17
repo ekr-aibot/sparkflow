@@ -18,8 +18,26 @@ sparkflow [options]
 | `--chat-args <args>` | Extra args for the chat tool, comma-separated. |
 | `--cwd <dir>` | Working directory. Default: current directory. |
 | `--workflow <path>` | Default workflow for `/project:sf-dispatch`. May be a path or a bare name resolved as `.sparkflow/workflows/<name>.json`. |
-| `--status-lines <n>` | Height of the status pane. Default: `5`. |
-| `--dev` | Hot-reload mode: run the status daemon under a supervisor that watches `dist/` and respawns on change. In-flight jobs survive reloads. See `doc/hot-reload.md`. |
+| `--status-lines <n>` | Height of the status pane (tmux only). Default: `5`. |
+| `--dev` | Hot-reload mode: run the status daemon under a supervisor that watches `dist/` and respawns on change. In-flight jobs survive reloads. Tmux only. See `doc/hot-reload.md`. |
+| `--web` | Start the **web UI** instead of tmux: bind a localhost HTTP+WebSocket server and print a URL with a one-time access token. The chat tool runs as a real PTY-attached process whose I/O is proxied to the browser; the status panel below it lives-updates over Server-Sent Events. Mutually exclusive with `--status-lines` and `--dev`. |
+| `--port <n>` | Port for the web UI (default: ephemeral, OS-assigned). Requires `--web`. |
+
+#### `sparkflow --web` — browser variant
+
+`sparkflow --web` is an alternative to the tmux dashboard for users who don't want to run a multiplexer. On startup it prints:
+
+```
+[sparkflow web] ready at http://127.0.0.1:<port>/?token=<hex>
+```
+
+Open the URL once: the server validates the token, sets a cookie, and redirects to `/`. Subsequent requests (page reloads, the SSE feed, the chat WebSocket upgrade) are authorized by the cookie. The token regenerates on every launch — old browser tabs from a prior session won't authenticate.
+
+The chat panel is a real `claude` (or whatever `--chat-command` you set) running in a pseudo-tty on the server; bytes are proxied byte-for-byte to xterm.js in the browser. Resizing the window resizes the PTY. Refreshing the page replays the recent ring buffer (~64 KB) so you don't lose the last screen of context. Multiple tabs can attach to the same chat — they all see the same output.
+
+The status panel below the chat mirrors what the tmux pane would show: live job list with state, current step, and elapsed time.
+
+Same MCP tools and slash commands as tmux mode — the only difference is the surface. `/sf-quit` is omitted in web mode (Ctrl-C the `sparkflow --web` server console to quit).
 
 ### `sparkflow-run` — workflow runner
 

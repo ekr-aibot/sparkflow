@@ -1,0 +1,102 @@
+:root {
+  color-scheme: dark;
+  --bg: #1a1b26;
+  --bg-alt: #24283b;
+  --fg: #c0caf5;
+  --fg-dim: #565f89;
+  --accent: #7aa2f7;
+  --green: #9ece6a;
+  --yellow: #e0af68;
+  --red: #f7768e;
+  --magenta: #bb9af7;
+  --cyan: #7dcfff;
+  --border: #292e42;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+#app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+}
+
+#header {
+  padding: 6px 10px;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+#chat {
+  background: #000;
+  overflow: hidden;
+  padding: 4px;
+}
+
+#chat .xterm,
+#chat .xterm-viewport {
+  width: 100%;
+  height: 100%;
+}
+
+#status {
+  background: var(--bg-alt);
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+#status-title {
+  margin: 0 0 4px 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  letter-spacing: 0.1em;
+}
+
+#job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.job {
+  display: grid;
+  grid-template-columns: 90px 1fr auto auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.job .id { color: var(--fg-dim); }
+.job .name { color: var(--cyan); overflow: hidden; text-overflow: ellipsis; }
+.job .summary { color: var(--fg); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.job .elapsed { color: var(--fg-dim); }
+
+.job .state { font-weight: 600; }
+.state-running { color: var(--yellow); }
+.state-succeeded { color: var(--green); }
+.state-failed,
+.state-failed_waiting { color: var(--red); }
+.state-blocked { color: var(--magenta); }
+
+.empty {
+  color: var(--fg-dim);
+  font-style: italic;
+  padding: 4px 0;
+}

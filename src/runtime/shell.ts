@@ -16,15 +16,27 @@ export class ShellAdapter implements RuntimeAdapter {
 
     const stdio = ctx.interactive ? "inherit" as const : "pipe" as const;
 
-    const args = (runtime.args ?? []).map((arg) => {
-      if (arg.startsWith("./")) {
-        return pathResolve(ctx.workflowDir ?? ctx.cwd, arg);
+    let command = runtime.command;
+    if (command.startsWith("./")) {
+      command = pathResolve(ctx.workflowDir ?? ctx.cwd, command);
+      if (command.includes(" ") && !command.startsWith("\"")) {
+        command = `"${command}"`;
       }
-      return arg;
+    }
+
+    const args = (runtime.args ?? []).map((arg) => {
+      let resolved = arg;
+      if (arg.startsWith("./")) {
+        resolved = pathResolve(ctx.workflowDir ?? ctx.cwd, arg);
+      }
+      if (resolved.includes(" ") && !resolved.startsWith("\"") && !resolved.startsWith("'")) {
+        return `"${resolved}"`;
+      }
+      return resolved;
     });
 
     return new Promise<RuntimeResult>((resolve) => {
-      const child = spawn(runtime.command, args, {
+      const child = spawn(command, args, {
         cwd: runtime.cwd ?? ctx.cwd,
         env,
         stdio,

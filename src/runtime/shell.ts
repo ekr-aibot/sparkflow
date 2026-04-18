@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolve as pathResolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 
 export class ShellAdapter implements RuntimeAdapter {
@@ -15,8 +16,15 @@ export class ShellAdapter implements RuntimeAdapter {
 
     const stdio = ctx.interactive ? "inherit" as const : "pipe" as const;
 
+    const args = (runtime.args ?? []).map((arg) => {
+      if (arg.startsWith("./")) {
+        return pathResolve(ctx.workflowDir ?? ctx.cwd, arg);
+      }
+      return arg;
+    });
+
     return new Promise<RuntimeResult>((resolve) => {
-      const child = spawn(runtime.command, runtime.args ?? [], {
+      const child = spawn(runtime.command, args, {
         cwd: runtime.cwd ?? ctx.cwd,
         env,
         stdio,

@@ -382,6 +382,14 @@ export class WorkflowEngine {
 
     // Resolve env
     const env: Record<string, string> = {};
+
+    // Auto-inject SPARKFLOW_* env vars from project config
+    if (this.config?.git) {
+      if (this.config.git.pr_repo) env.SPARKFLOW_PR_REPO = this.config.git.pr_repo;
+      if (this.config.git.push_remote) env.SPARKFLOW_PUSH_REMOTE = this.config.git.push_remote;
+      if (this.config.git.base) env.SPARKFLOW_BASE_BRANCH = this.config.git.base;
+    }
+
     if (step.env) {
       try {
         for (const [key, value] of Object.entries(step.env)) {

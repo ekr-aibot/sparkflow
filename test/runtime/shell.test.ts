@@ -96,4 +96,40 @@ describe("ShellAdapter", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("Timed out");
   }, 10000);
+
+  it("resolves arguments starting with ./ relative to workflowDir", async () => {
+    const ctx = makeCtx({
+      step: {
+        name: "Test",
+        interactive: false,
+        outputs: { arg: { type: "text" } },
+      },
+      runtime: { type: "shell", command: "echo", args: ["./foo.sh"] },
+      workflowDir: "/tmp/workflow",
+    });
+
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    // On Linux/macOS, pathResolve("/tmp/workflow", "./foo.sh") is "/tmp/workflow/foo.sh"
+    expect(result.outputs.arg).toContain("/tmp/workflow/foo.sh");
+  });
+
+  it("resolves arguments starting with ./ relative to cwd if workflowDir is missing", async () => {
+    const existingDir = process.cwd();
+    const ctx = makeCtx({
+      step: {
+        name: "Test",
+        interactive: false,
+        outputs: { arg: { type: "text" } },
+      },
+      runtime: { type: "shell", command: "echo", args: ["./bar.sh"] },
+      cwd: existingDir,
+      workflowDir: undefined,
+    });
+
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs.arg).toContain(existingDir);
+    expect(result.outputs.arg).toContain("bar.sh");
+  });
 });

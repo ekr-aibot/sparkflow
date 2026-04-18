@@ -163,6 +163,10 @@ const preferences: AppPreferences = {
 if (preferences.jobs === "gemini") process.env.SPARKFLOW_LLM = "gemini";
 else delete process.env.SPARKFLOW_LLM;
 
+// Set once the PTY bridge is connected. Lets updatePreferences ask the
+// supervisor to respawn the chat PTY under a new tool.
+let currentBridge: PtyBridge | null = null;
+
 function getPreferences(): AppPreferences {
   return { ...preferences };
 }
@@ -173,7 +177,9 @@ function updatePreferences(body: unknown): AppPreferences {
   if (patch.chat !== undefined) {
     if (patch.chat !== "claude" && patch.chat !== "gemini") throw new Error(`invalid chat: ${String(patch.chat)}`);
     preferences.chat = patch.chat;
-    // TODO(chat-runtime-switch): signal the supervisor to respawn the PTY.
+    // Tell the supervisor to kill the current PTY and respawn under the new
+    // tool. The `chat_tool` echo frame will confirm.
+    currentBridge?.setChatTool(patch.chat);
   }
   if (patch.jobs !== undefined) {
     if (patch.jobs !== "claude" && patch.jobs !== "gemini") throw new Error(`invalid jobs: ${String(patch.jobs)}`);
@@ -241,25 +247,69 @@ function resolveStatic(name: string): string | null {
  * JSON frame protocol so WS handlers just see `onData(bytes)` / `write(bytes)`.
  */
 interface PtyBridge {
-  // Latest snapshot (ring buffer replay) received from the supervisor.
-  getSnapshot(): Buffer;
-  // Stream of new bytes from the PTY.
+  // Stream of PTY bytes from the supervisor. Both the initial ring-buffer
+  // snapshot and live pty output arrive via this single channel, so callers
+  // can build a consistent ring of everything observed.
   onData(cb: (chunk: Buffer) => void): void;
   // Write bytes into the PTY.
   write(bytes: Buffer): void;
   // Ask the PTY to resize.
   resize(cols: number, rows: number): void;
+  // Ask the supervisor to respawn the PTY under a different chat tool.
+  setChatTool(tool: LlmKind): void;
+  // Register a callback for when the supervisor reports the currently-running
+  // chat tool (fires on connect with the current tool, again after any switch).
+  onChatTool(cb: (tool: LlmKind) => void): void;
 }
 
 function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
   return new Promise((resolve, reject) => {
     const sock: Socket = createConnection(socketPath);
-    let snapshot = Buffer.alloc(0);
     const dataCbs: Array<(b: Buffer) => void> = [];
+    const toolCbs: Array<(t: LlmKind) => void> = [];
+    // Buffer any PTY bytes / chat-tool signals that arrive before the caller
+    // registers callbacks, then flush them on registration. Without this we
+    // race against the supervisor — the initial snapshot can arrive after
+    // sock.on("connect") fires but before main() has installed its onData.
+    const pendingData: Buffer[] = [];
+    const pendingTools: LlmKind[] = [];
     let buf = "";
-    let resolved = false;
+
+    // Resolve as soon as the socket is connected. Data-flush-on-registration
+    // (above) makes the exact moment of resolution non-critical.
+    const bridge: PtyBridge = {
+      onData: (cb) => {
+        dataCbs.push(cb);
+        if (pendingData.length > 0) {
+          const queued = pendingData.splice(0, pendingData.length);
+          for (const b of queued) cb(b);
+        }
+      },
+      onChatTool: (cb) => {
+        toolCbs.push(cb);
+        if (pendingTools.length > 0) {
+          const queued = pendingTools.splice(0, pendingTools.length);
+          for (const t of queued) cb(t);
+        }
+      },
+      write: (bytes) => {
+        sock.write(JSON.stringify({ type: "pty_write", bytes: bytes.toString("base64") }) + "\n");
+      },
+      resize: (cols, rows) => {
+        sock.write(JSON.stringify({ type: "pty_resize", cols, rows }) + "\n");
+      },
+      setChatTool: (tool) => {
+        sock.write(JSON.stringify({ type: "set_chat_tool", tool }) + "\n");
+      },
+    };
 
     sock.setEncoding("utf-8");
+    sock.on("connect", () => resolve(bridge));
+    sock.on("error", (err) => reject(err));
+    sock.on("close", () => {
+      console.error("[sparkflow server] lost PTY bridge — supervisor gone; exiting");
+      process.exit(0);
+    });
     sock.on("data", (chunk) => {
       buf += chunk as unknown as string;
       let nl: number;
@@ -268,42 +318,20 @@ function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         try {
-          const msg = JSON.parse(line) as { type?: string; bytes?: string };
-          if (msg.type === "snapshot" && typeof msg.bytes === "string") {
-            snapshot = Buffer.from(msg.bytes, "base64");
-            if (!resolved) { resolved = true; resolve(bridge); }
-          } else if (msg.type === "pty_data" && typeof msg.bytes === "string") {
-            if (!resolved) { resolved = true; resolve(bridge); }
+          const msg = JSON.parse(line) as { type?: string; bytes?: string; tool?: string };
+          // Snapshot and pty_data both deliver PTY bytes — route them to
+          // the same callbacks so the server just has to maintain one ring.
+          if ((msg.type === "snapshot" || msg.type === "pty_data") && typeof msg.bytes === "string") {
             const b = Buffer.from(msg.bytes, "base64");
-            for (const cb of dataCbs) cb(b);
+            if (dataCbs.length === 0) pendingData.push(b);
+            else for (const cb of dataCbs) cb(b);
+          } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+            if (toolCbs.length === 0) pendingTools.push(msg.tool);
+            else for (const cb of toolCbs) cb(msg.tool);
           }
         } catch { /* ignore malformed line */ }
       }
     });
-    sock.on("error", (err) => {
-      if (!resolved) { resolved = true; reject(err); }
-    });
-    sock.on("close", () => {
-      console.error("[sparkflow server] lost PTY bridge — supervisor gone; exiting");
-      process.exit(0);
-    });
-
-    const bridge: PtyBridge = {
-      getSnapshot: () => snapshot,
-      onData: (cb) => { dataCbs.push(cb); },
-      write: (bytes) => {
-        sock.write(JSON.stringify({ type: "pty_write", bytes: bytes.toString("base64") }) + "\n");
-      },
-      resize: (cols, rows) => {
-        sock.write(JSON.stringify({ type: "pty_resize", cols, rows }) + "\n");
-      },
-    };
-
-    // If the supervisor sends no initial snapshot (empty ring on first connect),
-    // resolve after a short grace period so startup isn't blocked indefinitely.
-    setTimeout(() => {
-      if (!resolved) { resolved = true; resolve(bridge); }
-    }, 250);
   });
 }
 
@@ -324,6 +352,7 @@ async function main(): Promise<void> {
   await ipcServer.listen();
 
   const bridge = await connectPtyBridge(args.ptyBridgePath);
+  currentBridge = bridge;
 
   const server = createServer((req, res) => {
     const url = req.url ?? "/";
@@ -447,18 +476,38 @@ async function main(): Promise<void> {
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
 
-  // Fan PTY bytes out to all WS clients.
+  // Mirror the supervisor's PTY stream into a server-side ring buffer so
+  // new WS connections see up-to-date output (not just the initial bridge
+  // snapshot). Clear the ring when the supervisor announces a chat-tool
+  // switch, so browsers connecting after the switch don't see the old
+  // conversation's trailing bytes.
+  const RING_CAP = 64 * 1024;
+  let ring = Buffer.alloc(0);
+
   bridge.onData((chunk) => {
+    ring = ring.length + chunk.length <= RING_CAP
+      ? Buffer.concat([ring, chunk])
+      : Buffer.concat([ring.subarray(ring.length + chunk.length - RING_CAP), chunk]);
     const payload = JSON.stringify({ type: "data", bytes: chunk.toString("base64") });
     for (const ws of wss.clients) {
       if (ws.readyState === ws.OPEN) ws.send(payload);
     }
   });
 
+  // The supervisor sends a `chat_tool` frame on every bridge connection to
+  // sync state across server-child reloads, and again when the user flips the
+  // tool at runtime. Only clear the ring on an actual switch — not on the
+  // initial sync frame, which would wipe the snapshot we just received.
+  let seenInitialTool = false;
+  bridge.onChatTool((tool) => {
+    preferences.chat = tool;
+    if (seenInitialTool) ring = Buffer.alloc(0);
+    seenInitialTool = true;
+  });
+
   wss.on("connection", (ws: WebSocket) => {
-    const snap = bridge.getSnapshot();
-    if (snap.length > 0) {
-      ws.send(JSON.stringify({ type: "data", bytes: snap.toString("base64") }));
+    if (ring.length > 0) {
+      ws.send(JSON.stringify({ type: "data", bytes: ring.toString("base64") }));
     }
     ws.on("message", (raw) => {
       let parsed: unknown;

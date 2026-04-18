@@ -74,6 +74,7 @@ Options:
 function parseArgs(argv: string[]): {
   chatTool: "claude" | "gemini";
   chatCommand: string;
+  chatCommandSet: boolean;
   chatArgs: string[];
   cwd: string;
   workflow: string | null;
@@ -176,7 +177,7 @@ function parseArgs(argv: string[]): {
     chatCommand = chatTool === "gemini" ? "npx" : "claude";
   }
 
-  return { chatTool, chatCommand, chatArgs, cwd, workflow, statusLines, dev, web, port };
+  return { chatTool, chatCommand, chatCommandSet, chatArgs, cwd, workflow, statusLines, dev, web, port };
 }
 
 function checkTmux(): void {
@@ -301,8 +302,9 @@ The status pane at the bottom of the terminal will show live progress. Use /proj
 // Shell-escape a single argument (used for tmux sh -c strings below).
 const sq = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
-// 4. Build chat command — tool-specific (claude gets flags, gemini gets files).
-const chatSpawn = buildChatSpawn({
+// 4. Build chat command for tmux mode. Web mode defers this to the supervisor
+// so the chat tool can be switched at runtime (via the web UI).
+const chatSpawn = args.web ? null : buildChatSpawn({
   tool: args.chatTool,
   command: args.chatCommand,
   chatArgs: args.chatArgs,
@@ -313,7 +315,7 @@ const chatSpawn = buildChatSpawn({
   systemPromptPath,
   cwd: args.cwd,
 });
-const chatCmd = chatSpawn.shellCmd;
+const chatCmd = chatSpawn ? chatSpawn.shellCmd : "";
 
 // 5. Build status display command (session name added after it's generated below).
 // In --dev mode we route through the supervisor so code changes under dist/ auto-reload.
@@ -355,25 +357,24 @@ const rows = process.stdout.rows || 24;
 
 try {
   if (args.web) {
-    // Web mode: spawn the web server directly, passing the chat command + its
-    // tool-appropriate args so the server can exec it under a PTY.
+    // Web mode: pass raw chat-tool ingredients to the supervisor via env so
+    // it can call buildChatSpawn itself — this is what lets the user switch
+    // chat tools at runtime via the web UI (the supervisor respawns the PTY
+    // with the new tool's config).
     const webEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
-      // Tell the web server which LLM the chat is running under so the
-      // preferences API can report an accurate initial value.
       SPARKFLOW_WEB_CHAT_TOOL: args.chatTool,
+      SPARKFLOW_WEB_CHAT_COMMAND: args.chatCommand,
+      SPARKFLOW_WEB_CHAT_COMMAND_OVERRIDDEN: args.chatCommandSet ? "1" : "",
+      SPARKFLOW_WEB_CHAT_ARGS_JSON: JSON.stringify(args.chatArgs),
+      SPARKFLOW_WEB_MCP_CONFIG_PATH: mcpConfigPath,
+      SPARKFLOW_WEB_SYSTEM_PROMPT_PATH: systemPromptPath,
+      SPARKFLOW_WEB_MCP_SERVER_NAME: "sparkflow-dashboard",
       ...(args.dev ? { SPARKFLOW_WEB_DEV: "1" } : {}),
     };
     const result = spawnSync(
       process.execPath,
-      [
-        WEB_ENTRY_PATH,
-        socketPath,
-        args.cwd,
-        String(args.port),
-        chatSpawn.cmd,
-        ...chatSpawn.args,
-      ],
+      [WEB_ENTRY_PATH, socketPath, args.cwd, String(args.port)],
       { cwd: args.cwd, stdio: "inherit", env: webEnv },
     );
     process.exitCode = result.status ?? 0;
@@ -420,7 +421,8 @@ try {
       execFileSync("tmux", ["kill-session", "-t", sessionName], { stdio: "pipe" });
     } catch { /* already dead */ }
   }
-  try { chatSpawn.cleanup(); } catch { /* ignore */ }
+  // Web mode: the supervisor owns chat-tool file cleanup. Tmux mode: we do.
+  if (chatSpawn) { try { chatSpawn.cleanup(); } catch { /* ignore */ } }
   try { unlinkSync(mcpConfigPath); } catch { /* ignore */ }
   try { unlinkSync(systemPromptPath); } catch { /* ignore */ }
   try { unlinkSync(socketPath); } catch { /* ignore */ }

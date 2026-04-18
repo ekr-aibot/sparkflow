@@ -10,22 +10,31 @@
  *   - the auth token (so the cookie stays valid across restarts),
  *   - the PTY-bridge unix socket that the child connects to.
  *
+ * The supervisor also calls `buildChatSpawn` internally (rather than taking
+ * pre-cooked args from the TUI) so it can respawn the PTY with a different
+ * chat tool when the user flips the chat-runtime dropdown — the server
+ * child sends a `set_chat_tool` frame over the PTY bridge; the supervisor
+ * kills the current PTY, runs the old tool's cleanup, clears the ring
+ * buffer, and spawns a fresh PTY under the new tool.
+ *
  * Spawns src/web/server.js as a child process — that's where HTTP / WS /
  * SSE / JobManager / static serving lives. In --dev mode (SPARKFLOW_WEB_DEV=1)
- * we watch dist/src/web/ and kill the child whenever a file changes; an
- * `exit` handler respawns it.
+ * we watch dist/src/web/ and kill the child whenever a file changes.
  *
- * Invocation (from src/tui/index.ts): index <ipc-socket> <cwd> <port> <chat-cmd> [chat-args...]
+ * Invocation (from src/tui/index.ts): index <ipc-socket> <cwd> <port>
+ * Chat-tool ingredients (tool, command, args, mcp config path, system prompt
+ * path, etc.) are passed via SPARKFLOW_WEB_* env vars.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
-import { mkdtempSync, unlinkSync, watch as fsWatch, type FSWatcher } from "node:fs";
+import { mkdtempSync, readFileSync, unlinkSync, watch as fsWatch, type FSWatcher } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { spawn as ptySpawn, type IPty } from "node-pty";
+import { buildChatSpawn, type ChatTool, type McpServerSpec } from "../tui/chat-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,27 +43,69 @@ const WATCH_DIR = resolve(__dirname); // dist/src/web/
 
 const RING_BUFFER_BYTES = 64 * 1024;
 
-interface Args {
-  socketPath: string;
-  cwd: string;
-  port: number;
-  chatCmd: string;
-  chatArgs: string[];
-}
+interface Args { socketPath: string; cwd: string; port: number; }
 
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
-  if (argv.length < 4) {
-    console.error("Usage: index <ipc-socket> <cwd> <port> <chat-cmd> [chat-args...]");
+  if (argv.length < 3) {
+    console.error("Usage: index <ipc-socket> <cwd> <port>");
     process.exit(1);
   }
-  const [socketPath, cwd, portStr, chatCmd, ...chatArgs] = argv;
+  const [socketPath, cwd, portStr] = argv;
   const port = parseInt(portStr, 10);
   if (Number.isNaN(port) || port < 0) {
     console.error(`Invalid port: ${portStr}`);
     process.exit(1);
   }
-  return { socketPath, cwd, port, chatCmd, chatArgs };
+  return { socketPath, cwd, port };
+}
+
+interface ChatIngredients {
+  chatArgs: string[];
+  mcpServerName: string;
+  mcpServerSpec: McpServerSpec;
+  mcpConfigPath: string;
+  systemPromptText: string;
+  systemPromptPath: string;
+  commandOverride: string | null; // user's --chat-command, or null if not set
+}
+
+function readChatIngredients(cwd: string): ChatIngredients {
+  const mcpConfigPath = process.env.SPARKFLOW_WEB_MCP_CONFIG_PATH;
+  const systemPromptPath = process.env.SPARKFLOW_WEB_SYSTEM_PROMPT_PATH;
+  if (!mcpConfigPath || !systemPromptPath) {
+    console.error("[sparkflow web] missing SPARKFLOW_WEB_MCP_CONFIG_PATH or SPARKFLOW_WEB_SYSTEM_PROMPT_PATH");
+    process.exit(1);
+  }
+  const mcpServerName = process.env.SPARKFLOW_WEB_MCP_SERVER_NAME ?? "sparkflow-dashboard";
+  let chatArgs: string[] = [];
+  try {
+    const parsed = JSON.parse(process.env.SPARKFLOW_WEB_CHAT_ARGS_JSON ?? "[]");
+    if (Array.isArray(parsed)) chatArgs = parsed.map(String);
+  } catch { /* keep default */ }
+  const mcpRaw = readFileSync(mcpConfigPath, "utf-8");
+  const mcp = JSON.parse(mcpRaw) as { mcpServers?: Record<string, McpServerSpec> };
+  const mcpServerSpec = mcp.mcpServers?.[mcpServerName];
+  if (!mcpServerSpec) {
+    console.error(`[sparkflow web] MCP config at ${mcpConfigPath} is missing server "${mcpServerName}"`);
+    process.exit(1);
+  }
+  const systemPromptText = readFileSync(systemPromptPath, "utf-8");
+  const commandOverride = process.env.SPARKFLOW_WEB_CHAT_COMMAND_OVERRIDDEN === "1"
+    ? (process.env.SPARKFLOW_WEB_CHAT_COMMAND ?? null)
+    : null;
+  void cwd;
+  return { chatArgs, mcpServerName, mcpServerSpec, mcpConfigPath, systemPromptText, systemPromptPath, commandOverride };
+}
+
+function defaultCommandFor(tool: ChatTool, override: string | null): string {
+  if (override) return override;
+  return tool === "gemini" ? "npx" : "claude";
+}
+
+function validInitialTool(): ChatTool {
+  const v = process.env.SPARKFLOW_WEB_CHAT_TOOL;
+  return v === "gemini" ? "gemini" : "claude";
 }
 
 /**
@@ -85,34 +136,87 @@ async function main(): Promise<void> {
   const workDir = mkdtempSync(join(tmpdir(), "sparkflow-web-"));
   const ptyBridgePath = join(workDir, "pty.sock");
 
-  // --- Spawn claude PTY (persistent). -----------------------------------
-  const pty: IPty = ptySpawn(args.chatCmd, args.chatArgs, {
-    name: "xterm-256color",
-    cols: 100,
-    rows: 30,
-    cwd: args.cwd,
-    env: process.env as Record<string, string>,
-  });
+  const ingredients = readChatIngredients(args.cwd);
 
+  // --- Chat PTY state. Replaceable at runtime via `set_chat_tool`. --------
+  let currentTool: ChatTool = validInitialTool();
+  let pty: IPty | null = null;
+  let currentCleanup: (() => void) | null = null;
+  let switchingTool = false;
   let ring = Buffer.alloc(0);
   const ptyClients = new Set<Socket>();
 
-  pty.onData((data) => {
-    const chunk = Buffer.from(data, "utf-8");
-    ring = ring.length + chunk.length <= RING_BUFFER_BYTES
-      ? Buffer.concat([ring, chunk])
-      : Buffer.concat([ring.subarray(ring.length + chunk.length - RING_BUFFER_BYTES), chunk]);
-    const frame = JSON.stringify({ type: "pty_data", bytes: chunk.toString("base64") }) + "\n";
+  function broadcastPtyFrame(frame: string): void {
     for (const c of ptyClients) {
       try { c.write(frame); } catch { /* ignore */ }
     }
-  });
+  }
 
-  pty.onExit(({ exitCode }) => {
-    console.error(`[sparkflow web] chat process exited (code=${exitCode}); shutting down`);
-    // Treat the PTY dying like a user quit: tear down running workflows too.
-    shutdown(0, "SIGINT");
-  });
+  function wirePty(nextPty: IPty): void {
+    nextPty.onData((data) => {
+      const chunk = Buffer.from(data, "utf-8");
+      ring = ring.length + chunk.length <= RING_BUFFER_BYTES
+        ? Buffer.concat([ring, chunk])
+        : Buffer.concat([ring.subarray(ring.length + chunk.length - RING_BUFFER_BYTES), chunk]);
+      broadcastPtyFrame(JSON.stringify({ type: "pty_data", bytes: chunk.toString("base64") }) + "\n");
+    });
+    nextPty.onExit(({ exitCode }) => {
+      if (switchingTool || pty !== nextPty) {
+        // Expected — we killed it to switch. The replacement PTY is already
+        // being wired up (or will be) in switchChatTool.
+        return;
+      }
+      console.error(`[sparkflow web] chat process exited (code=${exitCode}); shutting down`);
+      shutdown(0, "SIGINT");
+    });
+  }
+
+  function spawnChatPty(tool: ChatTool): void {
+    const spawn = buildChatSpawn({
+      tool,
+      command: defaultCommandFor(tool, ingredients.commandOverride),
+      chatArgs: ingredients.chatArgs,
+      mcpServerSpec: ingredients.mcpServerSpec,
+      mcpServerName: ingredients.mcpServerName,
+      mcpConfigPath: ingredients.mcpConfigPath,
+      systemPromptText: ingredients.systemPromptText,
+      systemPromptPath: ingredients.systemPromptPath,
+      cwd: args.cwd,
+    });
+    const nextPty = ptySpawn(spawn.cmd, spawn.args, {
+      name: "xterm-256color",
+      cols: 100,
+      rows: 30,
+      cwd: args.cwd,
+      env: process.env as Record<string, string>,
+    });
+    pty = nextPty;
+    currentCleanup = spawn.cleanup;
+    currentTool = tool;
+    wirePty(nextPty);
+  }
+
+  function switchChatTool(nextTool: ChatTool): void {
+    if (nextTool === currentTool) return;
+    // Tell connected browsers the chat is being reset.
+    broadcastPtyFrame(JSON.stringify({
+      type: "pty_data",
+      bytes: Buffer.from(`\r\n[sparkflow] switching chat to ${nextTool}…\r\n`, "utf-8").toString("base64"),
+    }) + "\n");
+    switchingTool = true;
+    const oldCleanup = currentCleanup;
+    const oldPty = pty;
+    pty = null;
+    currentCleanup = null;
+    ring = Buffer.alloc(0);
+    try { oldPty?.kill(); } catch { /* ignore */ }
+    try { oldCleanup?.(); } catch { /* ignore */ }
+    spawnChatPty(nextTool);
+    switchingTool = false;
+    console.error(`[sparkflow web] chat tool switched to ${nextTool}`);
+  }
+
+  spawnChatPty(currentTool);
 
   // --- PTY bridge unix socket. Child reconnects here after each restart. --
   const bridgeServer: NetServer = createNetServer((sock) => {
@@ -122,6 +226,9 @@ async function main(): Promise<void> {
     if (ring.length > 0) {
       sock.write(JSON.stringify({ type: "snapshot", bytes: ring.toString("base64") }) + "\n");
     }
+    // Tell the child which chat tool is currently running so preferences stay
+    // in sync across server-child reloads.
+    sock.write(JSON.stringify({ type: "chat_tool", tool: currentTool }) + "\n");
     let buf = "";
     sock.on("data", (chunk) => {
       buf += chunk as unknown as string;
@@ -131,11 +238,13 @@ async function main(): Promise<void> {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         try {
-          const msg = JSON.parse(line) as { type?: string; bytes?: string; cols?: number; rows?: number };
+          const msg = JSON.parse(line) as { type?: string; bytes?: string; cols?: number; rows?: number; tool?: string };
           if (msg.type === "pty_write" && typeof msg.bytes === "string") {
-            pty.write(Buffer.from(msg.bytes, "base64").toString("utf-8"));
+            pty?.write(Buffer.from(msg.bytes, "base64").toString("utf-8"));
           } else if (msg.type === "pty_resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
-            pty.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
+            pty?.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
+          } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+            switchChatTool(msg.tool);
           }
         } catch { /* ignore bad frame */ }
       }
@@ -213,7 +322,8 @@ async function main(): Promise<void> {
   // --- Lifecycle. ---------------------------------------------------------
   function closeSupervisorResources(): void {
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
-    try { pty.kill(); } catch { /* ignore */ }
+    try { pty?.kill(); } catch { /* ignore */ }
+    try { currentCleanup?.(); } catch { /* ignore */ }
     try { bridgeServer.close(); } catch { /* ignore */ }
     try { unlinkSync(ptyBridgePath); } catch { /* ignore */ }
   }

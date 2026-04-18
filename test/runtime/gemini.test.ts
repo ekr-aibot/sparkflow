@@ -1,10 +1,19 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { GeminiAdapter } from "../../src/runtime/gemini.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual("node:child_process") as any;
+  return {
+    ...actual,
+    spawn: vi.fn(actual.spawn),
+  };
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,6 +33,10 @@ function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
 
 describe("GeminiAdapter", () => {
   const adapter = new GeminiAdapter();
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("runs a successful prompt and captures stdout as _response", async () => {
     const ctx = makeCtx({ prompt: "hello world" });
@@ -151,14 +164,19 @@ describe("GeminiAdapter", () => {
   });
 
   it("passes --include-directories to the command line", async () => {
-    // We can't easily see the argv passed to spawn here without mocking spawn,
-    // but we can verify the orientation preamble contains the correct cwd which
-    // is a good proxy for the adapter logic being executed.
     const tmp = mkdtempSync(join(tmpdir(), "sparkflow-gemini-argv-"));
     try {
       const ctx = makeCtx({ cwd: tmp, prompt: "test" });
       const result = await adapter.run(ctx);
       expect(result.success).toBe(true);
+
+      const spawnMock = vi.mocked(spawn);
+      const call = spawnMock.mock.calls.find(c => c[0] === FAKE_GEMINI);
+      expect(call).toBeDefined();
+      const args = call![1] as string[];
+      expect(args).toContain("--include-directories");
+      expect(args[args.indexOf("--include-directories") + 1]).toBe(tmp);
+
       expect(result.outputs._response).toContain(`Your working directory is ${tmp}`);
     } finally {
       rmSync(tmp, { recursive: true, force: true });

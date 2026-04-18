@@ -662,9 +662,8 @@ describe("WorkflowEngine", () => {
   // Reusing it caused claude-code to reject the spawn with "Session ID X is
   // already in use." See the workflow-loopback bug report for context.
   it("does not pass a stale sessionId when a claude-code step re-runs via on_success", async () => {
-    const prevLlm = process.env.SPARKFLOW_LLM;
+    const prev = process.env.SPARKFLOW_LLM;
     delete process.env.SPARKFLOW_LLM;
-
     try {
       // Track the ctx each claude-code step sees per invocation.
       const invocations: Array<{ stepId: string; sessionId: string | undefined; resume: boolean }> = [];
@@ -735,8 +734,8 @@ describe("WorkflowEngine", () => {
       expect(authorRuns[1].resume).toBe(true);
       expect(authorRuns[1].sessionId).toBe("session-author-1");
     } finally {
-      if (prevLlm === undefined) delete process.env.SPARKFLOW_LLM;
-      else process.env.SPARKFLOW_LLM = prevLlm;
+      if (prev === undefined) delete process.env.SPARKFLOW_LLM;
+      else process.env.SPARKFLOW_LLM = prev;
     }
   });
 

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync, rmdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync, rmdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
@@ -33,6 +33,12 @@ export class GeminiAdapter implements RuntimeAdapter {
       throw new Error(`GeminiAdapter received non-gemini runtime: ${runtime.type}`);
     }
 
+    const cwdStat = (() => { try { return statSync(ctx.cwd); } catch { return null; } })();
+    if (!cwdStat || !cwdStat.isDirectory()) {
+      return { success: false, outputs: {}, error: `cwd does not exist or is not a directory: ${ctx.cwd}` };
+    }
+    ctx.logger?.info(`[${ctx.stepId}] cwd=${ctx.cwd}`);
+
     // Resolve binary. When command is omitted, invoke via `npx @google/gemini-cli@latest`
     // so NixOS (and any system without a global install) works out of the box.
     const { cmd, prefixArgs } = runtime.command
@@ -50,6 +56,7 @@ export class GeminiAdapter implements RuntimeAdapter {
     if (runtime.mcp_servers && runtime.mcp_servers.length > 0) {
       args.push("--allowed-mcp-server-names", ...runtime.mcp_servers);
     }
+    args.push("--include-directories", ctx.cwd);
     if (runtime.args) args.push(...runtime.args);
 
     // Interactive step → write .gemini/settings.json with the sparkflow MCP entry.
@@ -83,7 +90,8 @@ export class GeminiAdapter implements RuntimeAdapter {
       wroteSettings = true;
     }
 
-    const parts: string[] = [];
+    const orientation = `[sparkflow] Your working directory is ${ctx.cwd}. All tool calls must operate inside that directory. Do not use paths under ~/.gemini/tmp/ or outside the working directory.`;
+    const parts: string[] = [orientation];
     if (ctx.prompt) parts.push(ctx.prompt);
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
     const fullPrompt = parts.join("\n\n");

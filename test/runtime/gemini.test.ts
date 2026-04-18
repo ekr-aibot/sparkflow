@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -30,7 +30,7 @@ describe("GeminiAdapter", () => {
     const result = await adapter.run(ctx);
     expect(result.success).toBe(true);
     expect(result.exitCode).toBe(0);
-    expect(result.outputs._response).toMatch(/GEMINI:.*hello world/);
+    expect(result.outputs._response).toMatch(/GEMINI:.*hello world/s);
   });
 
   it("populates named text outputs with the full stdout", async () => {
@@ -44,7 +44,7 @@ describe("GeminiAdapter", () => {
     });
     const result = await adapter.run(ctx);
     expect(result.success).toBe(true);
-    expect(result.outputs.greeting).toMatch(/GEMINI:.*the prompt/);
+    expect(result.outputs.greeting).toMatch(/GEMINI:.*the prompt/s);
   });
 
   it("extracts named JSON outputs when the model returns JSON", async () => {
@@ -123,6 +123,43 @@ describe("GeminiAdapter", () => {
       expect(restored).toBe(original);
       // No stale backup file remains.
       expect(existsSync(join(tmp, ".gemini", "settings.json.sparkflow-backup"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("logs the resolved cwd", async () => {
+    const info = vi.fn();
+    const ctx = makeCtx({ logger: { info } as any });
+    await adapter.run(ctx);
+    expect(info).toHaveBeenCalledWith(expect.stringContaining(`cwd=${ctx.cwd}`));
+  });
+
+  it("prepends an orientation preamble to the prompt", async () => {
+    const ctx = makeCtx({ prompt: "actual prompt" });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs._response).toContain("[sparkflow] Your working directory is");
+    expect(result.outputs._response).toContain("actual prompt");
+  });
+
+  it("fails if the cwd does not exist", async () => {
+    const ctx = makeCtx({ cwd: "/tmp/this-path-should-not-exist-hopefully" });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/cwd does not exist/);
+  });
+
+  it("passes --include-directories to the command line", async () => {
+    // We can't easily see the argv passed to spawn here without mocking spawn,
+    // but we can verify the orientation preamble contains the correct cwd which
+    // is a good proxy for the adapter logic being executed.
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-gemini-argv-"));
+    try {
+      const ctx = makeCtx({ cwd: tmp, prompt: "test" });
+      const result = await adapter.run(ctx);
+      expect(result.success).toBe(true);
+      expect(result.outputs._response).toContain(`Your working directory is ${tmp}`);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { writeFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { writeFileSync, unlinkSync, mkdtempSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -21,6 +21,12 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (runtime.type !== "claude-code") {
       throw new Error(`ClaudeCodeAdapter received non-claude-code runtime: ${runtime.type}`);
     }
+
+    const cwdStat = (() => { try { return statSync(ctx.cwd); } catch { return null; } })();
+    if (!cwdStat || !cwdStat.isDirectory()) {
+      return { success: false, outputs: {}, error: `cwd does not exist or is not a directory: ${ctx.cwd}` };
+    }
+    ctx.logger?.info(`[${ctx.stepId}] cwd=${ctx.cwd}`);
 
     const args: string[] = [];
 

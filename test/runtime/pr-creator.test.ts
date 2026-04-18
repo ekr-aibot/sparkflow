@@ -220,6 +220,41 @@ describe("PrCreatorAdapter", () => {
     expect(result.error).toContain("Could not parse PR URL");
   });
 
+  it("parses the existing PR URL from gh's 'already exists' error (cross-fork safe)", async () => {
+    // Mimic execFileSync's thrown-error shape: Error with .stderr/.stdout Buffers.
+    const ghError = Object.assign(
+      new Error("Command failed: gh pr create ..."),
+      {
+        stderr: Buffer.from(
+          'a pull request for branch "sparkflow/_run-16" into branch "main" already exists:\n' +
+          'https://github.com/ekr/runner-up/pull/58\n',
+        ),
+        stdout: Buffer.from(""),
+        status: 1,
+      },
+    );
+
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+      if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/_run-16\n");
+      if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc\n");
+      if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" f.ts | 1 +\n");
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+      if (key.includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      if (key.includes("pr create")) throw ghError;
+      throw new Error(`Unexpected gh: ${key}`);
+    });
+    mockSpawnClaude({ title: "T", summary: "S" });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(true);
+    expect(result.outputs.pr_url).toBe("https://github.com/ekr/runner-up/pull/58");
+  });
+
   it("handles gh pr create failure", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];

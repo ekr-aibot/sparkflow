@@ -84,6 +84,24 @@ A discriminated union on the `type` field.
 | `adapter` | `string` | yes | Path to the adapter binary or Node module. |
 | `config` | `Record<string, unknown>` | no | Arbitrary adapter-specific configuration. |
 
+#### `GeminiRuntime` (`type: "gemini"`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"gemini"` | yes | Discriminator. |
+| `command` | `string` | no | Binary to invoke. When omitted, sparkflow spawns `npx @google/gemini-cli@latest` so the runtime works on NixOS and any host without a global install. |
+| `model` | `string` | no | Model id, e.g. `"gemini-2.5-pro"` or `"gemini-2.5-flash"`. |
+| `args` | `string[]` | no | Additional CLI flags appended after sparkflow's own flags. |
+| `mcp_servers` | `string[]` | no | Names of MCP servers to whitelist (maps to `--allowed-mcp-server-names`). |
+
+Invocation: `<command> -p "" -y [-m <model>] -o text|stream-json [...args]`. The step prompt is piped on stdin (Gemini appends stdin to its `-p` value, so we pass an empty `-p` to trigger headless mode and stream the real prompt through stdin).
+
+**Differences from `claude-code`:**
+
+- **No session resume.** Gemini's `--resume` uses per-project numeric indexes rather than UUIDs; sparkflow's retry machinery replays the full prompt + transition message instead. Costs extra tokens on retry but works.
+- **MCP config lives on disk.** Gemini has no `--mcp-config <path>` flag — it reads `./.gemini/settings.json` and `~/.gemini/settings.json`. For interactive steps (`interactive: true` with a dashboard IPC socket), sparkflow writes `<cwd>/.gemini/settings.json` containing the sparkflow MCP server entry before spawn, backs up any pre-existing file, and restores it in `finally`. If sparkflow is `SIGKILL`'d mid-run, a `settings.json.sparkflow-backup` sibling is left behind so you can recover.
+- **Output extraction.** If the model returns parseable JSON, sparkflow pulls named outputs from the object. Otherwise each declared `type: "text"` output receives the trimmed stdout. `_response` is always set to the raw stdout (or parsed object).
+
 ### `WorktreeConfig`
 
 | Field | Type | Required | Description |

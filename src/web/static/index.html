@@ -26,6 +26,22 @@
         <div class="status-header">
           <h2 id="status-title">jobs</h2>
           <span id="job-count" class="job-count"></span>
+          <div id="prefs" class="prefs">
+            <label class="pref">
+              <span class="pref-label">Chat:</span>
+              <select id="pref-chat" class="pref-select" title="Switching resets the current chat session.">
+                <option value="claude">Claude</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </label>
+            <label class="pref">
+              <span class="pref-label">Jobs:</span>
+              <select id="pref-jobs" class="pref-select">
+                <option value="claude">Claude</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </label>
+          </div>
         </div>
         <ul id="job-list"></ul>
       </section>

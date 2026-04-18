@@ -258,38 +258,55 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       }
       prUrl = match[0];
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const alreadyExists =
-        errMsg.includes("already exists") ||
-        errMsg.includes("A pull request already exists");
+      // execFileSync throws with stderr/stdout buffers attached; pull them all
+      // so we can grep for both the "already exists" marker and, critically,
+      // the existing PR URL that gh embeds in that error message. Parsing the
+      // URL directly avoids a follow-up `gh pr view`, which is unreliable for
+      // cross-fork PRs (head on one remote, base on another — `gh pr view
+      // <branch> --repo X/Y` returns "no pull requests found" even though the
+      // PR exists).
+      const errObj = err as { stderr?: Buffer; stdout?: Buffer; message?: string };
+      const combined = [
+        errObj.stderr?.toString() ?? "",
+        errObj.stdout?.toString() ?? "",
+        errObj.message ?? "",
+      ].join("\n");
+
+      const alreadyExists = /already exists|A pull request already exists/i.test(combined);
       if (!alreadyExists) {
         return {
           success: false,
           outputs: {},
-          error: `Failed to create PR: ${errMsg}`,
+          error: `Failed to create PR: ${errObj.message ?? String(err)}`,
         };
       }
-      // PR already exists for this branch — look it up.
-      // `gh pr view` requires a positional <branch> argument when --repo is set,
-      // so always pass the current branch name explicitly.
+
       ctx.logger?.info(`[${ctx.stepId}] PR already exists for this branch, using it`);
-      try {
-        const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-          cwd: ctx.cwd,
-          stdio: "pipe",
-        }).toString().trim();
-        const pr = ghJson<PrView>(
-          ["pr", "view", branch, ...repoArgs, "--json", "url"],
-          ctx.cwd,
-        );
-        prUrl = pr.url;
-      } catch (viewErr) {
-        const viewMsg = viewErr instanceof Error ? viewErr.message : String(viewErr);
-        return {
-          success: false,
-          outputs: {},
-          error: `PR exists but failed to retrieve URL: ${viewMsg}`,
-        };
+      const urlMatch = combined.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
+      if (urlMatch) {
+        prUrl = urlMatch[0];
+      } else {
+        // Fallback: ask gh. `gh pr view <branch> --repo X/Y` works for same-repo
+        // PRs. If the PR is cross-fork this still won't find it, and we surface
+        // the real error; the user can wire the PR URL through manually.
+        try {
+          const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+            cwd: ctx.cwd,
+            stdio: "pipe",
+          }).toString().trim();
+          const pr = ghJson<PrView>(
+            ["pr", "view", branch, ...repoArgs, "--json", "url"],
+            ctx.cwd,
+          );
+          prUrl = pr.url;
+        } catch (viewErr) {
+          const viewMsg = viewErr instanceof Error ? viewErr.message : String(viewErr);
+          return {
+            success: false,
+            outputs: {},
+            error: `PR exists but no URL found in gh output and fallback view failed: ${viewMsg}`,
+          };
+        }
       }
     }
 

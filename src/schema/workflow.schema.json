@@ -154,8 +154,29 @@
         { "$ref": "#/$defs/CustomRuntime" },
         { "$ref": "#/$defs/PrWatcherRuntime" },
         { "$ref": "#/$defs/PrCreatorRuntime" },
-        { "$ref": "#/$defs/WorkflowRuntime" }
+        { "$ref": "#/$defs/WorkflowRuntime" },
+        { "$ref": "#/$defs/GeminiRuntime" }
       ]
+    },
+    "GeminiRuntime": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "gemini" },
+        "command": { "type": "string", "description": "Binary to invoke. Defaults to `npx` with `@google/gemini-cli@latest` prepended." },
+        "model": { "type": "string", "description": "Model id, e.g. `gemini-2.5-pro` or `gemini-2.5-flash`." },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional CLI flags."
+        },
+        "mcp_servers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of MCP servers to whitelist (maps to --allowed-mcp-server-names)."
+        }
+      }
     },
     "ClaudeCodeRuntime": {
       "type": "object",

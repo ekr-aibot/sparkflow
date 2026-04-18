@@ -8,6 +8,13 @@ export interface PersistedJob {
   logPath: string;
   logOffset: number;
   pendingRequestId?: string;
+  /**
+   * Arguments the job was originally started with, persisted so `restartJob`
+   * still works after a daemon reload.
+   */
+  originalPlan?: string;
+  originalPlanText?: string;
+  originalCwd?: string;
 }
 
 export class StateStore {

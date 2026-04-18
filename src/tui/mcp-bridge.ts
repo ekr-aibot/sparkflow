@@ -366,8 +366,9 @@ server.tool(
 );
 
 // --- MCP Prompts (for commands that need live IPC data) ---
-// sf-plan and sf-dispatch are injected as Claude Code slash commands
-// in .claude/commands/ by the sparkflow entry point.
+// sf-plan and sf-dispatch are injected as slash commands in
+// .claude/commands/ (Claude) or .gemini/commands/project/ (Gemini)
+// by the sparkflow entry point.
 
 server.prompt(
   "sf-detail",

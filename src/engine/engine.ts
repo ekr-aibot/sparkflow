@@ -12,6 +12,7 @@ import { CustomAdapter } from "../runtime/custom.js";
 import { PrWatcherAdapter } from "../runtime/pr-watcher.js";
 import { PrCreatorAdapter } from "../runtime/pr-creator.js";
 import { WorkflowAdapter } from "../runtime/workflow.js";
+import { GeminiAdapter } from "../runtime/gemini.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
@@ -129,6 +130,7 @@ export class WorkflowEngine {
       ["pr-watcher", new PrWatcherAdapter()],
       ["pr-creator", new PrCreatorAdapter()],
       ["workflow", new WorkflowAdapter()],
+      ["gemini", new GeminiAdapter()],
     ]);
 
     // Initialize step statuses
@@ -380,6 +382,14 @@ export class WorkflowEngine {
 
     // Resolve env
     const env: Record<string, string> = {};
+
+    // Auto-inject SPARKFLOW_* env vars from project config
+    if (this.config?.git) {
+      if (this.config.git.pr_repo) env.SPARKFLOW_PR_REPO = this.config.git.pr_repo;
+      if (this.config.git.push_remote) env.SPARKFLOW_PUSH_REMOTE = this.config.git.push_remote;
+      if (this.config.git.base) env.SPARKFLOW_BASE_BRANCH = this.config.git.base;
+    }
+
     if (step.env) {
       try {
         for (const [key, value] of Object.entries(step.env)) {
@@ -444,7 +454,11 @@ export class WorkflowEngine {
 
     // Build runtime context. If this is a retry of a claude-code step with
     // a captured session id, resume that conversation so the agent keeps its
-    // prior reasoning and tool history.
+    // prior reasoning and tool history. Otherwise, leave sessionId unset — the
+    // adapter will mint a fresh UUID. Passing the stale id on a non-resume
+    // re-invocation (e.g. when the step is re-entered via on_success after an
+    // upstream loop) would cause claude-code to reject the session-id as
+    // "already in use".
     const resuming = runtime.type === "claude-code" && status.retryCount > 0 && !!status.sessionId;
     const ctx: RuntimeContext = {
       stepId,
@@ -460,7 +474,7 @@ export class WorkflowEngine {
       ipcSocketPath,
       verbose: this.verbose,
       logger: this.logger,
-      sessionId: status.sessionId,
+      sessionId: resuming ? status.sessionId : undefined,
       resume: resuming,
       stepOutputs: this.stepOutputs,
       workflowDir: this.workflowDir,
@@ -677,6 +691,21 @@ export class WorkflowEngine {
     if (!runtime) {
       throw new Error(`Step has no runtime and no default runtime configured`);
     }
-    return runtime;
+    return applyLlmOverride(runtime);
   }
+}
+
+/**
+ * Swap an LLM step's `runtime.type` based on the `SPARKFLOW_LLM` env var
+ * (set by the web server when the user picks "Jobs runtime: Gemini/Claude").
+ * Preserves non-LLM runtime types unchanged. Other fields (model, args, etc.)
+ * are dropped on swap — they're tool-specific and don't translate cleanly, so
+ * we let each adapter fall back to its defaults.
+ */
+function applyLlmOverride(runtime: Runtime): Runtime {
+  const override = process.env.SPARKFLOW_LLM;
+  if (override !== "claude" && override !== "gemini") return runtime;
+  if (override === "claude" && runtime.type === "gemini") return { type: "claude-code" };
+  if (override === "gemini" && runtime.type === "claude-code") return { type: "gemini" };
+  return runtime;
 }

@@ -75,6 +75,38 @@ describe("JobManager.rehydrate", () => {
     manager.release();
   });
 
+  it("persists and restores originalPlan/originalPlanText/originalCwd so restartJob works after a daemon reload", () => {
+    const logDir = join(tmpDir, ".sparkflow", "logs");
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, "job-rst.log");
+    appendFileSync(logPath, "");
+
+    const store = new StateStore(tmpDir);
+    store.saveJob({
+      info: {
+        id: "rst",
+        workflowPath: "/tmp/wf.json",
+        workflowName: "wf",
+        state: "failed",
+        summary: "exit 1",
+        startTime: Date.now() - 1000,
+        endTime: Date.now(),
+      },
+      pid: 2_000_000,
+      logPath,
+      logOffset: 0,
+      originalCwd: "/tmp/project",
+      originalPlan: "/tmp/plan.md",
+      originalPlanText: "Step 1: do a thing\nStep 2: do another thing",
+    });
+
+    const reloaded = store.loadJobs();
+    expect(reloaded).toHaveLength(1);
+    expect(reloaded[0].originalCwd).toBe("/tmp/project");
+    expect(reloaded[0].originalPlan).toBe("/tmp/plan.md");
+    expect(reloaded[0].originalPlanText).toContain("Step 1");
+  });
+
   it("marks a rehydrated job failed if its pid is already dead", () => {
     const logDir = join(tmpDir, ".sparkflow", "logs");
     mkdirSync(logDir, { recursive: true });

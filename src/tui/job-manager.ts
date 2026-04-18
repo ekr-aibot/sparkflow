@@ -84,6 +84,9 @@ export class JobManager {
         tailer,
         outputBuffer: [],
         pendingRequestId: p.pendingRequestId,
+        originalPlan: p.originalPlan,
+        originalPlanText: p.originalPlanText,
+        originalCwd: p.originalCwd,
       };
       this.jobs.set(info.id, managed);
       tailer.start();
@@ -410,6 +413,9 @@ export class JobManager {
       logPath: job.logPath,
       logOffset: job.tailer.bytesRead,
       pendingRequestId: job.pendingRequestId,
+      originalPlan: job.originalPlan,
+      originalPlanText: job.originalPlanText,
+      originalCwd: job.originalCwd,
     };
     try {
       this.store.saveJob(persisted);
@@ -530,15 +536,30 @@ export class JobManager {
 
     const job = this.jobs.get(jobId);
     if (!job) return { ok: false, error: `Job not found: ${jobId}` };
-    if (!job.child) {
+
+    // Rehydrated jobs (no live child) are restartable as long as their
+    // original launch args were persisted. Pre-persistence jobs won't have
+    // `originalPlan`/`originalPlanText`/`originalCwd` and can't be restarted.
+    const isRehydrated = !job.child;
+    if (
+      isRehydrated &&
+      !job.originalPlan &&
+      !job.originalPlanText &&
+      !job.originalCwd
+    ) {
       return {
         ok: false,
-        error: "cannot restart a rehydrated job — original plan text was not persisted; re-dispatch manually",
+        error: "cannot restart a rehydrated job — original launch args were not persisted; re-dispatch manually",
       };
     }
 
     if (job.info.state !== "succeeded" && job.info.state !== "failed") {
-      await this.killJobAndWait(jobId);
+      if (job.child) {
+        await this.killJobAndWait(jobId);
+      } else if (job.pid > 0 && isAlive(job.pid)) {
+        // Rehydrated job with a live pid — signal it; don't block.
+        try { process.kill(job.pid, "SIGTERM"); } catch { /* already gone */ }
+      }
     }
 
     const newJobId = this.startJob(job.info.workflowPath, {

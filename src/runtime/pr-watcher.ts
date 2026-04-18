@@ -63,11 +63,54 @@ function getOwnerRepo(cwd: string): { owner: string; repo: string } {
   return { owner: match[1], repo: match[2] };
 }
 
-function getPrInfo(cwd: string, repoArgs: string[]): PrInfo {
+function currentBranch(cwd: string): string {
+  return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    cwd,
+    stdio: "pipe",
+  }).toString().trim();
+}
+
+/**
+ * Discover the PR for the current branch. Passing the branch name explicitly
+ * matters when the branch isn't tracking origin — e.g. pr-create pushed to
+ * an `aibot` remote on a fork. `gh pr view` without an argument looks up the
+ * PR via branch tracking, which returns "No PR found" in that setup.
+ */
+function getPrInfoByBranch(cwd: string, repoArgs: string[]): PrInfo {
+  const branch = currentBranch(cwd);
   return ghJson<PrInfo>(
-    ["pr", "view", ...repoArgs, "--json", "number,url,state,mergedAt"],
+    ["pr", "view", branch, ...repoArgs, "--json", "number,url,state,mergedAt"],
     cwd,
   );
+}
+
+function getPrInfoByNumber(num: number, cwd: string, repoArgs: string[]): PrInfo {
+  return ghJson<PrInfo>(
+    ["pr", "view", String(num), ...repoArgs, "--json", "number,url,state,mergedAt"],
+    cwd,
+  );
+}
+
+function parsePrNumber(url: string): number | null {
+  const m = url.match(/\/pull\/(\d+)(?:\/|$)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Find a PR URL from any upstream step's outputs. Cross-fork PRs are the
+ * motivation: `gh pr view <branch>` can't find them, but `gh pr view <num>`
+ * works regardless of head repo. When pr-create runs earlier in the workflow
+ * and emits `pr_url`, we pick it up here and skip branch-based discovery.
+ */
+function findUpstreamPrUrl(ctx: RuntimeContext): string | null {
+  if (!ctx.stepOutputs) return null;
+  for (const outputs of ctx.stepOutputs.values()) {
+    const v = outputs?.pr_url;
+    if (typeof v === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(v)) {
+      return v;
+    }
+  }
+  return null;
 }
 
 function getChecks(num: number, cwd: string, repoArgs: string[]): CheckResult[] {
@@ -135,16 +178,32 @@ export class PrWatcherAdapter implements RuntimeAdapter {
     const targetRepo = ctx.git?.pr_repo;
     const repoArgs = targetRepo ? ["--repo", targetRepo] : [];
 
-    // Discover PR from current branch
+    // Discover PR: prefer an upstream step's pr_url (works for cross-fork PRs
+    // where `gh pr view <branch>` fails); fall back to branch-based discovery.
     let pr: PrInfo;
-    try {
-      pr = getPrInfo(ctx.cwd, repoArgs);
-    } catch {
-      return {
-        success: false,
-        outputs: {},
-        error: "No PR found for the current branch",
-      };
+    const upstreamUrl = findUpstreamPrUrl(ctx);
+    if (upstreamUrl) {
+      const num = parsePrNumber(upstreamUrl);
+      if (num === null) {
+        return { success: false, outputs: {}, error: `Malformed upstream PR URL: ${upstreamUrl}` };
+      }
+      try {
+        pr = getPrInfoByNumber(num, ctx.cwd, repoArgs);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, outputs: {}, error: `Failed to look up PR #${num} (${upstreamUrl}): ${msg}` };
+      }
+      ctx.logger?.info(`[${ctx.stepId}] watching upstream-provided PR #${pr.number}`);
+    } else {
+      try {
+        pr = getPrInfoByBranch(ctx.cwd, repoArgs);
+      } catch {
+        return {
+          success: false,
+          outputs: {},
+          error: "No PR found for the current branch",
+        };
+      }
     }
 
     ctx.logger?.info(`[${ctx.stepId}] watching PR #${pr.number}: ${pr.url}`);

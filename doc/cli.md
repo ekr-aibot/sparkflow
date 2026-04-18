@@ -14,7 +14,8 @@ sparkflow [options]
 
 | Flag | Description |
 | --- | --- |
-| `--chat-command <cmd>` | Chat tool command. Default: `claude`. |
+| `--chat-tool <name>` | Which LLM CLI powers the chat pane: `claude` (default) or `gemini`. Drives the spawn shape: Claude gets `--mcp-config`/`--append-system-prompt` flags; Gemini gets `.gemini/settings.json` + `GEMINI.md` written to `cwd` and cleaned up on exit. |
+| `--chat-command <cmd>` | Chat tool binary override. Default follows `--chat-tool` (claude → `claude`; gemini → `npx`, with `@google/gemini-cli@latest -y` prepended automatically). |
 | `--chat-args <args>` | Extra args for the chat tool, comma-separated. |
 | `--cwd <dir>` | Working directory. Default: current directory. |
 | `--workflow <path>` | Default workflow for `/project:sf-dispatch`. May be a path or a bare name resolved as `.sparkflow/workflows/<name>.json`. |
@@ -39,6 +40,16 @@ The status panel below the chat mirrors what the tmux pane would show: live job 
 
 Same MCP tools and slash commands as tmux mode — the only difference is the surface. `/sf-quit` is omitted in web mode (Ctrl-C the `sparkflow --web` server console to quit).
 
+#### Chat-tool differences (`--chat-tool`)
+
+| Aspect | Claude (default) | Gemini (`--chat-tool gemini`) |
+| --- | --- | --- |
+| Default binary | `claude` | `npx` (with `@google/gemini-cli@latest -y` auto-prepended) |
+| MCP wiring | `--mcp-config <path>` CLI flag | `.gemini/settings.json` written in `cwd`, restoring any pre-existing file on exit |
+| System prompt | `--append-system-prompt <text>` CLI flag | `GEMINI.md` written in `cwd`, restoring any pre-existing file on exit |
+| Slash commands (`/project:sf-plan`, `/project:sf-dispatch`) | Supported via `.claude/commands/` | Supported via `.gemini/commands/project/` |
+| Session resume across retries | UUID-based via `--session-id`/`--resume` | Not wired — retries replay the full prompt + transition message |
+
 ### `sparkflow-run` — workflow runner
 
 Executes a single workflow. The dashboard's `start_workflow` MCP tool spawns this under the hood, but you can also invoke it directly.
@@ -50,12 +61,25 @@ sparkflow-run run [<workflow>] [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--v
 
 | Flag | Description |
 | --- | --- |
-| `<workflow>` | Path to a JSON workflow file, or a bare name resolved as `.sparkflow/workflows/<name>.json`. If omitted, uses `defaultWorkflow` from `.sparkflow/config.json`. |
+| `<workflow>` | Path to a JSON workflow file, or a bare name resolved first as `.sparkflow/workflows/<name>.json` in the project, then `~/.config/sparkflow/workflows/<name>.json` at the user level. If omitted, uses `defaultWorkflow` from the merged config. |
 | `--dry-run` | Plan the workflow without executing side effects. |
 | `--cwd <dir>` | Working directory for the run. |
 | `--plan <plan.md>` | Prepend the text of `<plan.md>` to every prompt sent to agents. |
 | `--verbose` | Verbose logging. |
 | `--status-json` | Emit step-status events as JSON on stderr and read answer events from stdin. Used by the dashboard to drive the status pane. |
+
+## Configuration
+
+Sparkflow reads configuration and workflows from two layers. The user-level layer is good for things you'd otherwise copy into every project (shared workflows, your default chat tool, model defaults). The project layer overrides on a field-by-field basis.
+
+| Layer | Config file | Workflows dir |
+| --- | --- | --- |
+| User | `~/.config/sparkflow/config.json` (or `$XDG_CONFIG_HOME/sparkflow/config.json`) | `~/.config/sparkflow/workflows/<name>.json` |
+| Project | `<cwd>/.sparkflow/config.json` | `<cwd>/.sparkflow/workflows/<name>.json` |
+
+**Config merge.** Project fields win over user fields; the merge is shallow — nested objects (`git`) are replaced whole rather than deep-merged. So if your user config sets `git.pr_repo` and the project sets `git.base`, the result has only `git.base` (not both). Re-specify the fields you need at the project level.
+
+**Workflow resolution.** A bare name like `standard-feature` is looked up in the project's `.sparkflow/workflows/` first; if missing, it falls back to the user's `~/.config/sparkflow/workflows/`. An absolute or relative path bypasses the lookup. Listing workflows in an error message tags user-level ones with `(user)`.
 
 ## MCP tools (dashboard bridge)
 

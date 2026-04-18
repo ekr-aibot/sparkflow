@@ -9,11 +9,10 @@
       "description": "Find new issues to work on. Emits an array of items as JSON.",
       "interactive": false,
       "runtime": {
-        "type": "claude-code",
-        "model": "sonnet",
-        "auto_accept": true
+        "type": "shell",
+        "command": "bash",
+        "args": ["./scripts/github-poller.sh"]
       },
-      "prompt": "./prompts/github-poller.md",
       "outputs": {
         "items": {
           "type": "json",

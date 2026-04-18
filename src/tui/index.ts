@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, mkdirSync, existsSync, rmdirSync } from "node:fs";
+import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, mkdirSync, existsSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
+import { buildChatSpawn, type SlashCommandSpec } from "./chat-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -51,7 +52,11 @@ function usage(): never {
   console.log(`Usage: sparkflow [options]
 
 Options:
-  --chat-command <cmd>   Chat tool command (default: "claude")
+  --chat-tool <name>     Chat tool: "claude" (default) or "gemini"
+  --chat-command <cmd>   Chat tool binary override. Default: matches --chat-tool
+                         (claude → "claude", gemini → "npx"). When gemini runs
+                         via npx, the package spec @google/gemini-cli@latest is
+                         injected automatically.
   --chat-args <args>     Extra args for chat tool (comma-separated)
   --cwd <dir>            Working directory (default: current directory)
   --workflow <path>      Default workflow for /project:sf-dispatch (default: none)
@@ -67,7 +72,9 @@ Options:
 }
 
 function parseArgs(argv: string[]): {
+  chatTool: "claude" | "gemini";
   chatCommand: string;
+  chatCommandSet: boolean;
   chatArgs: string[];
   cwd: string;
   workflow: string | null;
@@ -76,7 +83,9 @@ function parseArgs(argv: string[]): {
   web: boolean;
   port: number;
 } {
-  let chatCommand = "claude";
+  let chatTool: "claude" | "gemini" = "claude";
+  let chatCommand = "";
+  let chatCommandSet = false;
   let chatArgs: string[] = [];
   let cwd = process.cwd();
   let workflow: string | null = null;
@@ -93,8 +102,18 @@ function parseArgs(argv: string[]): {
       case "-h":
         usage();
         break;
+      case "--chat-tool": {
+        const v = argv[++i];
+        if (v !== "claude" && v !== "gemini") {
+          console.error(`Error: --chat-tool must be "claude" or "gemini", got: ${v}`);
+          process.exit(1);
+        }
+        chatTool = v;
+        break;
+      }
       case "--chat-command":
         chatCommand = argv[++i];
+        chatCommandSet = true;
         if (!chatCommand) {
           console.error("Error: --chat-command requires a value");
           process.exit(1);
@@ -149,12 +168,16 @@ function parseArgs(argv: string[]): {
     console.error("Error: --status-lines is tmux-only; not valid with --web");
     process.exit(1);
   }
-  if (web && dev) {
-    console.error("Error: --dev is not yet supported in web mode");
-    process.exit(1);
+  // --web + --dev: the web supervisor watches dist/ and respawns the server
+  // child on change while keeping the claude PTY alive. Handled via env var
+  // at spawn-time below.
+
+  // Default chat command based on the chosen chat tool.
+  if (!chatCommandSet) {
+    chatCommand = chatTool === "gemini" ? "npx" : "claude";
   }
 
-  return { chatCommand, chatArgs, cwd, workflow, statusLines, dev, web, port };
+  return { chatTool, chatCommand, chatCommandSet, chatArgs, cwd, workflow, statusLines, dev, web, port };
 }
 
 function checkTmux(): void {
@@ -234,9 +257,11 @@ const systemPromptPath = join(tmpDir, "system-prompt.txt");
 const systemPromptText = defaultSystemPrompt(args.web ? "web" : "tmux");
 writeFileSync(systemPromptPath, systemPromptText);
 
-// 4. Inject slash commands into .claude/commands/ in the working directory
-const SLASH_COMMANDS: Record<string, string> = {
-  "sf-plan": `I want to build a plan for a task. Read my description below, then:
+// 4. Inject slash commands into .claude/commands/ (claude) or .gemini/commands/project/ (gemini)
+const SLASH_COMMANDS: Record<string, SlashCommandSpec> = {
+  "sf-plan": {
+    description: "Enter planning mode; produce a structured plan for a task.",
+    body: `I want to build a plan for a task. Read my description below, then:
 
 1. If anything is unclear or ambiguous, ask me your questions **all at once** in a single message. Wait for my answers before proceeding.
 2. Once you have enough information, produce a complete project plan and stop. Do not ask what to do next or offer to help further — just present the plan.
@@ -254,7 +279,7 @@ Keep the plan concrete — name specific files, functions, and types. When I'm h
 
 Here's what I want to build:
 $ARGUMENTS`,
-
+  },
 };
 
 // sf-dispatch is built dynamically based on --workflow flag
@@ -263,7 +288,9 @@ const defaultWorkflowNote = args.workflow
 If the user provides an argument, use that instead: $ARGUMENTS`
   : `The workflow to run: $ARGUMENTS`;
 
-SLASH_COMMANDS["sf-dispatch"] = `Dispatch the plan we just built to a sparkflow workflow.
+SLASH_COMMANDS["sf-dispatch"] = {
+  description: "Dispatch the current plan to a sparkflow workflow.",
+  body: `Dispatch the plan we just built to a sparkflow workflow.
 
 ${defaultWorkflowNote}
 
@@ -274,52 +301,51 @@ Do the following:
    - slug set to a 3-words-or-less label summarizing the plan's goal (e.g. "add user auth", "fix login bug", "refactor pdf export"). Use lowercase, no punctuation.
 2. Report back the job ID.
 
-The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`;
+The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`,
+};
 
-// Shell-escape a single argument
+// Shell-escape a single argument (used for tmux sh -c strings below).
 const sq = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
-// 4. Build chat command — use $(cat ...) for the system prompt to avoid quoting newlines
-const chatCmdParts = [
-  sq(args.chatCommand),
-  ...args.chatArgs.map(sq),
-  "--mcp-config", sq(mcpConfigPath),
-  "--append-system-prompt", `"$(cat ${sq(systemPromptPath)})"`,
-];
-const chatCmd = chatCmdParts.join(" ");
+// 5. Build chat command for tmux mode. Web mode defers this to the supervisor
+// so the chat tool can be switched at runtime (via the web UI).
+const chatSpawn = args.web ? null : buildChatSpawn({
+  tool: args.chatTool,
+  command: args.chatCommand,
+  chatArgs: args.chatArgs,
+  mcpServerSpec: mcpConfig.mcpServers["sparkflow-dashboard"],
+  mcpServerName: "sparkflow-dashboard",
+  mcpConfigPath,
+  systemPromptText,
+  systemPromptPath,
+  cwd: args.cwd,
+  slashCommands: SLASH_COMMANDS,
+});
+const chatCmd = chatSpawn ? chatSpawn.shellCmd : "";
 
-// 5. Build status display command (session name added after it's generated below).
+// 6. Build status display command (session name added after it's generated below).
 // In --dev mode we route through the supervisor so code changes under dist/ auto-reload.
 const statusEntry = args.dev ? SUPERVISOR_PATH : STATUS_DISPLAY_PATH;
 const buildStatusCmd = (session: string) =>
   `exec ${sq(process.execPath)} ${sq(statusEntry)} ${sq(socketPath)} ${sq(args.cwd)} ${sq(session)}`;
 
-// 6. Create tmux session with two panes
+// 7. Create tmux session with two panes
 const sessionName = `sparkflow-${randomBytes(4).toString("hex")}`;
 const attachName = `${sessionName}-attach`;
 
 // sf-quit needs the session name; web mode has no tmux session to kill — skip it.
 if (!args.web) {
-  SLASH_COMMANDS["sf-quit"] = `Shut down the sparkflow dashboard session.
+  SLASH_COMMANDS["sf-quit"] = {
+    description: "Shut down the sparkflow dashboard session.",
+    body: `Shut down the sparkflow dashboard session.
 
 Run this command:
 \`\`\`
 tmux kill-session -t '${sessionName}'
 \`\`\`
 
-This will terminate all running jobs and close the dashboard.`;
-}
-
-// Write slash command files to .claude/commands/
-const commandsDir = join(args.cwd, ".claude", "commands");
-const createdCommandsDir = !existsSync(commandsDir);
-const commandFiles: string[] = [];
-
-mkdirSync(commandsDir, { recursive: true });
-for (const [name, content] of Object.entries(SLASH_COMMANDS)) {
-  const filePath = join(commandsDir, `${name}.md`);
-  writeFileSync(filePath, content);
-  commandFiles.push(filePath);
+This will terminate all running jobs and close the dashboard.`,
+  };
 }
 
 // Get terminal dimensions before we lose the TTY
@@ -328,25 +354,26 @@ const rows = process.stdout.rows || 24;
 
 try {
   if (args.web) {
-    // Web mode: spawn the web server directly, passing the chat command + its
-    // args so the server can exec it under a PTY. No shell, so we pass the
-    // system prompt text as a literal arg rather than via $(cat …).
-    const chatToolArgs = [
-      ...args.chatArgs,
-      "--mcp-config", mcpConfigPath,
-      "--append-system-prompt", systemPromptText,
-    ];
+    // Web mode: pass raw chat-tool ingredients to the supervisor via env so
+    // it can call buildChatSpawn itself — this is what lets the user switch
+    // chat tools at runtime via the web UI (the supervisor respawns the PTY
+    // with the new tool's config).
+    const webEnv: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      SPARKFLOW_WEB_CHAT_TOOL: args.chatTool,
+      SPARKFLOW_WEB_CHAT_COMMAND: args.chatCommand,
+      SPARKFLOW_WEB_CHAT_COMMAND_OVERRIDDEN: args.chatCommandSet ? "1" : "",
+      SPARKFLOW_WEB_CHAT_ARGS_JSON: JSON.stringify(args.chatArgs),
+      SPARKFLOW_WEB_MCP_CONFIG_PATH: mcpConfigPath,
+      SPARKFLOW_WEB_SYSTEM_PROMPT_PATH: systemPromptPath,
+      SPARKFLOW_WEB_MCP_SERVER_NAME: "sparkflow-dashboard",
+      SPARKFLOW_WEB_SLASH_COMMANDS_JSON: JSON.stringify(SLASH_COMMANDS),
+      ...(args.dev ? { SPARKFLOW_WEB_DEV: "1" } : {}),
+    };
     const result = spawnSync(
       process.execPath,
-      [
-        WEB_ENTRY_PATH,
-        socketPath,
-        args.cwd,
-        String(args.port),
-        args.chatCommand,
-        ...chatToolArgs,
-      ],
-      { cwd: args.cwd, stdio: "inherit" },
+      [WEB_ENTRY_PATH, socketPath, args.cwd, String(args.port)],
+      { cwd: args.cwd, stdio: "inherit", env: webEnv },
     );
     process.exitCode = result.status ?? 0;
   } else {
@@ -392,15 +419,10 @@ try {
       execFileSync("tmux", ["kill-session", "-t", sessionName], { stdio: "pipe" });
     } catch { /* already dead */ }
   }
+  // Web mode: the supervisor owns chat-tool file cleanup. Tmux mode: we do.
+  if (chatSpawn) { try { chatSpawn.cleanup(); } catch { /* ignore */ } }
   try { unlinkSync(mcpConfigPath); } catch { /* ignore */ }
   try { unlinkSync(systemPromptPath); } catch { /* ignore */ }
   try { unlinkSync(socketPath); } catch { /* ignore */ }
-  // Remove injected slash command files
-  for (const f of commandFiles) {
-    try { unlinkSync(f); } catch { /* ignore */ }
-  }
-  // Remove commands dir if we created it and it's now empty
-  if (createdCommandsDir) {
-    try { rmdirSync(commandsDir); } catch { /* ignore — not empty or already gone */ }
-  }
+  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
 }

@@ -61,12 +61,25 @@ sparkflow-run run [<workflow>] [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--v
 
 | Flag | Description |
 | --- | --- |
-| `<workflow>` | Path to a JSON workflow file, or a bare name resolved as `.sparkflow/workflows/<name>.json`. If omitted, uses `defaultWorkflow` from `.sparkflow/config.json`. |
+| `<workflow>` | Path to a JSON workflow file, or a bare name resolved first as `.sparkflow/workflows/<name>.json` in the project, then `~/.config/sparkflow/workflows/<name>.json` at the user level. If omitted, uses `defaultWorkflow` from the merged config. |
 | `--dry-run` | Plan the workflow without executing side effects. |
 | `--cwd <dir>` | Working directory for the run. |
 | `--plan <plan.md>` | Prepend the text of `<plan.md>` to every prompt sent to agents. |
 | `--verbose` | Verbose logging. |
 | `--status-json` | Emit step-status events as JSON on stderr and read answer events from stdin. Used by the dashboard to drive the status pane. |
+
+## Configuration
+
+Sparkflow reads configuration and workflows from two layers. The user-level layer is good for things you'd otherwise copy into every project (shared workflows, your default chat tool, model defaults). The project layer overrides on a field-by-field basis.
+
+| Layer | Config file | Workflows dir |
+| --- | --- | --- |
+| User | `~/.config/sparkflow/config.json` (or `$XDG_CONFIG_HOME/sparkflow/config.json`) | `~/.config/sparkflow/workflows/<name>.json` |
+| Project | `<cwd>/.sparkflow/config.json` | `<cwd>/.sparkflow/workflows/<name>.json` |
+
+**Config merge.** Project fields win over user fields; the merge is shallow — nested objects (`git`) are replaced whole rather than deep-merged. So if your user config sets `git.pr_repo` and the project sets `git.base`, the result has only `git.base` (not both). Re-specify the fields you need at the project level.
+
+**Workflow resolution.** A bare name like `standard-feature` is looked up in the project's `.sparkflow/workflows/` first; if missing, it falls back to the user's `~/.config/sparkflow/workflows/`. An absolute or relative path bypasses the lookup. Listing workflows in an error message tags user-level ones with `(user)`.
 
 ## MCP tools (dashboard bridge)
 

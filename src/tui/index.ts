@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, mkdirSync, existsSync, rmdirSync } from "node:fs";
+import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, mkdirSync, existsSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
-import { buildChatSpawn } from "./chat-tool.js";
+import { buildChatSpawn, type SlashCommandSpec } from "./chat-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -257,9 +257,11 @@ const systemPromptPath = join(tmpDir, "system-prompt.txt");
 const systemPromptText = defaultSystemPrompt(args.web ? "web" : "tmux");
 writeFileSync(systemPromptPath, systemPromptText);
 
-// 4. Inject slash commands into .claude/commands/ in the working directory
-const SLASH_COMMANDS: Record<string, string> = {
-  "sf-plan": `I want to build a plan for a task. Read my description below, then:
+// 4. Inject slash commands into .claude/commands/ (claude) or .gemini/commands/project/ (gemini)
+const SLASH_COMMANDS: Record<string, SlashCommandSpec> = {
+  "sf-plan": {
+    description: "Enter planning mode; produce a structured plan for a task.",
+    body: `I want to build a plan for a task. Read my description below, then:
 
 1. If anything is unclear or ambiguous, ask me your questions **all at once** in a single message. Wait for my answers before proceeding.
 2. Once you have enough information, produce a complete project plan and stop. Do not ask what to do next or offer to help further — just present the plan.
@@ -277,7 +279,7 @@ Keep the plan concrete — name specific files, functions, and types. When I'm h
 
 Here's what I want to build:
 $ARGUMENTS`,
-
+  },
 };
 
 // sf-dispatch is built dynamically based on --workflow flag
@@ -286,7 +288,9 @@ const defaultWorkflowNote = args.workflow
 If the user provides an argument, use that instead: $ARGUMENTS`
   : `The workflow to run: $ARGUMENTS`;
 
-SLASH_COMMANDS["sf-dispatch"] = `Dispatch the plan we just built to a sparkflow workflow.
+SLASH_COMMANDS["sf-dispatch"] = {
+  description: "Dispatch the current plan to a sparkflow workflow.",
+  body: `Dispatch the plan we just built to a sparkflow workflow.
 
 ${defaultWorkflowNote}
 
@@ -297,12 +301,13 @@ Do the following:
    - slug set to a 3-words-or-less label summarizing the plan's goal (e.g. "add user auth", "fix login bug", "refactor pdf export"). Use lowercase, no punctuation.
 2. Report back the job ID.
 
-The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`;
+The status pane at the bottom of the terminal will show live progress. Use /project:sf-jobs to check on it.`,
+};
 
 // Shell-escape a single argument (used for tmux sh -c strings below).
 const sq = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 
-// 4. Build chat command for tmux mode. Web mode defers this to the supervisor
+// 5. Build chat command for tmux mode. Web mode defers this to the supervisor
 // so the chat tool can be switched at runtime (via the web UI).
 const chatSpawn = args.web ? null : buildChatSpawn({
   tool: args.chatTool,
@@ -314,41 +319,33 @@ const chatSpawn = args.web ? null : buildChatSpawn({
   systemPromptText,
   systemPromptPath,
   cwd: args.cwd,
+  slashCommands: SLASH_COMMANDS,
 });
 const chatCmd = chatSpawn ? chatSpawn.shellCmd : "";
 
-// 5. Build status display command (session name added after it's generated below).
+// 6. Build status display command (session name added after it's generated below).
 // In --dev mode we route through the supervisor so code changes under dist/ auto-reload.
 const statusEntry = args.dev ? SUPERVISOR_PATH : STATUS_DISPLAY_PATH;
 const buildStatusCmd = (session: string) =>
   `exec ${sq(process.execPath)} ${sq(statusEntry)} ${sq(socketPath)} ${sq(args.cwd)} ${sq(session)}`;
 
-// 6. Create tmux session with two panes
+// 7. Create tmux session with two panes
 const sessionName = `sparkflow-${randomBytes(4).toString("hex")}`;
 const attachName = `${sessionName}-attach`;
 
 // sf-quit needs the session name; web mode has no tmux session to kill — skip it.
 if (!args.web) {
-  SLASH_COMMANDS["sf-quit"] = `Shut down the sparkflow dashboard session.
+  SLASH_COMMANDS["sf-quit"] = {
+    description: "Shut down the sparkflow dashboard session.",
+    body: `Shut down the sparkflow dashboard session.
 
 Run this command:
 \`\`\`
 tmux kill-session -t '${sessionName}'
 \`\`\`
 
-This will terminate all running jobs and close the dashboard.`;
-}
-
-// Write slash command files to .claude/commands/
-const commandsDir = join(args.cwd, ".claude", "commands");
-const createdCommandsDir = !existsSync(commandsDir);
-const commandFiles: string[] = [];
-
-mkdirSync(commandsDir, { recursive: true });
-for (const [name, content] of Object.entries(SLASH_COMMANDS)) {
-  const filePath = join(commandsDir, `${name}.md`);
-  writeFileSync(filePath, content);
-  commandFiles.push(filePath);
+This will terminate all running jobs and close the dashboard.`,
+  };
 }
 
 // Get terminal dimensions before we lose the TTY
@@ -370,6 +367,7 @@ try {
       SPARKFLOW_WEB_MCP_CONFIG_PATH: mcpConfigPath,
       SPARKFLOW_WEB_SYSTEM_PROMPT_PATH: systemPromptPath,
       SPARKFLOW_WEB_MCP_SERVER_NAME: "sparkflow-dashboard",
+      SPARKFLOW_WEB_SLASH_COMMANDS_JSON: JSON.stringify(SLASH_COMMANDS),
       ...(args.dev ? { SPARKFLOW_WEB_DEV: "1" } : {}),
     };
     const result = spawnSync(
@@ -426,12 +424,5 @@ try {
   try { unlinkSync(mcpConfigPath); } catch { /* ignore */ }
   try { unlinkSync(systemPromptPath); } catch { /* ignore */ }
   try { unlinkSync(socketPath); } catch { /* ignore */ }
-  // Remove injected slash command files
-  for (const f of commandFiles) {
-    try { unlinkSync(f); } catch { /* ignore */ }
-  }
-  // Remove commands dir if we created it and it's now empty
-  if (createdCommandsDir) {
-    try { rmdirSync(commandsDir); } catch { /* ignore — not empty or already gone */ }
-  }
+  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
 }

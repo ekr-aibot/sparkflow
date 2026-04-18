@@ -9,7 +9,7 @@
  * pre-existing copies in `cleanup()`.
  */
 
-import { existsSync, mkdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type ChatTool = "claude" | "gemini";
@@ -18,6 +18,13 @@ export interface McpServerSpec {
   command: string;
   args: string[];
   env: Record<string, string>;
+}
+
+export interface SlashCommandSpec {
+  /** Command body; may use $ARGUMENTS placeholder. */
+  body: string;
+  /** One-line description shown in `/help`. Optional. */
+  description?: string;
 }
 
 export interface BuildChatSpawnOpts {
@@ -38,6 +45,8 @@ export interface BuildChatSpawnOpts {
   systemPromptPath: string;
   /** Working directory — where we write .gemini/ files if applicable. */
   cwd: string;
+  /** Custom slash commands to inject. */
+  slashCommands: Record<string, SlashCommandSpec>;
 }
 
 export interface ChatSpawn {
@@ -51,6 +60,10 @@ export interface ChatSpawn {
 
 function sq(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+function escapeTomlBasicString(s: string): string {
+  return JSON.stringify(s);
 }
 
 export function buildChatSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
@@ -75,7 +88,31 @@ function buildClaudeSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
     "--mcp-config", sq(opts.mcpConfigPath),
     "--append-system-prompt", `"$(cat ${sq(opts.systemPromptPath)})"`,
   ].join(" ");
-  return { cmd: opts.command, args, shellCmd, cleanup: () => { /* no-op; caller owns temp dir */ } };
+
+  const commandsDir = join(opts.cwd, ".claude", "commands");
+  const createdCommandsDir = !existsSync(commandsDir);
+  const commandFiles: string[] = [];
+
+  if (Object.keys(opts.slashCommands).length > 0) {
+    mkdirSync(commandsDir, { recursive: true });
+    for (const [name, spec] of Object.entries(opts.slashCommands)) {
+      const filePath = join(commandsDir, `${name}.md`);
+      writeFileSync(filePath, spec.body);
+      commandFiles.push(filePath);
+    }
+  }
+
+  const cleanup = (): void => {
+    for (const f of commandFiles) {
+      try { unlinkSync(f); } catch { /* ignore */ }
+    }
+    if (createdCommandsDir) {
+      try { rmdirSync(commandsDir); } catch { /* ignore */ }
+      try { rmdirSync(join(opts.cwd, ".claude")); } catch { /* ignore */ }
+    }
+  };
+
+  return { cmd: opts.command, args, shellCmd, cleanup };
 }
 
 function buildGeminiSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
@@ -93,15 +130,18 @@ function buildGeminiSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
   const contextPath = join(opts.cwd, "GEMINI.md");
   const contextBackup = join(opts.cwd, "GEMINI.md.sparkflow-backup");
 
+  const commandsDir = join(geminiDir, "commands");
+  const projectDir = join(commandsDir, "project");
+
   // Write settings.json. If something's already there, back it up first so
   // cleanup() can restore the original.
-  let createdDir = false;
+  let createdGeminiDir = false;
   let settingsBackedUp = false;
   let contextBackedUp = false;
 
   if (!existsSync(geminiDir)) {
     mkdirSync(geminiDir, { recursive: true });
-    createdDir = true;
+    createdGeminiDir = true;
   }
   if (existsSync(settingsPath)) {
     renameSync(settingsPath, settingsBackup);
@@ -122,6 +162,43 @@ function buildGeminiSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
   }
   writeFileSync(contextPath, opts.systemPromptText);
 
+  let createdCommandsDir = false;
+  let createdProjectDir = false;
+  const commandFiles: { path: string; backup?: string }[] = [];
+
+  if (Object.keys(opts.slashCommands).length > 0) {
+    if (!existsSync(commandsDir)) {
+      mkdirSync(commandsDir, { recursive: true });
+      createdCommandsDir = true;
+    }
+    if (!existsSync(projectDir)) {
+      mkdirSync(projectDir, { recursive: true });
+      createdProjectDir = true;
+    }
+
+    for (const [name, spec] of Object.entries(opts.slashCommands)) {
+      if (spec.body.includes("'''")) {
+        throw new Error(`Slash command "${name}" body cannot contain triple single-quotes (''') for TOML literal string.`);
+      }
+      const filePath = join(projectDir, `${name}.toml`);
+      const backupPath = `${filePath}.sparkflow-backup`;
+      if (existsSync(filePath)) {
+        if (existsSync(backupPath)) {
+          throw new Error(`Backup file already exists: ${backupPath}. Cannot safely overwrite.`);
+        }
+        renameSync(filePath, backupPath);
+        commandFiles.push({ path: filePath, backup: backupPath });
+      } else {
+        commandFiles.push({ path: filePath });
+      }
+
+      const translatedBody = spec.body.replace(/\$ARGUMENTS\b/g, "{{args}}");
+      const descriptionLine = spec.description ? `description = ${escapeTomlBasicString(spec.description)}\n` : "";
+      const tomlContent = `${descriptionLine}prompt = '''\n${translatedBody}\n'''\n`;
+      writeFileSync(filePath, tomlContent);
+    }
+  }
+
   const shellCmd = [sq(opts.command), ...args.map(sq)].join(" ");
 
   const cleanup = (): void => {
@@ -129,12 +206,26 @@ function buildGeminiSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
     if (settingsBackedUp) {
       try { renameSync(settingsBackup, settingsPath); } catch { /* ignore */ }
     }
-    if (createdDir) {
-      try { rmdirSync(geminiDir); } catch { /* non-empty or already gone */ }
-    }
     try { unlinkSync(contextPath); } catch { /* already gone */ }
     if (contextBackedUp) {
       try { renameSync(contextBackup, contextPath); } catch { /* ignore */ }
+    }
+
+    for (const f of commandFiles) {
+      try { unlinkSync(f.path); } catch { /* already gone */ }
+      if (f.backup) {
+        try { renameSync(f.backup, f.path); } catch { /* ignore */ }
+      }
+    }
+
+    if (createdProjectDir) {
+      try { rmdirSync(projectDir); } catch { /* ignore */ }
+    }
+    if (createdCommandsDir) {
+      try { rmdirSync(commandsDir); } catch { /* ignore */ }
+    }
+    if (createdGeminiDir) {
+      try { rmdirSync(geminiDir); } catch { /* non-empty or already gone */ }
     }
   };
 

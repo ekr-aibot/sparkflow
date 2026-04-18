@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildChatSpawn } from "../../src/tui/chat-tool.js";
@@ -18,27 +18,92 @@ function baseOpts(tmp: string) {
     systemPromptText: "You are helpful.",
     systemPromptPath: "/tmp/system-prompt.txt",
     cwd: tmp,
+    slashCommands: {},
   };
 }
 
 describe("buildChatSpawn", () => {
-  it("claude path passes --mcp-config and --append-system-prompt flags", () => {
+  it("claude path passes --mcp-config and --append-system-prompt flags and writes slash commands", () => {
     const tmp = mkdtempSync(join(tmpdir(), "sparkflow-chat-test-"));
     try {
-      const spawn = buildChatSpawn({ ...baseOpts(tmp), tool: "claude", command: "claude" });
+      const opts = {
+        ...baseOpts(tmp),
+        tool: "claude" as const,
+        command: "claude",
+        slashCommands: {
+          "sf-plan": { body: "Plan: $ARGUMENTS", description: "Planning mode" },
+        },
+      };
+      const spawn = buildChatSpawn(opts);
       expect(spawn.cmd).toBe("claude");
       expect(spawn.args).toEqual([
         "--extra", "42",
         "--mcp-config", "/tmp/mcp-config.json",
         "--append-system-prompt", "You are helpful.",
       ]);
-      expect(spawn.shellCmd).toContain("--mcp-config");
-      expect(spawn.shellCmd).toContain("--append-system-prompt");
-      expect(spawn.shellCmd).toContain("$(cat '/tmp/system-prompt.txt')");
-      // No side effects.
-      expect(existsSync(join(tmp, ".gemini"))).toBe(false);
-      expect(existsSync(join(tmp, "GEMINI.md"))).toBe(false);
+
+      const planFile = join(tmp, ".claude", "commands", "sf-plan.md");
+      expect(existsSync(planFile)).toBe(true);
+      expect(readFileSync(planFile, "utf-8")).toBe("Plan: $ARGUMENTS");
+
       spawn.cleanup();
+      expect(existsSync(planFile)).toBe(false);
+      expect(existsSync(join(tmp, ".claude"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("gemini path writes .gemini/settings.json and GEMINI.md, and slash commands in TOML format", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-chat-test-"));
+    try {
+      const opts = {
+        ...baseOpts(tmp),
+        tool: "gemini" as const,
+        command: "npx",
+        slashCommands: {
+          "sf-plan": { body: "Plan: $ARGUMENTS", description: "Planning mode" },
+        },
+      };
+      const spawn = buildChatSpawn(opts);
+      expect(spawn.cmd).toBe("npx");
+
+      const planFile = join(tmp, ".gemini", "commands", "project", "sf-plan.toml");
+      expect(existsSync(planFile)).toBe(true);
+      const content = readFileSync(planFile, "utf-8");
+      expect(content).toContain('description = "Planning mode"');
+      expect(content).toContain("prompt = '''");
+      expect(content).toContain("Plan: {{args}}");
+
+      spawn.cleanup();
+      expect(existsSync(planFile)).toBe(false);
+      expect(existsSync(join(tmp, ".gemini"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("gemini slash command cleanup restores pre-existing command files", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-chat-test-"));
+    try {
+      const geminiDir = join(tmp, ".gemini", "commands", "project");
+      mkdirSync(geminiDir, { recursive: true });
+      const planFile = join(geminiDir, "sf-plan.toml");
+      writeFileSync(planFile, "ORIGINAL_PLAN");
+
+      const opts = {
+        ...baseOpts(tmp),
+        tool: "gemini" as const,
+        command: "npx",
+        slashCommands: {
+          "sf-plan": { body: "NEW_PLAN", description: "New plan" },
+        },
+      };
+      const spawn = buildChatSpawn(opts);
+      expect(readFileSync(planFile, "utf-8")).toContain("NEW_PLAN");
+
+      spawn.cleanup();
+      expect(readFileSync(planFile, "utf-8")).toBe("ORIGINAL_PLAN");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

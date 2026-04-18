@@ -34,7 +34,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { spawn as ptySpawn, type IPty } from "node-pty";
-import { buildChatSpawn, type ChatTool, type McpServerSpec } from "../tui/chat-tool.js";
+import { buildChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpec } from "../tui/chat-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -68,6 +68,7 @@ interface ChatIngredients {
   systemPromptText: string;
   systemPromptPath: string;
   commandOverride: string | null; // user's --chat-command, or null if not set
+  slashCommands: Record<string, SlashCommandSpec>;
 }
 
 function readChatIngredients(cwd: string): ChatIngredients {
@@ -94,8 +95,14 @@ function readChatIngredients(cwd: string): ChatIngredients {
   const commandOverride = process.env.SPARKFLOW_WEB_CHAT_COMMAND_OVERRIDDEN === "1"
     ? (process.env.SPARKFLOW_WEB_CHAT_COMMAND ?? null)
     : null;
+
+  let slashCommands: Record<string, SlashCommandSpec> = {};
+  try {
+    slashCommands = JSON.parse(process.env.SPARKFLOW_WEB_SLASH_COMMANDS_JSON ?? "{}");
+  } catch { /* keep empty */ }
+
   void cwd;
-  return { chatArgs, mcpServerName, mcpServerSpec, mcpConfigPath, systemPromptText, systemPromptPath, commandOverride };
+  return { chatArgs, mcpServerName, mcpServerSpec, mcpConfigPath, systemPromptText, systemPromptPath, commandOverride, slashCommands };
 }
 
 function defaultCommandFor(tool: ChatTool, override: string | null): string {
@@ -182,6 +189,7 @@ async function main(): Promise<void> {
       systemPromptText: ingredients.systemPromptText,
       systemPromptPath: ingredients.systemPromptPath,
       cwd: args.cwd,
+      slashCommands: ingredients.slashCommands,
     });
     const nextPty = ptySpawn(spawn.cmd, spawn.args, {
       name: "xterm-256color",

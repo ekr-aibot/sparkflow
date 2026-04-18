@@ -47,7 +47,7 @@ Same MCP tools and slash commands as tmux mode — the only difference is the su
 | Default binary | `claude` | `npx` (with `@google/gemini-cli@latest -y` auto-prepended) |
 | MCP wiring | `--mcp-config <path>` CLI flag | `.gemini/settings.json` written in `cwd`, restoring any pre-existing file on exit |
 | System prompt | `--append-system-prompt <text>` CLI flag | `GEMINI.md` written in `cwd`, restoring any pre-existing file on exit |
-| Slash commands (`/project:sf-plan`, `/project:sf-dispatch`) | Supported via `.claude/commands/` | Not supported — Gemini users invoke `start_workflow` etc. through MCP tool calls directly |
+| Slash commands (`/project:sf-plan`, `/project:sf-dispatch`) | Supported via `.claude/commands/` | Supported via `.gemini/commands/project/` |
 | Session resume across retries | UUID-based via `--session-id`/`--resume` | Not wired — retries replay the full prompt + transition message |
 
 ### `sparkflow-run` — workflow runner

@@ -218,6 +218,41 @@ button {
   margin-bottom: 10px;
 }
 
+.prefs {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.prefs .pref {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.prefs .pref-label {
+  letter-spacing: 0.04em;
+}
+.prefs .pref-select {
+  background: var(--bg-card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.prefs .pref-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.prefs .pref-select:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 #status-title {
   margin: 0;
   font-size: 11px;

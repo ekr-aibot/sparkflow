@@ -117,6 +117,76 @@ function deriveActiveSteps(output: string[]): Record<string, string> {
   return active;
 }
 
+/**
+ * Read the full request body as a UTF-8 string, then JSON.parse it.
+ * Caps at 64 KiB so a rogue client can't OOM the server.
+ */
+function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    req.on("data", (chunk: Buffer) => {
+      bytes += chunk.byteLength;
+      if (bytes > 64 * 1024) { reject(new Error("request body too large")); req.destroy(); return; }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (chunks.length === 0) { resolve({}); return; }
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8"))); }
+      catch (err) { reject(err instanceof Error ? err : new Error(String(err))); }
+    });
+    req.on("error", (err) => reject(err));
+  });
+}
+
+// ---- Preferences ----
+// User-visible runtime switches. The `jobs` pref is propagated to every
+// subsequently-spawned sparkflow-run child via the SPARKFLOW_LLM env var; the
+// engine reads it and swaps `claude-code` ↔ `gemini` runtime types at dispatch
+// time. The `chat` pref is stored for future use (a switch requires the web
+// supervisor to respawn the PTY, which lands in a follow-up commit).
+
+type LlmKind = "claude" | "gemini";
+interface AppPreferences { chat: LlmKind; jobs: LlmKind; }
+
+function initialLlmKind(envValue: string | undefined, fallback: LlmKind): LlmKind {
+  return envValue === "claude" || envValue === "gemini" ? envValue : fallback;
+}
+
+const preferences: AppPreferences = {
+  chat: initialLlmKind(process.env.SPARKFLOW_WEB_CHAT_TOOL, "claude"),
+  jobs: initialLlmKind(process.env.SPARKFLOW_LLM, "claude"),
+};
+
+// Keep the jobs env in sync on init too, so the first spawned sparkflow-run
+// already sees the right override even before any UI pref change.
+if (preferences.jobs === "gemini") process.env.SPARKFLOW_LLM = "gemini";
+else delete process.env.SPARKFLOW_LLM;
+
+function getPreferences(): AppPreferences {
+  return { ...preferences };
+}
+
+function updatePreferences(body: unknown): AppPreferences {
+  if (typeof body !== "object" || body === null) throw new Error("expected JSON object");
+  const patch = body as Record<string, unknown>;
+  if (patch.chat !== undefined) {
+    if (patch.chat !== "claude" && patch.chat !== "gemini") throw new Error(`invalid chat: ${String(patch.chat)}`);
+    preferences.chat = patch.chat;
+    // TODO(chat-runtime-switch): signal the supervisor to respawn the PTY.
+  }
+  if (patch.jobs !== undefined) {
+    if (patch.jobs !== "claude" && patch.jobs !== "gemini") throw new Error(`invalid jobs: ${String(patch.jobs)}`);
+    preferences.jobs = patch.jobs;
+    // Claude is the default so we remove the env var rather than setting it
+    // — keeps `process.env.SPARKFLOW_LLM === undefined` as the "no override"
+    // signal in the engine.
+    if (preferences.jobs === "gemini") process.env.SPARKFLOW_LLM = "gemini";
+    else delete process.env.SPARKFLOW_LLM;
+  }
+  return { ...preferences };
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = Buffer.from(JSON.stringify(body), "utf-8");
   res.writeHead(status, {
@@ -343,6 +413,24 @@ async function main(): Promise<void> {
     if (removeMatch && req.method === "POST") {
       const r = jobManager.removeJob(removeMatch[1]);
       return r.ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 400, { error: r.error ?? "remove failed" });
+    }
+
+    if (pathname === "/api/preferences" && req.method === "GET") {
+      return sendJson(res, 200, getPreferences());
+    }
+    if (pathname === "/api/preferences" && req.method === "POST") {
+      readJsonBody(req).then((body) => {
+        try {
+          const updated = updatePreferences(body);
+          sendJson(res, 200, updated);
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+        }
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 400, { error: msg });
+      });
+      return;
     }
 
     res.writeHead(404, { "content-type": "text/plain" });

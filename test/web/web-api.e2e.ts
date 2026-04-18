@@ -189,6 +189,49 @@ test("401 on /api/* without token", async () => {
   expect(res.status).toBe(401);
 });
 
+// ---- Preferences ----
+
+test("GET /api/preferences returns the current chat/jobs runtime", async () => {
+  const res = await fetch(`${httpBase()}/api/preferences`, { headers: { Cookie: cookieHeader() } });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.chat).toMatch(/^(claude|gemini)$/);
+  expect(body.jobs).toMatch(/^(claude|gemini)$/);
+});
+
+test("POST /api/preferences toggles jobs runtime and echoes the new state", async () => {
+  const res = await fetch(`${httpBase()}/api/preferences`, {
+    method: "POST",
+    headers: { Cookie: cookieHeader(), "content-type": "application/json" },
+    body: JSON.stringify({ jobs: "gemini" }),
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.jobs).toBe("gemini");
+
+  // Subsequent GET reflects the change.
+  const after = await (await fetch(`${httpBase()}/api/preferences`, { headers: { Cookie: cookieHeader() } })).json();
+  expect(after.jobs).toBe("gemini");
+
+  // Reset so the change doesn't leak into other tests sharing the fixture.
+  await fetch(`${httpBase()}/api/preferences`, {
+    method: "POST",
+    headers: { Cookie: cookieHeader(), "content-type": "application/json" },
+    body: JSON.stringify({ jobs: "claude" }),
+  });
+});
+
+test("POST /api/preferences rejects invalid values with 400", async () => {
+  const res = await fetch(`${httpBase()}/api/preferences`, {
+    method: "POST",
+    headers: { Cookie: cookieHeader(), "content-type": "application/json" },
+    body: JSON.stringify({ jobs: "gpt-5" }),
+  });
+  expect(res.status).toBe(400);
+  const body = await res.json();
+  expect(body.error).toMatch(/invalid jobs/i);
+});
+
 // ---- Live reload: edits to src/web/static/* are picked up without a rebuild ----
 
 test("serves app files from src/ — editing src is visible on next request", async () => {

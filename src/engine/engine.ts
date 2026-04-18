@@ -683,6 +683,21 @@ export class WorkflowEngine {
     if (!runtime) {
       throw new Error(`Step has no runtime and no default runtime configured`);
     }
-    return runtime;
+    return applyLlmOverride(runtime);
   }
+}
+
+/**
+ * Swap an LLM step's `runtime.type` based on the `SPARKFLOW_LLM` env var
+ * (set by the web server when the user picks "Jobs runtime: Gemini/Claude").
+ * Preserves non-LLM runtime types unchanged. Other fields (model, args, etc.)
+ * are dropped on swap — they're tool-specific and don't translate cleanly, so
+ * we let each adapter fall back to its defaults.
+ */
+function applyLlmOverride(runtime: Runtime): Runtime {
+  const override = process.env.SPARKFLOW_LLM;
+  if (override !== "claude" && override !== "gemini") return runtime;
+  if (override === "claude" && runtime.type === "gemini") return { type: "claude-code" };
+  if (override === "gemini" && runtime.type === "claude-code") return { type: "gemini" };
+  return runtime;
 }

@@ -26,6 +26,8 @@ const els = {
   list: document.getElementById("job-list"),
   count: document.getElementById("job-count"),
   tooltip: document.getElementById("tooltip"),
+  prefChat: document.getElementById("pref-chat"),
+  prefJobs: document.getElementById("pref-jobs"),
 };
 
 // --------------------------- step colors ---------------------------
@@ -618,6 +620,40 @@ function toast(kind, text) {
     setTimeout(() => div.remove(), 220);
   }, 2400);
 }
+
+// --------------------------- preferences ---------------------------
+
+async function loadPreferences() {
+  try {
+    const res = await fetch("/api/preferences", { headers: { Accept: "application/json" } });
+    if (!res.ok) return;
+    const prefs = await res.json();
+    if (prefs.chat === "claude" || prefs.chat === "gemini") els.prefChat.value = prefs.chat;
+    if (prefs.jobs === "claude" || prefs.jobs === "gemini") els.prefJobs.value = prefs.jobs;
+  } catch { /* ignore */ }
+}
+
+async function savePreference(key, value) {
+  try {
+    const res = await fetch("/api/preferences", {
+      method: "POST",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ [key]: value }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast("error", `Failed to set ${key}: ${body?.error ?? `HTTP ${res.status}`}`);
+      return;
+    }
+    toast("success", `${key === "jobs" ? "Job runtime" : "Chat"} → ${value}`);
+  } catch (err) {
+    toast("error", `Failed to set ${key}: ${String(err?.message ?? err)}`);
+  }
+}
+
+els.prefJobs.addEventListener("change", () => savePreference("jobs", els.prefJobs.value));
+els.prefChat.addEventListener("change", () => savePreference("chat", els.prefChat.value));
+loadPreferences();
 
 // --------------------------- SSE feed ---------------------------
 

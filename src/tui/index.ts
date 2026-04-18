@@ -357,9 +357,13 @@ try {
   if (args.web) {
     // Web mode: spawn the web server directly, passing the chat command + its
     // tool-appropriate args so the server can exec it under a PTY.
-    const webEnv = args.dev
-      ? { ...process.env, SPARKFLOW_WEB_DEV: "1" }
-      : (process.env as Record<string, string>);
+    const webEnv: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      // Tell the web server which LLM the chat is running under so the
+      // preferences API can report an accurate initial value.
+      SPARKFLOW_WEB_CHAT_TOOL: args.chatTool,
+      ...(args.dev ? { SPARKFLOW_WEB_DEV: "1" } : {}),
+    };
     const result = spawnSync(
       process.execPath,
       [

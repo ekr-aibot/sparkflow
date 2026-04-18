@@ -731,4 +731,89 @@ describe("WorkflowEngine", () => {
     expect(authorRuns[1].resume).toBe(true);
     expect(authorRuns[1].sessionId).toBe("session-author-1");
   });
+
+  it("SPARKFLOW_LLM=gemini remaps claude-code runtimes at dispatch time", async () => {
+    const seenTypes: string[] = [];
+    const workflow: SparkflowWorkflow = {
+      version: "1",
+      name: "llm-override",
+      entry: "a",
+      defaults: { runtime: { type: "shell", command: "echo" }, max_retries: 1 },
+      steps: {
+        a: {
+          name: "A",
+          interactive: false,
+          runtime: { type: "claude-code" },
+          on_success: [{ step: "b" }],
+        },
+        b: { name: "B", interactive: false, runtime: { type: "shell", command: "echo" } },
+      },
+    };
+
+    const adapters = new Map<string, RuntimeAdapter>([
+      ["claude-code", new MockAdapter(async (ctx) => {
+        seenTypes.push(`claude-code:${ctx.stepId}`);
+        return { success: true, outputs: {} };
+      })],
+      ["gemini", new MockAdapter(async (ctx) => {
+        seenTypes.push(`gemini:${ctx.stepId}`);
+        return { success: true, outputs: {} };
+      })],
+      ["shell", new MockAdapter(async (ctx) => {
+        seenTypes.push(`shell:${ctx.stepId}`);
+        return { success: true, outputs: {} };
+      })],
+    ]);
+
+    const prev = process.env.SPARKFLOW_LLM;
+    process.env.SPARKFLOW_LLM = "gemini";
+    try {
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+      await engine.run();
+    } finally {
+      if (prev === undefined) delete process.env.SPARKFLOW_LLM;
+      else process.env.SPARKFLOW_LLM = prev;
+    }
+
+    // Step a was claude-code; the override routes it to the gemini adapter.
+    // Step b was shell; the override doesn't touch non-LLM runtimes.
+    expect(seenTypes).toContain("gemini:a");
+    expect(seenTypes).toContain("shell:b");
+    expect(seenTypes.some((t) => t.startsWith("claude-code:"))).toBe(false);
+  });
+
+  it("SPARKFLOW_LLM=claude routes gemini runtimes through the claude-code adapter", async () => {
+    const seenTypes: string[] = [];
+    const workflow: SparkflowWorkflow = {
+      version: "1",
+      name: "llm-override-reverse",
+      entry: "a",
+      defaults: { runtime: { type: "shell", command: "echo" }, max_retries: 1 },
+      steps: { a: { name: "A", interactive: false, runtime: { type: "gemini" } } },
+    };
+
+    const adapters = new Map<string, RuntimeAdapter>([
+      ["claude-code", new MockAdapter(async (ctx) => {
+        seenTypes.push(`claude-code:${ctx.stepId}`);
+        return { success: true, outputs: {} };
+      })],
+      ["gemini", new MockAdapter(async (ctx) => {
+        seenTypes.push(`gemini:${ctx.stepId}`);
+        return { success: true, outputs: {} };
+      })],
+      ["shell", new MockAdapter(async () => ({ success: true, outputs: {} }))],
+    ]);
+
+    const prev = process.env.SPARKFLOW_LLM;
+    process.env.SPARKFLOW_LLM = "claude";
+    try {
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+      await engine.run();
+    } finally {
+      if (prev === undefined) delete process.env.SPARKFLOW_LLM;
+      else process.env.SPARKFLOW_LLM = prev;
+    }
+
+    expect(seenTypes).toEqual(["claude-code:a"]);
+  });
 });

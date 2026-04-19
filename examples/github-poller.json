@@ -10,8 +10,8 @@
       "interactive": false,
       "runtime": {
         "type": "shell",
-        "command": "bash",
-        "args": ["./scripts/github-poller.sh"]
+        "command": "node",
+        "args": ["./scripts/github-poller.mjs"]
       },
       "outputs": {
         "items": {

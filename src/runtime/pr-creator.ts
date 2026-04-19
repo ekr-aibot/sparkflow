@@ -1,4 +1,5 @@
 import { execFileSync, spawn as nodeSpawn } from "node:child_process";
+import { statSync } from "node:fs";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { PrCreatorRuntime } from "../schema/types.js";
 
@@ -131,6 +132,12 @@ export class PrCreatorAdapter implements RuntimeAdapter {
     if (runtime.type !== "pr-creator") {
       throw new Error(`PrCreatorAdapter received non-pr-creator runtime: ${runtime.type}`);
     }
+
+    const cwdStat = (() => { try { return statSync(ctx.cwd); } catch { return null; } })();
+    if (!cwdStat || !cwdStat.isDirectory()) {
+      return { success: false, outputs: {}, error: `cwd does not exist or is not a directory: ${ctx.cwd}` };
+    }
+    ctx.logger?.info(`[${ctx.stepId}] cwd=${ctx.cwd}`);
 
     const model = runtime.model ?? DEFAULT_MODEL;
     const pushRemote = ctx.git?.push_remote ?? "origin";

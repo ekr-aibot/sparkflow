@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { SparkflowWorkflow, WorkflowRuntime } from "../schema/types.js";
@@ -74,6 +74,13 @@ export class WorkflowAdapter implements RuntimeAdapter {
     if (ctx.runtime.type !== "workflow") {
       return { success: false, outputs: {}, error: "WorkflowAdapter called with non-workflow runtime" };
     }
+
+    const cwdStat = (() => { try { return statSync(ctx.cwd); } catch { return null; } })();
+    if (!cwdStat || !cwdStat.isDirectory()) {
+      return { success: false, outputs: {}, error: `cwd does not exist or is not a directory: ${ctx.cwd}` };
+    }
+    ctx.logger?.info(`[${ctx.stepId}] cwd=${ctx.cwd}`);
+
     const rt = ctx.runtime as WorkflowRuntime;
 
     const workflowDir = ctx.workflowDir ?? ctx.cwd;

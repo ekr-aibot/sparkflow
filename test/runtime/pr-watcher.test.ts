@@ -2,12 +2,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PrWatcherAdapter } from "../../src/runtime/pr-watcher.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
 import * as child_process from "node:child_process";
+import * as fs from "node:fs";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual("node:fs") as any;
+  return {
+    ...actual,
+    statSync: vi.fn(),
+  };
+});
+
 const mockExecFileSync = vi.mocked(child_process.execFileSync);
+const mockStatSync = vi.mocked(fs.statSync);
 
 function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
   return {
@@ -61,6 +71,12 @@ describe("PrWatcherAdapter", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockStatSync.mockImplementation((path) => {
+      if (path === "/fake/repo") {
+        return { isDirectory: () => true } as any;
+      }
+      return { isDirectory: () => false } as any;
+    });
   });
 
   it("succeeds immediately when PR is already merged", async () => {
@@ -76,6 +92,7 @@ describe("PrWatcherAdapter", () => {
   it("fails immediately when no PR exists", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       if (cmd === "gh") throw new Error("no pull requests found");
+      if (cmd === "git") return Buffer.from("test-branch\n");
       throw new Error(`Unexpected: ${cmd}`);
     });
 
@@ -172,8 +189,8 @@ describe("PrWatcherAdapter", () => {
 
     const result = await adapter.run(makeCtx());
     expect(result.success).toBe(false);
-    expect(result.outputs.feedback).toContain("CI Failure");
-    expect(result.outputs.feedback).toContain("build");
+    expect(result.outputs.feedback as string).toContain("CI Failure");
+    expect(result.outputs.feedback as string).toContain("build");
   });
 
   it("detects new review requesting changes", async () => {
@@ -223,8 +240,8 @@ describe("PrWatcherAdapter", () => {
 
     const result = await adapter.run(makeCtx());
     expect(result.success).toBe(false);
-    expect(result.outputs.feedback).toContain("Changes Requested");
-    expect(result.outputs.feedback).toContain("reviewer1");
+    expect(result.outputs.feedback as string).toContain("Changes Requested");
+    expect(result.outputs.feedback as string).toContain("reviewer1");
   });
 
   it("times out when no activity occurs", async () => {

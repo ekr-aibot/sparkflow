@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 
@@ -8,6 +9,12 @@ export class ShellAdapter implements RuntimeAdapter {
     if (runtime.type !== "shell") {
       throw new Error(`ShellAdapter received non-shell runtime: ${runtime.type}`);
     }
+
+    const cwdStat = (() => { try { return statSync(ctx.cwd); } catch { return null; } })();
+    if (!cwdStat || !cwdStat.isDirectory()) {
+      return { success: false, outputs: {}, error: `cwd does not exist or is not a directory: ${ctx.cwd}` };
+    }
+    ctx.logger?.info(`[${ctx.stepId}] cwd=${ctx.cwd}`);
 
     const env: Record<string, string> = { ...process.env as Record<string, string>, ...ctx.env };
     if (ctx.prompt) {

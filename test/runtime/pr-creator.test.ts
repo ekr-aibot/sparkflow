@@ -2,14 +2,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PrCreatorAdapter } from "../../src/runtime/pr-creator.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
 import * as child_process from "node:child_process";
+import * as fs from "node:fs";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
   spawn: vi.fn(),
 }));
 
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual("node:fs") as any;
+  return {
+    ...actual,
+    statSync: vi.fn(),
+  };
+});
+
 const mockExecFileSync = vi.mocked(child_process.execFileSync);
 const mockSpawn = vi.mocked(child_process.spawn);
+const mockStatSync = vi.mocked(fs.statSync);
 
 function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
   return {
@@ -145,6 +155,12 @@ describe("PrCreatorAdapter", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockStatSync.mockImplementation((path) => {
+      if (path === "/fake/repo") {
+        return { isDirectory: () => true } as any;
+      }
+      return { isDirectory: () => false } as any;
+    });
   });
 
   it("pushes current branch and creates a new PR", async () => {

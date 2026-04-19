@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { statSync } from "node:fs";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { PrWatcherRuntime } from "../schema/types.js";
 
@@ -171,6 +172,12 @@ export class PrWatcherAdapter implements RuntimeAdapter {
     if (runtime.type !== "pr-watcher") {
       throw new Error(`PrWatcherAdapter received non-pr-watcher runtime: ${runtime.type}`);
     }
+
+    const cwdStat = (() => { try { return statSync(ctx.cwd); } catch { return null; } })();
+    if (!cwdStat || !cwdStat.isDirectory()) {
+      return { success: false, outputs: {}, error: `cwd does not exist or is not a directory: ${ctx.cwd}` };
+    }
+    ctx.logger?.info(`[${ctx.stepId}] cwd=${ctx.cwd}`);
 
     const pollInterval = (runtime.poll_interval ?? DEFAULT_POLL_INTERVAL) * 1000;
     const timeoutMs = ctx.timeout ? ctx.timeout * 1000 : undefined;

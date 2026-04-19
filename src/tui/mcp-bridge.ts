@@ -10,6 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { IpcClient, type IpcMessage } from "../mcp/ipc.js";
+import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -101,17 +102,30 @@ server.tool(
   "start_workflow",
   "Start a sparkflow-run workflow job. Returns a job ID that can be used to track status.",
   {
-    workflow_path: z.string().describe("Path to the workflow JSON file"),
+    workflow_path: z.string().describe(
+      "A bare workflow name (e.g. \"feature-development\") resolved via .sparkflow/workflows/<name>.json (project) then ~/.config/sparkflow/workflows/<name>.json (user); or an absolute/relative path to a workflow JSON file."
+    ),
     cwd: z.string().optional().describe("Working directory for the workflow"),
     plan: z.string().optional().describe("Path to a plan file to prepend to prompts"),
     plan_text: z.string().optional().describe("Plan text to prepend to prompts (written to a temp file automatically)"),
     slug: z.string().max(40).optional().describe("Short label (3 words or less) describing what this run is doing, shown in the dashboard"),
   },
   withReloadNotice(async ({ workflow_path, cwd, plan, plan_text, slug }) => {
+    const resolvedCwd = cwd ?? dashboardCwd;
+    let resolvedPath: string;
+    try {
+      const projectConfig = loadProjectConfig(resolvedCwd);
+      resolvedPath = resolveWorkflowPath(workflow_path, resolvedCwd, projectConfig);
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Failed to resolve workflow "${workflow_path}": ${(err as Error).message}` }],
+        isError: true,
+      };
+    }
     const msg: IpcMessage = {
       type: "start_workflow",
       id: randomBytes(8).toString("hex"),
-      payload: { workflowPath: workflow_path, cwd, plan, planText: plan_text, slug },
+      payload: { workflowPath: resolvedPath, cwd, plan, planText: plan_text, slug },
     };
     const response = await ipc.request(msg);
     if (response.type === "error") {

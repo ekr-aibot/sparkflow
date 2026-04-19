@@ -286,7 +286,9 @@ $ARGUMENTS`,
 const defaultWorkflowNote = args.workflow
   ? `The default workflow is: ${resolve(args.cwd, args.workflow)}
 If the user provides an argument, use that instead: $ARGUMENTS`
-  : `The workflow to run: $ARGUMENTS`;
+  : `The workflow to run: $ARGUMENTS
+
+(Pass either a bare workflow name like "feature-development" — the start_workflow tool resolves it via the project .sparkflow/workflows/ dir then the user-level ~/.config/sparkflow/workflows/ dir — or an absolute/relative path.)`;
 
 SLASH_COMMANDS["sf-dispatch"] = {
   description: "Dispatch the current plan to a sparkflow workflow.",

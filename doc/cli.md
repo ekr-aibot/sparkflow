@@ -87,7 +87,7 @@ These are exposed by `src/tui/mcp-bridge.ts` when Claude is running inside a `sp
 
 ### Job lifecycle
 
-- **`start_workflow`** — Start a `sparkflow-run` job. Params: `workflow_path` (required), `cwd`, `plan`, `plan_text`, `slug` (≤ 40 chars, 3-word label for the dashboard). Returns a job id.
+- **`start_workflow`** — Start a `sparkflow-run` job. Params: `workflow_path` (required; bare name like `"feature-development"` resolved project-first then user-level, or an absolute/relative path), `cwd`, `plan`, `plan_text`, `slug` (≤ 40 chars, 3-word label for the dashboard). Returns a job id.
 - **`list_jobs`** — List all jobs with state, step, elapsed time.
 - **`get_job_detail`** — Full output log for a specific job. Param: `job_id`.
 - **`answer_job_recovery`** — Resolve a job paused in `failed_waiting`. Params: `job_id`, `action` (`retry` | `skip` | `abort`), `message` (required for `retry`, ignored otherwise). For a claude-code step, the agent resumes with `message` as the next user turn — phrase it as a direct instruction.

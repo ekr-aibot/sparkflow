@@ -4,6 +4,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { GeminiRuntime } from "../schema/types.js";
+import { suffixFor, formatGeminiEvent } from "./log-block.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -124,7 +125,15 @@ export class GeminiAdapter implements RuntimeAdapter {
           while ((nl = stdoutLineBuffer.indexOf("\n")) !== -1) {
             const line = stdoutLineBuffer.slice(0, nl).trim();
             stdoutLineBuffer = stdoutLineBuffer.slice(nl + 1);
-            if (line) ctx.logger.info(`[${ctx.stepId}] ${line}`);
+            if (!line) continue;
+            try {
+              const event = JSON.parse(line) as Record<string, unknown>;
+              for (const block of formatGeminiEvent(event)) {
+                ctx.logger.info(`[${ctx.stepId}${suffixFor(block.kind)}] ${block.text}`);
+              }
+            } catch {
+              ctx.logger.info(`[${ctx.stepId}] ${line}`);
+            }
           }
         }
       });
@@ -164,19 +173,62 @@ export class GeminiAdapter implements RuntimeAdapter {
         const trimmed = stdout.trim();
 
         if (success && trimmed) {
-          const parsed = tryParseJson(trimmed);
-          if (parsed && ctx.step.outputs) {
-            for (const name of Object.keys(ctx.step.outputs)) {
-              if (parsed[name] !== undefined) outputs[name] = parsed[name];
+          if (ctx.verbose) {
+            // Verbose stdout is JSONL; extract assistant text from non-delta message events.
+            let lastAssistantText = "";
+            let assistantTextAll = "";
+            for (const line of trimmed.split("\n")) {
+              const l = line.trim();
+              if (!l) continue;
+              try {
+                const evt = JSON.parse(l) as Record<string, unknown>;
+                if (evt.type === "message" && evt.role === "assistant" && evt.delta !== true) {
+                  const content = evt.content;
+                  let text = "";
+                  if (typeof content === "string") {
+                    text = content;
+                  } else if (Array.isArray(content)) {
+                    text = (content as Array<Record<string, unknown>>)
+                      .filter(p => p.type === "text")
+                      .map(p => String(p.text ?? ""))
+                      .join("");
+                  }
+                  if (text.trim()) {
+                    lastAssistantText = text.trim();
+                    assistantTextAll += (assistantTextAll ? "\n" : "") + text.trim();
+                  }
+                }
+              } catch { /* skip malformed lines */ }
             }
-            outputs._response = parsed;
-          } else {
-            if (ctx.step.outputs) {
-              for (const [name, decl] of Object.entries(ctx.step.outputs)) {
-                if (decl.type === "text") outputs[name] = trimmed;
+            const parsedJson = lastAssistantText ? tryParseJson(lastAssistantText) : null;
+            if (parsedJson && ctx.step.outputs) {
+              for (const name of Object.keys(ctx.step.outputs)) {
+                if (parsedJson[name] !== undefined) outputs[name] = parsedJson[name];
               }
+              outputs._response = parsedJson;
+            } else if (assistantTextAll) {
+              if (ctx.step.outputs) {
+                for (const [name, decl] of Object.entries(ctx.step.outputs)) {
+                  if (decl.type === "text") outputs[name] = assistantTextAll;
+                }
+              }
+              outputs._response = assistantTextAll;
             }
-            outputs._response = trimmed;
+          } else {
+            const parsed = tryParseJson(trimmed);
+            if (parsed && ctx.step.outputs) {
+              for (const name of Object.keys(ctx.step.outputs)) {
+                if (parsed[name] !== undefined) outputs[name] = parsed[name];
+              }
+              outputs._response = parsed;
+            } else {
+              if (ctx.step.outputs) {
+                for (const [name, decl] of Object.entries(ctx.step.outputs)) {
+                  if (decl.type === "text") outputs[name] = trimmed;
+                }
+              }
+              outputs._response = trimmed;
+            }
           }
         }
 

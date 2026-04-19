@@ -7,71 +7,13 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { ClaudeCodeRuntime } from "../schema/types.js";
+import { suffixFor, formatClaudeEvent } from "./log-block.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Path to the compiled MCP server entry point
 const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
-
-/**
- * One loggable chunk derived from a stream-json event. Each chunk becomes a
- * separate log line with a kind-specific suffix (`[step]` for text,
- * `[step:tool]` for tool_use, `[step:tool_result]` for tool_result, and
- * `[step:meta]` for the final result event), so consumers can filter on
- * kind — e.g. the web viewer's non-verbose mode hides `:tool` lines.
- */
-interface LogBlock {
-  kind: "text" | "tool" | "tool_result" | "meta";
-  text: string;
-}
-
-function formatStreamEvent(event: Record<string, unknown>): LogBlock[] {
-  const type = event.type as string;
-
-  if (type === "assistant") {
-    const msg = event.message as Record<string, unknown> | undefined;
-    if (!msg) return [];
-    const content = msg.content as Array<Record<string, unknown>> | undefined;
-    if (!content) return [];
-
-    const blocks: LogBlock[] = [];
-    for (const block of content) {
-      if (block.type === "text" && block.text) {
-        // Split multi-line assistant text so each line carries its own
-        // `[step]` prefix in the log (tailers read line-by-line).
-        const text = String(block.text);
-        for (const line of text.split(/\r?\n/)) {
-          if (line.length > 0) blocks.push({ kind: "text", text: line });
-        }
-      } else if (block.type === "tool_use") {
-        const input = block.input ? JSON.stringify(block.input) : "";
-        blocks.push({ kind: "tool", text: `[tool: ${block.name as string}] ${input}` });
-      } else if (block.type === "tool_result") {
-        blocks.push({ kind: "tool_result", text: "[tool_result]" });
-      }
-    }
-    return blocks;
-  }
-
-  if (type === "result") {
-    const result = event.result;
-    if (result) return [{ kind: "meta", text: `result: ${String(result).slice(0, 200)}` }];
-    return [];
-  }
-
-  // Skip init, rate_limit_event, etc.
-  return [];
-}
-
-function suffixFor(kind: LogBlock["kind"]): string {
-  switch (kind) {
-    case "text": return "";
-    case "tool": return ":tool";
-    case "tool_result": return ":tool_result";
-    case "meta": return ":meta";
-  }
-}
 
 export class ClaudeCodeAdapter implements RuntimeAdapter {
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
@@ -187,7 +129,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
               if (event.type === "result") {
                 resultEvent = event;
               }
-              for (const block of formatStreamEvent(event)) {
+              for (const block of formatClaudeEvent(event)) {
                 ctx.logger.info(`[${ctx.stepId}${suffixFor(block.kind)}] ${block.text}`);
               }
             } catch {

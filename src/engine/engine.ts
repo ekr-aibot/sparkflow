@@ -93,6 +93,7 @@ export class WorkflowEngine {
   private plan?: string;
   private verbose: boolean;
   private statusJson: boolean;
+  private readonly runId: string = randomBytes(4).toString("hex");
   private worktreeManager: WorktreeManager;
   private interactionManager: UserInteractionManager;
   private pendingAnswers = new Map<string, (answer: string) => void>();
@@ -120,7 +121,7 @@ export class WorkflowEngine {
     this.plan = options.plan;
     this.verbose = options.verbose ?? false;
     this.statusJson = options.statusJson ?? false;
-    this.worktreeManager = new WorktreeManager(this.cwd);
+    this.worktreeManager = new WorktreeManager(this.cwd, this.runId);
     this.interactionManager = new UserInteractionManager(this.logger);
 
     this.adapters = adapters ?? new Map<string, RuntimeAdapter>([
@@ -147,6 +148,7 @@ export class WorkflowEngine {
   }
 
   async run(): Promise<RunResult> {
+    this.logger.info(`[sparkflow] runId=${this.runId}`);
     this.logger.info(`[sparkflow] Starting workflow "${this.workflow.name}"`);
 
     // If workflow default worktree is "fork" or "isolated", create a single
@@ -204,6 +206,14 @@ export class WorkflowEngine {
 
     // Cleanup run-level worktree (keep it around — it has the results)
     // Don't clean up: the user or pr-creator needs the branch.
+
+    // Best-effort cleanup of per-run worktree dir (fork/step worktrees only;
+    // the run-level isolated worktree is intentionally kept for pr-creator).
+    try {
+      this.worktreeManager.cleanupRunDir();
+    } catch {
+      // Best-effort
+    }
 
     // Cleanup
     this.interactionManager.close();

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Step, SparkflowWorkflow } from "../schema/types.js";
 
@@ -6,10 +7,12 @@ const WORKTREE_DIR = ".sparkflow-worktrees";
 
 export class WorktreeManager {
   private repoRoot: string;
+  private runId: string;
   private worktrees = new Map<string, string>();
 
-  constructor(repoRoot: string) {
+  constructor(repoRoot: string, runId: string) {
     this.repoRoot = repoRoot;
+    this.runId = runId;
   }
 
   /**
@@ -23,7 +26,7 @@ export class WorktreeManager {
       return this.repoRoot;
     }
 
-    const worktreePath = resolve(this.repoRoot, WORKTREE_DIR, stepId);
+    const worktreePath = resolve(this.repoRoot, WORKTREE_DIR, this.runId, stepId);
     this.prepareWorktreePath(worktreePath);
 
     if (worktreeConfig.mode === "fork") {
@@ -66,6 +69,17 @@ export class WorktreeManager {
 
   hasWorktree(stepId: string): boolean {
     return this.worktrees.has(stepId);
+  }
+
+  cleanupRunDir(): void {
+    for (const stepId of this.worktrees.keys()) {
+      this.cleanup(stepId);
+    }
+    try {
+      rmSync(resolve(this.repoRoot, WORKTREE_DIR, this.runId), { recursive: true, force: true });
+    } catch {
+      // Best-effort
+    }
   }
 
   private prepareWorktreePath(worktreePath: string): void {

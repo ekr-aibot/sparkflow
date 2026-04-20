@@ -269,6 +269,20 @@ button {
   color: var(--fg-dim);
 }
 
+.monitor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.monitor-toggle[hidden] { display: none; }
+.monitor-toggle-count {
+  color: var(--fg-dim);
+}
+
 #job-list {
   list-style: none;
   margin: 0;

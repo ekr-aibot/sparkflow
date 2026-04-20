@@ -17,6 +17,8 @@ const state = {
   jobViews: new Map(),
   // Latest jobs snapshot from SSE.
   jobs: [],
+  // Whether to show healthy monitor jobs in the panel.
+  showMonitors: localStorage.getItem("sparkflow:showMonitors") === "true",
 };
 
 const els = {
@@ -28,6 +30,9 @@ const els = {
   tooltip: document.getElementById("tooltip"),
   prefChat: document.getElementById("pref-chat"),
   prefJobs: document.getElementById("pref-jobs"),
+  showMonitors: document.getElementById("pref-show-monitors"),
+  monitorToggleLabel: document.getElementById("monitor-toggle-label"),
+  monitorCount: document.getElementById("monitor-toggle-count"),
 };
 
 // --------------------------- step colors ---------------------------
@@ -426,6 +431,17 @@ async function pollJobLog(jobId) {
 
 function findJob(id) { return state.jobs.find((j) => j.id === id); }
 
+function isMonitor(job) { return job.kind === "monitor"; }
+
+function monitorNeedsAttention(job) {
+  return job.state === "failed" || job.state === "failed_waiting" || job.state === "blocked" || !!job.pendingQuestion;
+}
+
+function isJobVisible(job, showMonitors) {
+  if (!isMonitor(job)) return true;
+  return showMonitors || monitorNeedsAttention(job);
+}
+
 // Build an ordered list of [stepName, "running"] pairs to show on the card.
 // Only *currently-running* steps get a chip — once a step succeeds or fails,
 // the server-computed activeSteps drops it. The state pill shows terminal
@@ -460,9 +476,21 @@ function elapsed(startTime, endTime) {
 function renderJobs() {
   els.list.replaceChildren();
   const jobs = state.jobs;
-  els.count.textContent = jobs.length === 0 ? "" : `${jobs.length} total`;
+  const visible = jobs.filter((j) => isJobVisible(j, state.showMonitors));
+  const monitorJobs = jobs.filter(isMonitor);
 
-  if (jobs.length === 0) {
+  // Update monitor toggle visibility and count.
+  if (monitorJobs.length === 0) {
+    els.monitorToggleLabel.hidden = true;
+  } else {
+    els.monitorToggleLabel.hidden = false;
+    els.monitorCount.textContent = `(${monitorJobs.length})`;
+    els.showMonitors.checked = state.showMonitors;
+  }
+
+  els.count.textContent = visible.length === 0 ? "" : `${visible.length} total`;
+
+  if (visible.length === 0) {
     const li = document.createElement("li");
     li.className = "empty";
     li.textContent = "No jobs running. Use /sf-dispatch in the chat to start a workflow.";
@@ -470,7 +498,7 @@ function renderJobs() {
     return;
   }
 
-  for (const job of jobs) {
+  for (const job of visible) {
     els.list.appendChild(renderJobCard(job));
   }
 }
@@ -669,6 +697,11 @@ async function savePreference(key, value) {
 
 els.prefJobs.addEventListener("change", () => savePreference("jobs", els.prefJobs.value));
 els.prefChat.addEventListener("change", () => savePreference("chat", els.prefChat.value));
+els.showMonitors.addEventListener("change", () => {
+  state.showMonitors = els.showMonitors.checked;
+  localStorage.setItem("sparkflow:showMonitors", String(state.showMonitors));
+  renderJobs();
+});
 loadPreferences();
 
 // --------------------------- SSE feed ---------------------------

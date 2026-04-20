@@ -3,6 +3,7 @@ export interface JobInfo {
   workflowPath: string;
   workflowName: string;
   slug?: string;
+  kind?: "monitor";
   state: "running" | "succeeded" | "failed" | "blocked" | "failed_waiting";
   currentStep?: string;
   stepState?: string;

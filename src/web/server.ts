@@ -345,6 +345,7 @@ async function main(): Promise<void> {
 
   const jobManager = new JobManager(args.cwd);
   jobManager.rehydrate();
+  jobManager.autoStartMonitors();
 
   try { unlinkSync(args.socketPath); } catch { /* not present */ }
   const ipcServer = new IpcServer(args.socketPath);

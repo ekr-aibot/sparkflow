@@ -111,4 +111,33 @@ describe("loadProjectConfig / resolveWorkflowPath — user + project layering", 
     const resolved = resolveWorkflowPath(undefined, projectCwd, { defaultWorkflow: "user-default" });
     expect(resolved).toBe(join(userHome, ".sparkflow", "flows", "user-default.json"));
   });
+
+  it("loads monitors array from config", () => {
+    writeProjectConfig({ monitors: ["github-poller", "fixer"] });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.monitors).toEqual(["github-poller", "fixer"]);
+  });
+
+  it("monitors from user config are preserved when project has none", () => {
+    writeUserConfig({ monitors: ["github-poller"] });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.monitors).toEqual(["github-poller"]);
+  });
+
+  it("project monitors replace user monitors (shallow merge)", () => {
+    writeUserConfig({ monitors: ["user-monitor"] });
+    writeProjectConfig({ monitors: ["project-monitor"] });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.monitors).toEqual(["project-monitor"]);
+  });
+
+  it("throws when monitors is not an array", () => {
+    writeProjectConfig({ monitors: "github-poller" });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"monitors" must be an array of strings/);
+  });
+
+  it("throws when monitors contains non-string items", () => {
+    writeProjectConfig({ monitors: [42] });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"monitors" must be an array of strings/);
+  });
 });

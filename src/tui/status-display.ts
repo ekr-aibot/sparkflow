@@ -84,6 +84,7 @@ async function main(): Promise<void> {
 
   // Rehydrate any jobs that were running before a reload.
   jobManager.rehydrate();
+  jobManager.autoStartMonitors();
 
   // The previous daemon's socket file may still exist — remove it so listen() succeeds.
   try { unlinkSync(socketPath); } catch { /* not present */ }

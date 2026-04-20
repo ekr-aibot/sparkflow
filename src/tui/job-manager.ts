@@ -6,6 +6,7 @@ import { dirname, resolve, join, basename } from "node:path";
 import type { JobInfo } from "./types.js";
 import { LogTailer } from "./log-tailer.js";
 import { StateStore, type PersistedJob } from "./state-store.js";
+import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -376,6 +377,39 @@ export class JobManager {
 
   getJobs(): JobInfo[] {
     return Array.from(this.jobs.values()).map((m) => ({ ...m.info }));
+  }
+
+  /**
+   * Start any monitors from config that are not already running or blocked.
+   * Called once after rehydrate() so existing live monitors aren't duplicated.
+   */
+  autoStartMonitors(): void {
+    let config;
+    try {
+      config = loadProjectConfig(this.cwd);
+    } catch {
+      return;
+    }
+    const monitors = config.monitors;
+    if (!monitors || monitors.length === 0) return;
+
+    const activeWorkflowPaths = new Set(
+      Array.from(this.jobs.values())
+        .filter((j) => j.info.state === "running" || j.info.state === "blocked")
+        .map((j) => j.info.workflowPath),
+    );
+
+    for (const monitor of monitors) {
+      let resolvedPath: string;
+      try {
+        resolvedPath = resolveWorkflowPath(monitor, this.cwd, config);
+      } catch (err) {
+        console.error(`[sparkflow] auto-start monitor "${monitor}": ${(err as Error).message}`);
+        continue;
+      }
+      if (activeWorkflowPaths.has(resolvedPath)) continue;
+      this.startJob(resolvedPath, { slug: "monitor" });
+    }
   }
 
   getJobDetail(jobId: string): { info: JobInfo; output: string[] } | null {

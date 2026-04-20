@@ -15,6 +15,10 @@ const __dirname = dirname(__filename);
 // Path to the compiled MCP server entry point
 const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
 
+function streamJsonUserMessage(text: string): string {
+  return JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
+}
+
 export class ClaudeCodeAdapter implements RuntimeAdapter {
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
     const runtime = ctx.runtime as ClaudeCodeRuntime;
@@ -42,12 +46,15 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push(...runtime.args);
     }
 
-    // Use stream-json for verbose mode (real-time output), plain json otherwise
-    if (ctx.verbose) {
-      args.push("--print", "--output-format", "stream-json", "--verbose");
-    } else {
-      args.push("--print", "--output-format", "json");
-    }
+    // Always use stream-json input/output: the process stays alive across turns,
+    // enabling mid-run nudge injection. --verbose is required to get assistant/tool
+    // events alongside the result event used for turn-boundary detection.
+    args.push(
+      "--print",
+      "--input-format", "stream-json",
+      "--output-format", "stream-json",
+      "--verbose",
+    );
 
     // Session handling: on a fresh run, always mint a new uuid and pass
     // --session-id so we can --resume it later. On recovery-retry (ctx.resume
@@ -95,8 +102,6 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
     const fullPrompt = parts.join("\n\n");
 
-    // Prompt is piped via stdin in --print mode to avoid ENAMETOOLONG
-
     return new Promise<RuntimeResult>((resolve) => {
       const child = spawn("claude", args, {
         cwd: ctx.cwd,
@@ -104,47 +109,47 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         stdio: "pipe",
       });
 
-      // Pipe prompt via stdin
-      if (fullPrompt) {
-        child.stdin?.write(fullPrompt);
-        child.stdin?.end();
-      } else {
-        child.stdin?.end();
-      }
-
       let stdout = "";
       let stderr = "";
-      // For stream-json mode, we collect the final result event
+      // The result event from the most recently completed turn
       let resultEvent: Record<string, unknown> | null = null;
       let stdoutLineBuffer = "";
+
+      // Resolved by the turn loop when it needs to wait for the next result event.
+      // Also resolved (with null) by the close handler to unblock a pending wait.
+      let onResultEvent: (() => void) | null = null;
 
       child.stdout?.on("data", (data: Buffer) => {
         const chunk = data.toString();
         stdout += chunk;
 
-        if (ctx.verbose && ctx.logger) {
-          // Parse newline-delimited JSON events
-          stdoutLineBuffer += chunk;
-          let newlineIdx: number;
-          while ((newlineIdx = stdoutLineBuffer.indexOf("\n")) !== -1) {
-            const line = stdoutLineBuffer.slice(0, newlineIdx).trim();
-            stdoutLineBuffer = stdoutLineBuffer.slice(newlineIdx + 1);
-            if (!line) continue;
-            try {
-              const event = JSON.parse(line) as Record<string, unknown>;
-              if (event.type === "result") {
-                resultEvent = event;
-              }
+        stdoutLineBuffer += chunk;
+        let newlineIdx: number;
+        while ((newlineIdx = stdoutLineBuffer.indexOf("\n")) !== -1) {
+          const line = stdoutLineBuffer.slice(0, newlineIdx).trim();
+          stdoutLineBuffer = stdoutLineBuffer.slice(newlineIdx + 1);
+          if (!line) continue;
+          try {
+            const event = JSON.parse(line) as Record<string, unknown>;
+            if (event.type === "result") {
+              resultEvent = event;
+              const cb = onResultEvent;
+              onResultEvent = null;
+              cb?.();
+            }
+            if (ctx.verbose && ctx.logger) {
               for (const block of formatClaudeEvent(event)) {
                 ctx.logger.info(`[${ctx.stepId}${suffixFor(block.kind)}] ${block.text}`);
               }
-            } catch {
-              // Not JSON, log raw
+            }
+          } catch {
+            if (ctx.verbose && ctx.logger) {
               ctx.logger.info(`[${ctx.stepId}] ${line}`);
             }
           }
         }
       });
+
       child.stderr?.on("data", (data: Buffer) => {
         const chunk = data.toString();
         stderr += chunk;
@@ -171,6 +176,11 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           try { unlinkSync(f); } catch { /* ignore */ }
         }
 
+        // Unblock the turn loop if it's still waiting for a result event
+        const cb = onResultEvent;
+        onResultEvent = null;
+        cb?.();
+
         const exitCode = code ?? 1;
         const success = exitCode === 0;
 
@@ -185,13 +195,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         }
 
         const outputs: Record<string, unknown> = {};
-
-        // In stream-json (verbose) mode, use the collected result event.
-        // In json mode, parse the single JSON blob from stdout.
-        const parsed = ctx.verbose
-          ? resultEvent
-          : this.tryParseJson(stdout.trim());
-
+        const parsed = resultEvent;
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
 
         if (success && parsed) {
@@ -234,15 +238,42 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           sessionId,
         });
       });
-    });
-  }
 
-  private tryParseJson(text: string): Record<string, unknown> | null {
-    try {
-      return JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
+      // Multi-turn loop: write the initial prompt, then after each result event
+      // check the nudge queue. If there's a pending nudge, send it as the next
+      // turn. When the queue is empty, close stdin to let the process exit.
+      const runTurns = async (): Promise<void> => {
+        if (!fullPrompt) {
+          // Nothing to send — let the process exit on its own (e.g. --resume with
+          // no continuation message would be unusual, but handle it gracefully).
+          child.stdin?.end();
+          return;
+        }
+
+        child.stdin?.write(streamJsonUserMessage(fullPrompt));
+
+        while (true) {
+          // Wait for the current turn's result event (or process close)
+          await new Promise<void>((r) => { onResultEvent = r; });
+
+          const nudge = ctx.nudgeQueue?.shift();
+          if (nudge) {
+            ctx.logger?.info(`[${ctx.stepId}:nudge] sending: ${nudge.slice(0, 120)}`);
+            child.stdin?.write(streamJsonUserMessage(nudge));
+            // Continue loop to wait for the next turn's result
+          } else {
+            // No queued nudge — we're done; close stdin so the process exits
+            child.stdin?.end();
+            break;
+          }
+        }
+      };
+
+      runTurns().catch((err) => {
+        ctx.logger?.info(`[${ctx.stepId}] turn loop error: ${err instanceof Error ? err.message : String(err)}`);
+        child.stdin?.end();
+      });
+    });
   }
 
   /**

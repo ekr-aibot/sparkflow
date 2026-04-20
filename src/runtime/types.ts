@@ -1,6 +1,26 @@
 import type { Runtime, Step } from "../schema/types.js";
 import type { GitConfig } from "../config/project-config.js";
 
+/**
+ * A lightweight FIFO queue for injecting user messages into a running ClaudeCodeAdapter turn loop.
+ * The engine pushes messages; the adapter drains them after each completed turn.
+ */
+export class NudgeQueue {
+  private readonly messages: string[] = [];
+
+  push(message: string): void {
+    this.messages.push(message);
+  }
+
+  shift(): string | undefined {
+    return this.messages.shift();
+  }
+
+  drain(): string[] {
+    return this.messages.splice(0);
+  }
+}
+
 export interface RuntimeContext {
   stepId: string;
   step: Step;
@@ -27,6 +47,12 @@ export interface RuntimeContext {
   stepOutputs?: Map<string, Record<string, unknown>>;
   /** Directory containing the calling workflow file — used to resolve relative paths. */
   workflowDir?: string;
+  /**
+   * Queue for receiving nudge messages mid-run (claude-code only).
+   * The engine pushes messages here when the step is running; the adapter drains
+   * them after each completed turn instead of closing stdin.
+   */
+  nudgeQueue?: NudgeQueue;
 }
 
 export interface RuntimeResult {

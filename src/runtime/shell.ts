@@ -48,6 +48,7 @@ export class ShellAdapter implements RuntimeAdapter {
         env,
         stdio,
         shell: true,
+        detached: true,
       });
 
       let stdout = "";
@@ -79,7 +80,13 @@ export class ShellAdapter implements RuntimeAdapter {
       if (ctx.timeout) {
         timer = setTimeout(() => {
           timedOut = true;
-          child.kill("SIGTERM");
+          // Kill the entire process group so child processes (e.g. sleep spawned
+          // by the shell) don't keep the stdio pipes open after the shell exits.
+          if (child.pid != null) {
+            try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+          } else {
+            child.kill("SIGTERM");
+          }
         }, ctx.timeout * 1000);
       }
 

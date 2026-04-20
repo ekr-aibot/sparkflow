@@ -291,6 +291,80 @@ describe("PrWatcherAdapter", () => {
     expect(result.outputs.feedback as string).toContain("ci/test");
   });
 
+  it("bails immediately when PR is already in merge-conflict state", async () => {
+    mockGh(new Map([
+      ["pr view", {
+        number: 42,
+        url: "https://github.com/o/r/pull/42",
+        state: "OPEN",
+        mergedAt: null,
+        mergeable: "CONFLICTING",
+      }],
+    ]));
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("merge conflict");
+    expect(result.outputs.feedback as string).toContain("Merge Conflict");
+    expect(result.outputs.feedback as string).toContain("Rebase");
+    expect(result.outputs.pr_url).toBe("https://github.com/o/r/pull/42");
+  });
+
+  it("detects merge conflict surfaced during polling", async () => {
+    let pollViews = 0;
+
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
+      if (cmd === "git" && argsArr?.[0] === "remote") {
+        return Buffer.from("https://github.com/test-owner/test-repo.git\n");
+      }
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+
+      // Initial discovery — mergeable is MERGEABLE at start
+      if (key.includes("pr view") && key.includes("number,url,state,mergedAt")) {
+        return Buffer.from(JSON.stringify({
+          number: 10,
+          url: "https://github.com/o/r/pull/10",
+          state: "OPEN",
+          mergedAt: null,
+          mergeable: "MERGEABLE",
+        }) + "\n");
+      }
+
+      // Poll pr view — flips to CONFLICTING on second poll
+      if (key.includes("pr view")) {
+        pollViews++;
+        const mergeable = pollViews >= 2 ? "CONFLICTING" : "MERGEABLE";
+        return Buffer.from(JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          url: "https://github.com/o/r/pull/10",
+          mergeable,
+        }) + "\n");
+      }
+
+      if (key.includes("pr checks")) {
+        return Buffer.from(JSON.stringify([]) + "\n");
+      }
+      if (key.includes("/reviews") || key.includes("/comments")) {
+        return Buffer.from(JSON.stringify([]) + "\n");
+      }
+
+      throw new Error(`Unexpected gh command: ${key}`);
+    });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("merge conflict");
+    expect(result.outputs.feedback as string).toContain("Merge Conflict");
+  });
+
   it("times out when no activity occurs", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];

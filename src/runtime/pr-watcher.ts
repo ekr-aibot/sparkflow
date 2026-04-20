@@ -10,6 +10,7 @@ interface PrInfo {
   url: string;
   state: string;
   mergedAt: string | null;
+  mergeable?: string;
 }
 
 interface CheckResult {
@@ -80,14 +81,14 @@ function currentBranch(cwd: string): string {
 function getPrInfoByBranch(cwd: string, repoArgs: string[]): PrInfo {
   const branch = currentBranch(cwd);
   return ghJson<PrInfo>(
-    ["pr", "view", branch, ...repoArgs, "--json", "number,url,state,mergedAt"],
+    ["pr", "view", branch, ...repoArgs, "--json", "number,url,state,mergedAt,mergeable"],
     cwd,
   );
 }
 
 function getPrInfoByNumber(num: number, cwd: string, repoArgs: string[]): PrInfo {
   return ghJson<PrInfo>(
-    ["pr", "view", String(num), ...repoArgs, "--json", "number,url,state,mergedAt"],
+    ["pr", "view", String(num), ...repoArgs, "--json", "number,url,state,mergedAt,mergeable"],
     cwd,
   );
 }
@@ -235,6 +236,23 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       };
     }
 
+    // PR is already in merge-conflict state — bail immediately with feedback
+    // so the dev loop can rebase, instead of polling indefinitely.
+    if (pr.mergeable === "CONFLICTING") {
+      ctx.logger?.info(`[${ctx.stepId}] PR has merge conflicts against base branch`);
+      return {
+        success: false,
+        outputs: {
+          feedback: formatFeedback(
+            "Merge Conflict",
+            "The PR has merge conflicts with the base branch. Rebase onto the latest base branch (or merge it in) and resolve the conflicts.",
+          ),
+          pr_url: pr.url,
+        },
+        error: "PR has merge conflicts",
+      };
+    }
+
     // Snapshot initial state. Prefer the configured pr_repo over parsing origin.
     const { owner, repo } = targetRepo
       ? parseOwnerRepo(targetRepo)
@@ -273,7 +291,7 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       let current: PrInfo;
       try {
         current = ghJson<PrInfo>(
-          ["pr", "view", String(pr.number), ...repoArgs, "--json", "state,mergedAt,url"],
+          ["pr", "view", String(pr.number), ...repoArgs, "--json", "state,mergedAt,url,mergeable"],
           ctx.cwd,
         );
       } catch (err) {
@@ -296,6 +314,24 @@ export class PrWatcherAdapter implements RuntimeAdapter {
           success: false,
           outputs: { feedback: "PR was closed without merging" },
           error: "PR closed",
+        };
+      }
+
+      // Merge conflict surfaced (typically after base branch advanced). Kick
+      // back to the dev loop so it can rebase. `UNKNOWN` means GitHub hasn't
+      // computed mergeability yet — keep polling.
+      if (current.mergeable === "CONFLICTING") {
+        ctx.logger?.info(`[${ctx.stepId}] PR has merge conflicts against base branch`);
+        return {
+          success: false,
+          outputs: {
+            feedback: formatFeedback(
+              "Merge Conflict",
+              "The PR has merge conflicts with the base branch. Rebase onto the latest base branch (or merge it in) and resolve the conflicts.",
+            ),
+            pr_url: current.url,
+          },
+          error: "PR has merge conflicts",
         };
       }
 

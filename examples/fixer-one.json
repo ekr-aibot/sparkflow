@@ -1,0 +1,41 @@
+{
+  "version": "1",
+  "name": "fixer-one",
+  "description": "Triage a single failed job: analyze the log, then act on the decision.",
+  "entry": "analyze",
+  "defaults": { "worktree": { "mode": "shared" } },
+  "steps": {
+    "analyze": {
+      "name": "Triage failure",
+      "description": "Read the job log and emit a structured JSON decision.",
+      "interactive": false,
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/fixer-analyze.md",
+      "outputs": {
+        "decision": {
+          "type": "json",
+          "description": "{ action: 'redispatch'|'file-issue'|'alert-user', ... }"
+        }
+      },
+      "on_success": [{ "step": "act" }]
+    },
+    "act": {
+      "name": "Execute decision",
+      "description": "Run the action chosen by the analyzer: redispatch, file-issue, or alert-user.",
+      "interactive": false,
+      "ask_on_failure": true,
+      "runtime": {
+        "type": "shell",
+        "command": "bash",
+        "args": ["./scripts/fixer-act.sh"]
+      },
+      "env": {
+        "SPARKFLOW_FIXER_DECISION": "${steps.analyze.output.decision}"
+      }
+    }
+  }
+}

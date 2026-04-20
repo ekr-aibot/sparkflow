@@ -12,6 +12,7 @@
       "name": "Developer Agent",
       "description": "Write or revise code based on user instructions or feedback from reviewers/tests.",
       "interactive": true,
+      "ask_on_failure": true,
       "runtime": {
         "type": "claude-code",
         "model": "sonnet",
@@ -111,10 +112,13 @@
         "type": "pr-watcher",
         "poll_interval": 30
       },
+      "on_success": [
+        { "step": "git-pull" }
+      ],
       "on_failure": [
         {
           "step": "developer",
-          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr-watch.output.feedback}. Fix the issue, re-verify the PR, and then return success. **DO NOT update the PR**"
+          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr-watch.output.feedback}. Fix the issue with one or more new commits (rebasing onto origin/main is fine if there's a conflict). Do not push — downstream steps (test, reviewer, pr-creator) will re-run and pr-creator will update the existing PR."
         }
       ],
       "outputs": {
@@ -126,6 +130,17 @@
           "type": "text",
           "description": "URL of the pull request"
         }
+      }
+    },
+    "git-pull": {
+      "name": "Update local repo",
+      "description": "Pull latest changes into the user's working tree after PR merge.",
+      "interactive": false,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "shell",
+        "command": "git",
+        "args": ["pull", "--ff-only"]
       }
     }
   }

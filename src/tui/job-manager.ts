@@ -568,6 +568,15 @@ export class JobManager {
       planText: job.originalPlanText,
       slug: job.info.slug,
     });
+
+    // Remove the old entry from the dashboard so the restarted job replaces it.
+    // Log and persisted state remain on disk for history.
+    job.tailer.stop();
+    const timer = this.persistTimers.get(jobId);
+    if (timer) { clearTimeout(timer); this.persistTimers.delete(jobId); }
+    this.jobs.delete(jobId);
+    this.fireUpdate();
+
     return { ok: true, newJobId };
   }
 

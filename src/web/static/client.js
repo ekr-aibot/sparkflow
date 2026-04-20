@@ -592,8 +592,15 @@ async function killJob(jobId) {
 
 async function restartJob(jobId) {
   const res = await postAction(`/api/jobs/${encodeURIComponent(jobId)}/restart`);
-  if (res.ok) toast("success", `Restarted ${jobId.slice(0, 8)} as ${res.newJobId?.slice(0, 8)}.`);
-  else toast("error", `Restart failed: ${res.error}`);
+  if (res.ok) {
+    toast("success", `Restarted ${jobId.slice(0, 8)} as ${res.newJobId?.slice(0, 8)}.`);
+    if (res.newJobId && state.jobViews.has(jobId)) {
+      closeJobTab(jobId);
+      openJobTab(res.newJobId);
+    }
+  } else {
+    toast("error", `Restart failed: ${res.error}`);
+  }
 }
 
 async function removeJob(jobId) {

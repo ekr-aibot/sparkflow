@@ -14,6 +14,8 @@ export interface GitConfig {
 export interface ProjectConfig {
   defaultWorkflow?: string;
   git?: GitConfig;
+  /** Workflow names or paths to start automatically when the dashboard launches. */
+  monitors?: string[];
 }
 
 const PROJECT_CONFIG_PATH = ".sparkflow/config.json";
@@ -38,6 +40,12 @@ function parseConfigObject(obj: Record<string, unknown>, label: string): Project
       throw new Error(`${label}: "defaultWorkflow" must be a string`);
     }
     config.defaultWorkflow = obj.defaultWorkflow;
+  }
+  if (obj.monitors !== undefined) {
+    if (!Array.isArray(obj.monitors) || !obj.monitors.every((m) => typeof m === "string")) {
+      throw new Error(`${label}: "monitors" must be an array of strings`);
+    }
+    config.monitors = obj.monitors as string[];
   }
   if (obj.git !== undefined) {
     if (typeof obj.git !== "object" || obj.git === null || Array.isArray(obj.git)) {

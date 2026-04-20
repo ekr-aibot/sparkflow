@@ -38,4 +38,48 @@ describe("ClaudeCodeAdapter", () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/cwd does not exist/);
   });
+
+  describe("isTokenLimitError", () => {
+    it("detects error_max_turns subtype", () => {
+      const parsed = { is_error: true, subtype: "error_max_turns", result: "" };
+      expect(adapter.isTokenLimitError(parsed, "")).toBe(true);
+    });
+
+    it("detects context length exceeded in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "context length exceeded" };
+      expect(adapter.isTokenLimitError(parsed, "")).toBe(true);
+    });
+
+    it("detects context window exceeded in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "context window exceeded" };
+      expect(adapter.isTokenLimitError(parsed, "")).toBe(true);
+    });
+
+    it("detects context_length_exceeded in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "context_length_exceeded" };
+      expect(adapter.isTokenLimitError(parsed, "")).toBe(true);
+    });
+
+    it("detects context length exceeded in stderr", () => {
+      expect(adapter.isTokenLimitError(null, "Error: context length exceeded")).toBe(true);
+    });
+
+    it("detects too many tokens in stderr", () => {
+      expect(adapter.isTokenLimitError(null, "too many tokens in request")).toBe(true);
+    });
+
+    it("returns false for non-error result events", () => {
+      const parsed = { is_error: false, subtype: "success", result: "done" };
+      expect(adapter.isTokenLimitError(parsed, "")).toBe(false);
+    });
+
+    it("returns false for generic errors", () => {
+      const parsed = { is_error: true, subtype: "other_error", result: "something went wrong" };
+      expect(adapter.isTokenLimitError(parsed, "some unrelated error")).toBe(false);
+    });
+
+    it("returns false when parsed is null and stderr has no token keywords", () => {
+      expect(adapter.isTokenLimitError(null, "exit code 1")).toBe(false);
+    });
+  });
 });

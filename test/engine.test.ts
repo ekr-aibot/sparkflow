@@ -789,6 +789,150 @@ describe("WorkflowEngine", () => {
     expect(seenTypes.some((t) => t.startsWith("claude-code:"))).toBe(false);
   });
 
+  describe("token limit auto-resume", () => {
+    it("resumes a claude-code step that hits the token limit", async () => {
+      let callCount = 0;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "token-limit-test",
+        entry: "worker",
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "claude-code" },
+          },
+        },
+      };
+
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async (ctx) => {
+          callCount++;
+          if (callCount === 1) {
+            // First call hits the token limit
+            return { success: false, outputs: {}, tokenLimitHit: true, sessionId: "sess-1" };
+          }
+          // Second call (resume) succeeds
+          return { success: true, outputs: {}, sessionId: "sess-1" };
+        })],
+      ]);
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+      const result = await engine.run();
+
+      expect(result.success).toBe(true);
+      expect(callCount).toBe(2);
+    });
+
+    it("resumes with the session id from the token-limited run", async () => {
+      const calls: Array<{ sessionId: string | undefined; resume: boolean }> = [];
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "token-limit-session-test",
+        entry: "worker",
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "claude-code" },
+          },
+        },
+      };
+
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async (ctx) => {
+          calls.push({ sessionId: ctx.sessionId, resume: !!ctx.resume });
+          if (calls.length === 1) {
+            return { success: false, outputs: {}, tokenLimitHit: true, sessionId: "sess-abc" };
+          }
+          return { success: true, outputs: {}, sessionId: "sess-abc" };
+        })],
+      ]);
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+      await engine.run();
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0].resume).toBe(false);
+      // Second call must resume the same session
+      expect(calls[1].resume).toBe(true);
+      expect(calls[1].sessionId).toBe("sess-abc");
+    });
+
+    it("aborts after exhausting token limit resumes", async () => {
+      let callCount = 0;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "token-limit-exhaust",
+        entry: "worker",
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "claude-code" },
+          },
+        },
+      };
+
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async () => {
+          callCount++;
+          // Always hit the token limit
+          return { success: false, outputs: {}, tokenLimitHit: true, sessionId: "sess-x" };
+        })],
+      ]);
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+      const result = await engine.run();
+
+      expect(result.success).toBe(false);
+      // 1 initial + 10 resumes = 11 total calls
+      expect(callCount).toBe(11);
+    });
+
+    it("does not affect the feedback-loop retry counter", async () => {
+      const calls: Array<{ stepId: string; resume: boolean }> = [];
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "token-limit-no-retry-count",
+        entry: "worker",
+        defaults: { runtime: { type: "shell", command: "echo" }, max_retries: 1 },
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "claude-code" },
+            on_failure: [{ step: "fallback" }],
+          },
+          fallback: {
+            name: "Fallback",
+            interactive: false,
+          },
+        },
+      };
+
+      let workerCalls = 0;
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async (ctx) => {
+          calls.push({ stepId: ctx.stepId, resume: !!ctx.resume });
+          workerCalls++;
+          if (workerCalls === 1) {
+            return { success: false, outputs: {}, tokenLimitHit: true, sessionId: "sess-y" };
+          }
+          return { success: true, outputs: {}, sessionId: "sess-y" };
+        })],
+        ["shell", new MockAdapter(async () => ({ success: true, outputs: {} }))],
+      ]);
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+      const result = await engine.run();
+
+      expect(result.success).toBe(true);
+      // Token limit resume should not fire the fallback
+      expect(calls.some((c) => c.stepId === "fallback")).toBe(false);
+    });
+  });
+
   it("SPARKFLOW_LLM=claude routes gemini runtimes through the claude-code adapter", async () => {
     const seenTypes: string[] = [];
     const workflow: SparkflowWorkflow = {

@@ -140,6 +140,7 @@ export class WorkflowEngine {
         state: "pending",
         retryCount: 0,
         inPlaceAttempt: 0,
+        tokenLimitResumes: 0,
         outputs: {},
         completedJoins: new Set(),
         pendingMessages: [],
@@ -469,7 +470,9 @@ export class WorkflowEngine {
     // re-invocation (e.g. when the step is re-entered via on_success after an
     // upstream loop) would cause claude-code to reject the session-id as
     // "already in use".
-    const resuming = runtime.type === "claude-code" && status.retryCount > 0 && !!status.sessionId;
+    const resuming = runtime.type === "claude-code" &&
+      (status.retryCount > 0 || status.tokenLimitResumes > 0) &&
+      !!status.sessionId;
     const ctx: RuntimeContext = {
       stepId,
       step,
@@ -528,6 +531,14 @@ export class WorkflowEngine {
         this.logger.info(`[${stepId}] succeeded`);
         this.onStepComplete(stepId);
       } else {
+        if (result.tokenLimitHit && result.sessionId) {
+          status.sessionId = result.sessionId;
+          if (await this.shouldTokenLimitResume(stepId)) {
+            status.state = "running";
+            await this.executeStep(stepId, "You reached the context/turn limit. Please continue your work where you left off.");
+            return;
+          }
+        }
         const errSuffix = result.error ? `: ${result.error}` : "";
         if (await this.shouldInPlaceRetry(stepId, errSuffix)) {
           // Re-enter execute without traversing on_failure or counting as upstream retry.
@@ -670,6 +681,23 @@ export class WorkflowEngine {
       const message = status.pendingMessages.shift();
       this.triggerStep(stepId, message);
     }
+  }
+
+  private static readonly MAX_TOKEN_LIMIT_RESUMES = 10;
+
+  private async shouldTokenLimitResume(stepId: string): Promise<boolean> {
+    const status = this.stepStatuses.get(stepId)!;
+    status.tokenLimitResumes++;
+    if (status.tokenLimitResumes > WorkflowEngine.MAX_TOKEN_LIMIT_RESUMES) {
+      this.logger.error(
+        `[${stepId}] token limit resume exhausted after ${WorkflowEngine.MAX_TOKEN_LIMIT_RESUMES} resumes`
+      );
+      return false;
+    }
+    this.logger.info(
+      `[${stepId}] token limit reached — resuming (${status.tokenLimitResumes}/${WorkflowEngine.MAX_TOKEN_LIMIT_RESUMES})`
+    );
+    return true;
   }
 
   private async shouldInPlaceRetry(stepId: string, errSuffix: string): Promise<boolean> {

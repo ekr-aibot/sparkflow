@@ -36,6 +36,8 @@ export interface RuntimeResult {
   error?: string;
   /** For claude-code: the session id actually used (so engine can persist it for retries). */
   sessionId?: string;
+  /** True when the run failed due to hitting the context/token limit, signalling the engine to auto-resume. */
+  tokenLimitHit?: boolean;
 }
 
 export interface RuntimeAdapter {

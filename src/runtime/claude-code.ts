@@ -192,6 +192,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           ? resultEvent
           : this.tryParseJson(stdout.trim());
 
+        const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
+
         if (success && parsed) {
           if (ctx.step.outputs) {
             for (const name of Object.keys(ctx.step.outputs)) {
@@ -216,6 +218,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           exitCode,
           error: success ? undefined : stderr.trim() || `Exit code ${exitCode}`,
           sessionId,
+          tokenLimitHit,
         });
       });
 
@@ -240,5 +243,27 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Returns true when the failure is caused by hitting the context/token window limit.
+   * Detects both the CLI's error_max_turns subtype and API-level context-length errors.
+   */
+  isTokenLimitError(
+    parsed: Record<string, unknown> | null,
+    stderr: string
+  ): boolean {
+    if (parsed?.is_error === true) {
+      if (parsed.subtype === "error_max_turns") return true;
+      const resultText = String(parsed.result ?? "").toLowerCase();
+      if (/context.{0,20}(length|window)|context_length_exceeded|too many tokens/.test(resultText)) {
+        return true;
+      }
+    }
+    const stderrLower = stderr.toLowerCase();
+    if (/context.{0,20}(length|window) exceeded|context_length_exceeded|too many tokens/.test(stderrLower)) {
+      return true;
+    }
+    return false;
   }
 }

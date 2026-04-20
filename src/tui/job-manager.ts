@@ -116,7 +116,7 @@ export class JobManager {
     }
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor" }): string {
     const id = randomBytes(6).toString("hex");
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
@@ -155,6 +155,7 @@ export class JobManager {
       workflowName: workflowPath,
       slug: opts?.slug,
       description: opts?.description,
+      kind: opts?.kind,
       state: "running",
       summary: "starting…",
       startTime: Date.now(),
@@ -409,7 +410,7 @@ export class JobManager {
         continue;
       }
       if (activeWorkflowPaths.has(resolvedPath)) continue;
-      this.startJob(resolvedPath, { slug: "monitor" });
+      this.startJob(resolvedPath, { kind: "monitor" });
     }
   }
 

@@ -5,6 +5,8 @@ export interface JobInfo {
   slug?: string;
   /** Longer description shown in the dashboard tooltip (e.g. a GitHub issue title). */
   description?: string;
+  /** Set to "monitor" for jobs auto-started from the monitors config array. */
+  kind?: "monitor";
   state: "running" | "succeeded" | "failed" | "blocked" | "failed_waiting";
   currentStep?: string;
   stepState?: string;

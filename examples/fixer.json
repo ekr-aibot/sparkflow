@@ -1,0 +1,57 @@
+{
+  "version": "1",
+  "name": "fixer",
+  "description": "Poll for failed jobs and auto-triage each one via fixer-one.",
+  "entry": "poll",
+  "defaults": { "worktree": { "mode": "shared" } },
+  "steps": {
+    "poll": {
+      "name": "Poll for failed jobs",
+      "description": "Scan .sparkflow/state/jobs/ for unhandled failures. Emits an array of items.",
+      "interactive": false,
+      "runtime": {
+        "type": "shell",
+        "command": "bash",
+        "args": ["./scripts/fixer-poll.sh"]
+      },
+      "outputs": {
+        "items": {
+          "type": "json",
+          "description": "Array of { job_id, log_path, workflow_name, workflow_path, slug } for unhandled failed jobs."
+        }
+      },
+      "on_success": [{ "step": "dispatch" }]
+    },
+    "dispatch": {
+      "name": "Dispatch fixer-one per failure",
+      "description": "Spawn fixer-one for each unhandled failed job, up to 2 in parallel.",
+      "interactive": false,
+      "runtime": {
+        "type": "workflow",
+        "workflow": "./fixer-one.json",
+        "max_concurrency": 2,
+        "pool": "fixer",
+        "foreach": "${steps.poll.output.items}",
+        "inputs": {
+          "JOB_ID": "${item.job_id}",
+          "LOG_PATH": "${item.log_path}",
+          "WORKFLOW_NAME": "${item.workflow_name}",
+          "WORKFLOW_PATH": "${item.workflow_path}",
+          "SLUG": "${item.slug}"
+        }
+      },
+      "on_success": [{ "step": "sleep" }]
+    },
+    "sleep": {
+      "name": "Sleep before next poll",
+      "description": "Wait 60 seconds before polling again.",
+      "interactive": false,
+      "runtime": {
+        "type": "shell",
+        "command": "sleep",
+        "args": ["60"]
+      },
+      "on_success": [{ "step": "poll" }]
+    }
+  }
+}

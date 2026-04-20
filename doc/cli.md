@@ -61,7 +61,7 @@ sparkflow-run run [<workflow>] [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--v
 
 | Flag | Description |
 | --- | --- |
-| `<workflow>` | Path to a JSON workflow file, or a bare name resolved first as `.sparkflow/workflows/<name>.json` in the project, then `~/.config/sparkflow/workflows/<name>.json` at the user level. If omitted, uses `defaultWorkflow` from the merged config. |
+| `<workflow>` | Path to a JSON workflow file, or a bare name resolved first as `.sparkflow/workflows/<name>.json` in the project, then `~/.sparkflow/flows/<name>.json` at the user level. If omitted, uses `defaultWorkflow` from the merged config. |
 | `--dry-run` | Plan the workflow without executing side effects. |
 | `--cwd <dir>` | Working directory for the run. |
 | `--plan <plan.md>` | Prepend the text of `<plan.md>` to every prompt sent to agents. |
@@ -74,12 +74,12 @@ Sparkflow reads configuration and workflows from two layers. The user-level laye
 
 | Layer | Config file | Workflows dir |
 | --- | --- | --- |
-| User | `~/.config/sparkflow/config.json` (or `$XDG_CONFIG_HOME/sparkflow/config.json`) | `~/.config/sparkflow/workflows/<name>.json` |
+| User | `~/.sparkflow/config.json` | `~/.sparkflow/flows/<name>.json` |
 | Project | `<cwd>/.sparkflow/config.json` | `<cwd>/.sparkflow/workflows/<name>.json` |
 
 **Config merge.** Project fields win over user fields; the merge is shallow — nested objects (`git`) are replaced whole rather than deep-merged. So if your user config sets `git.pr_repo` and the project sets `git.base`, the result has only `git.base` (not both). Re-specify the fields you need at the project level.
 
-**Workflow resolution.** A bare name like `standard-feature` is looked up in the project's `.sparkflow/workflows/` first; if missing, it falls back to the user's `~/.config/sparkflow/workflows/`. An absolute or relative path bypasses the lookup. Listing workflows in an error message tags user-level ones with `(user)`.
+**Workflow resolution.** A bare name like `standard-feature` is looked up in the project's `.sparkflow/workflows/` first; if missing, it falls back to the user's `~/.sparkflow/flows/`. An absolute or relative path bypasses the lookup. Listing workflows in an error message tags user-level ones with `(user)`.
 
 ## MCP tools (dashboard bridge)
 
@@ -87,7 +87,7 @@ These are exposed by `src/tui/mcp-bridge.ts` when Claude is running inside a `sp
 
 ### Job lifecycle
 
-- **`start_workflow`** — Start a `sparkflow-run` job. Params: `workflow_path` (required), `cwd`, `plan`, `plan_text`, `slug` (≤ 40 chars, 3-word label for the dashboard). Returns a job id.
+- **`start_workflow`** — Start a `sparkflow-run` job. Params: `workflow_path` (required; bare name like `"feature-development"` resolved project-first then user-level, or an absolute/relative path), `cwd`, `plan`, `plan_text`, `slug` (≤ 40 chars, 3-word label for the dashboard). Returns a job id.
 - **`list_jobs`** — List all jobs with state, step, elapsed time.
 - **`get_job_detail`** — Full output log for a specific job. Param: `job_id`.
 - **`answer_job_recovery`** — Resolve a job paused in `failed_waiting`. Params: `job_id`, `action` (`retry` | `skip` | `abort`), `message` (required for `retry`, ignored otherwise). For a claude-code step, the agent resumes with `message` as the next user turn — phrase it as a direct instruction.

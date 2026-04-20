@@ -19,21 +19,16 @@ export interface ProjectConfig {
 const PROJECT_CONFIG_PATH = ".sparkflow/config.json";
 const PROJECT_WORKFLOWS_DIR = ".sparkflow/workflows";
 const USER_CONFIG_FILE = "config.json";
-const USER_WORKFLOWS_DIR = "workflows";
+const USER_FLOWS_DIR = "flows";
 
 /**
- * User-level sparkflow home: `$XDG_CONFIG_HOME/sparkflow` or, fallback,
- * `~/.config/sparkflow`. Layout mirrors the project-level `.sparkflow/`:
+ * User-level sparkflow home: `~/.sparkflow/`. Layout:
  *
- *   <user-home>/config.json
- *   <user-home>/workflows/<name>.json
- *
- * Tests (and users who want a custom location) can override via XDG_CONFIG_HOME.
+ *   ~/.sparkflow/config.json
+ *   ~/.sparkflow/flows/<name>.json
  */
 export function userConfigDir(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  if (xdg && xdg.length > 0) return join(xdg, "sparkflow");
-  return join(homedir(), ".config", "sparkflow");
+  return join(homedir(), ".sparkflow");
 }
 
 function parseConfigObject(obj: Record<string, unknown>, label: string): ProjectConfig {
@@ -121,7 +116,7 @@ function looksLikePath(input: string): boolean {
  *
  * - Absolute or relative path: resolved against `cwd`.
  * - Bare name: first looked up in `<cwd>/.sparkflow/workflows/<name>.json`,
- *   then in the user-level `<user-config>/sparkflow/workflows/<name>.json`.
+ *   then in the user-level `~/.sparkflow/flows/<name>.json`.
  *   Project wins; user is the fallback so common workflows don't need to be
  *   copied into every repo.
  */
@@ -134,7 +129,7 @@ export function resolveWorkflowPath(
   if (!input) {
     const available = [
       ...listWorkflowsIn(join(cwd, PROJECT_WORKFLOWS_DIR)),
-      ...listWorkflowsIn(join(userConfigDir(), USER_WORKFLOWS_DIR)).map((n) => `${n} (user)`),
+      ...listWorkflowsIn(join(userConfigDir(), USER_FLOWS_DIR)).map((n) => `${n} (user)`),
     ];
     const hint = available.length ? ` Available workflows: ${available.join(", ")}.` : "";
     throw new Error(
@@ -153,15 +148,15 @@ export function resolveWorkflowPath(
   const projectPath = join(cwd, PROJECT_WORKFLOWS_DIR, `${input}.json`);
   if (existsSync(projectPath)) return projectPath;
 
-  const userPath = join(userConfigDir(), USER_WORKFLOWS_DIR, `${input}.json`);
+  const userPath = join(userConfigDir(), USER_FLOWS_DIR, `${input}.json`);
   if (existsSync(userPath)) return userPath;
 
   const available = [
     ...listWorkflowsIn(join(cwd, PROJECT_WORKFLOWS_DIR)),
-    ...listWorkflowsIn(join(userConfigDir(), USER_WORKFLOWS_DIR)).map((n) => `${n} (user)`),
+    ...listWorkflowsIn(join(userConfigDir(), USER_FLOWS_DIR)).map((n) => `${n} (user)`),
   ];
   const hint = available.length ? ` Available: ${available.join(", ")}.` : "";
   throw new Error(
-    `Workflow "${input}" not found in ${PROJECT_WORKFLOWS_DIR}/ or ${userConfigDir()}/${USER_WORKFLOWS_DIR}/.${hint}`,
+    `Workflow "${input}" not found in ${PROJECT_WORKFLOWS_DIR}/ or ${userConfigDir()}/${USER_FLOWS_DIR}/.${hint}`,
   );
 }

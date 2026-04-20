@@ -4,29 +4,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadProjectConfig, resolveWorkflowPath, userConfigDir } from "../../src/config/project-config.js";
 
-// Each test gets its own temp user config home (via XDG_CONFIG_HOME) and its
-// own project cwd, so layers can't bleed across cases.
+// Each test gets its own temp HOME and project cwd so layers can't bleed across cases.
 describe("loadProjectConfig / resolveWorkflowPath — user + project layering", () => {
   let userHome: string;
   let projectCwd: string;
-  let originalXdg: string | undefined;
+  let originalHome: string | undefined;
 
   beforeEach(() => {
     userHome = mkdtempSync(join(tmpdir(), "sparkflow-userhome-"));
     projectCwd = mkdtempSync(join(tmpdir(), "sparkflow-project-"));
-    originalXdg = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = userHome;
+    originalHome = process.env.HOME;
+    process.env.HOME = userHome;
   });
 
   afterEach(() => {
-    if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = originalXdg;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     rmSync(userHome, { recursive: true, force: true });
     rmSync(projectCwd, { recursive: true, force: true });
   });
 
   function writeUserConfig(obj: Record<string, unknown>): void {
-    const dir = join(userHome, "sparkflow");
+    const dir = join(userHome, ".sparkflow");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "config.json"), JSON.stringify(obj));
   }
@@ -36,7 +35,7 @@ describe("loadProjectConfig / resolveWorkflowPath — user + project layering", 
     writeFileSync(join(dir, "config.json"), JSON.stringify(obj));
   }
   function writeUserWorkflow(name: string, body: string = "{}"): void {
-    const dir = join(userHome, "sparkflow", "workflows");
+    const dir = join(userHome, ".sparkflow", "flows");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${name}.json`), body);
   }
@@ -46,8 +45,8 @@ describe("loadProjectConfig / resolveWorkflowPath — user + project layering", 
     writeFileSync(join(dir, `${name}.json`), body);
   }
 
-  it("userConfigDir honors XDG_CONFIG_HOME", () => {
-    expect(userConfigDir()).toBe(join(userHome, "sparkflow"));
+  it("userConfigDir returns ~/.sparkflow", () => {
+    expect(userConfigDir()).toBe(join(userHome, ".sparkflow"));
   });
 
   it("loads user-only config when no project file exists", () => {
@@ -92,7 +91,7 @@ describe("loadProjectConfig / resolveWorkflowPath — user + project layering", 
   it("falls back to user workflows when the bare name isn't in the project", () => {
     writeUserWorkflow("standard");
     const resolved = resolveWorkflowPath("standard", projectCwd, {});
-    expect(resolved).toBe(join(userHome, "sparkflow", "workflows", "standard.json"));
+    expect(resolved).toBe(join(userHome, ".sparkflow", "flows", "standard.json"));
   });
 
   it("error lists workflows from both project and user directories", () => {
@@ -110,6 +109,6 @@ describe("loadProjectConfig / resolveWorkflowPath — user + project layering", 
   it("uses config.defaultWorkflow when no explicit name passed", () => {
     writeUserWorkflow("user-default");
     const resolved = resolveWorkflowPath(undefined, projectCwd, { defaultWorkflow: "user-default" });
-    expect(resolved).toBe(join(userHome, "sparkflow", "workflows", "user-default.json"));
+    expect(resolved).toBe(join(userHome, ".sparkflow", "flows", "user-default.json"));
   });
 });

@@ -24,20 +24,16 @@
       ]
     },
     "dispatch": {
-      "name": "Dispatch feature-development",
-      "description": "Spawn feature-development per issue, capped by the worker pool.",
+      "name": "Queue feature-development per issue",
+      "description": "Write a dispatch-queue request per polled issue so each becomes its own top-level dashboard job.",
       "interactive": false,
       "runtime": {
-        "type": "workflow",
-        "workflow": "./feature-development.json",
-        "max_concurrency": 3,
-        "pool": "feature-development",
-        "foreach": "${steps.poll.output.items}",
-        "inputs": {
-          "ISSUE_NUMBER": "${item.issue_number}",
-          "ISSUE_TITLE": "${item.title}",
-          "ISSUE_BODY": "${item.body}"
-        }
+        "type": "shell",
+        "command": "node",
+        "args": ["./scripts/github-poller-dispatch.mjs"]
+      },
+      "env": {
+        "SPARKFLOW_POLLED_ITEMS": "${steps.poll.output.items}"
       },
       "on_success": [
         { "step": "sleep" }

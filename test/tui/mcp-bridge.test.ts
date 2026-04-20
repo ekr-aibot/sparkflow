@@ -234,24 +234,24 @@ describe("MCP bridge IPC protocol", () => {
 describe("start_workflow workflow path resolution (bridge logic)", () => {
   let userHome: string;
   let projectCwd: string;
-  let originalXdg: string | undefined;
+  let originalHome: string | undefined;
 
   beforeEach(() => {
     userHome = mkdtempSync(join(tmpdir(), "sparkflow-bridge-test-"));
     projectCwd = mkdtempSync(join(tmpdir(), "sparkflow-bridge-cwd-"));
-    originalXdg = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = userHome;
+    originalHome = process.env.HOME;
+    process.env.HOME = userHome;
   });
 
   afterEach(() => {
-    if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = originalXdg;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     rmSync(userHome, { recursive: true, force: true });
     rmSync(projectCwd, { recursive: true, force: true });
   });
 
   function writeUserWorkflow(name: string): string {
-    const dir = join(userHome, "sparkflow", "workflows");
+    const dir = join(userHome, ".sparkflow", "flows");
     mkdirSync(dir, { recursive: true });
     const path = join(dir, `${name}.json`);
     writeFileSync(path, "{}");

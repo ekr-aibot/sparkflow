@@ -694,7 +694,41 @@ async function savePreference(key, value) {
 }
 
 els.prefJobs.addEventListener("change", () => savePreference("jobs", els.prefJobs.value));
-els.prefChat.addEventListener("change", () => savePreference("chat", els.prefChat.value));
+
+// Chat model changes require user confirmation and a session summary.
+let pendingChatModel = null;
+const chatSwitchModal = document.getElementById("chat-switch-modal");
+const chatSwitchSummaryEl = document.getElementById("chat-switch-summary");
+
+els.prefChat.addEventListener("change", async () => {
+  const newModel = els.prefChat.value;
+  pendingChatModel = newModel;
+  chatSwitchSummaryEl.textContent = "Loading…";
+  chatSwitchModal.hidden = false;
+  try {
+    const res = await fetch("/api/chat/summary", { headers: { Accept: "application/json" } });
+    const data = await res.json().catch(() => ({}));
+    const text = typeof data.summary === "string" ? data.summary.trimEnd() : "";
+    chatSwitchSummaryEl.textContent = text || "(no chat history)";
+  } catch {
+    chatSwitchSummaryEl.textContent = "(could not load chat history)";
+  }
+});
+
+document.getElementById("chat-switch-cancel").addEventListener("click", () => {
+  chatSwitchModal.hidden = true;
+  pendingChatModel = null;
+  loadPreferences();
+});
+
+document.getElementById("chat-switch-confirm").addEventListener("click", async () => {
+  chatSwitchModal.hidden = true;
+  if (pendingChatModel !== null) {
+    await savePreference("chat", pendingChatModel);
+    pendingChatModel = null;
+  }
+});
+
 loadPreferences();
 
 // Monitor toggle: initialize from state and persist changes to localStorage.

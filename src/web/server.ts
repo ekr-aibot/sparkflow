@@ -193,6 +193,11 @@ function updatePreferences(body: unknown): AppPreferences {
   return { ...preferences };
 }
 
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[\d;]*[A-Za-z]/g, "").replace(/\x1b[()][0-9A-Z]/g, "").replace(/\r/g, "");
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = Buffer.from(JSON.stringify(body), "utf-8");
   res.writeHead(status, {
@@ -461,6 +466,11 @@ async function main(): Promise<void> {
         sendJson(res, 400, { error: msg });
       });
       return;
+    }
+
+    if (pathname === "/api/chat/summary" && req.method === "GET") {
+      const text = stripAnsi(ring.toString("utf-8"));
+      return sendJson(res, 200, { summary: text });
     }
 
     res.writeHead(404, { "content-type": "text/plain" });

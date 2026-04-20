@@ -1,5 +1,7 @@
 export type StepState = "pending" | "waiting" | "running" | "succeeded" | "failed";
 
+import type { NudgeQueue } from "../runtime/types.js";
+
 export interface StepStatus {
   state: StepState;
   retryCount: number;
@@ -14,6 +16,13 @@ export interface StepStatus {
   sessionId?: string;
   /** Last error message, preserved for recovery prompts. */
   lastError?: string;
+  /**
+   * Active nudge queue for a running claude-code step.
+   * Set by executeStep before calling adapter.run(); cleared in the finally block.
+   * Allows triggerStep to route mid-run messages directly to the running adapter
+   * instead of queuing them for a post-completion re-run.
+   */
+  nudgeQueue?: NudgeQueue;
 }
 
 import type { ProjectConfig } from "../config/project-config.js";

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ClaudeCodeAdapter } from "../../src/runtime/claude-code.js";
+import { NudgeQueue } from "../../src/runtime/types.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
 
 function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
@@ -13,6 +14,32 @@ function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
     ...overrides,
   };
 }
+
+describe("NudgeQueue", () => {
+  it("push and shift work FIFO", () => {
+    const q = new NudgeQueue();
+    q.push("first");
+    q.push("second");
+    expect(q.shift()).toBe("first");
+    expect(q.shift()).toBe("second");
+    expect(q.shift()).toBeUndefined();
+  });
+
+  it("drain empties the queue and returns all messages in order", () => {
+    const q = new NudgeQueue();
+    q.push("a");
+    q.push("b");
+    q.push("c");
+    const drained = q.drain();
+    expect(drained).toEqual(["a", "b", "c"]);
+    expect(q.shift()).toBeUndefined();
+  });
+
+  it("drain on empty queue returns empty array", () => {
+    const q = new NudgeQueue();
+    expect(q.drain()).toEqual([]);
+  });
+});
 
 describe("ClaudeCodeAdapter", () => {
   const adapter = new ClaudeCodeAdapter();

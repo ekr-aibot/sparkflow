@@ -16,6 +16,7 @@ import { GeminiAdapter } from "../runtime/gemini.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
+import { NudgeQueue } from "../runtime/types.js";
 import type { StepStatus, EngineOptions, RunResult, Logger } from "./types.js";
 import { ConsoleLogger } from "./types.js";
 
@@ -258,10 +259,17 @@ export class WorkflowEngine {
     const status = this.stepStatuses.get(stepId)!;
     const step = this.workflow.steps[stepId];
 
-    // If step is running, queue the message
+    // If step is running, inject the message directly into the running adapter
+    // via its nudge queue (claude-code only). For other runtimes, fall back to
+    // the post-completion pendingMessages queue.
     if (status.state === "running") {
       if (message) {
-        status.pendingMessages.push(message);
+        if (status.nudgeQueue) {
+          status.nudgeQueue.push(message);
+          this.logger.info(`[${stepId}] nudge received mid-run`);
+        } else {
+          status.pendingMessages.push(message);
+        }
       }
       return;
     }
@@ -473,6 +481,16 @@ export class WorkflowEngine {
     const resuming = runtime.type === "claude-code" &&
       (status.retryCount > 0 || status.tokenLimitResumes > 0) &&
       !!status.sessionId;
+
+    // Create a nudge queue for claude-code steps so mid-run messages from
+    // triggerStep are delivered as additional turns rather than queued for a
+    // post-completion re-run.
+    let nudgeQueue: NudgeQueue | undefined;
+    if (runtime.type === "claude-code") {
+      nudgeQueue = new NudgeQueue();
+      status.nudgeQueue = nudgeQueue;
+    }
+
     const ctx: RuntimeContext = {
       stepId,
       step,
@@ -491,6 +509,7 @@ export class WorkflowEngine {
       resume: resuming,
       stepOutputs: this.stepOutputs,
       workflowDir: this.workflowDir,
+      nudgeQueue,
     };
     if (resuming) {
       this.logger.info(`[${stepId}] resuming session ${status.sessionId}`);
@@ -565,6 +584,15 @@ export class WorkflowEngine {
       this.logger.error(`[${stepId}] error: ${errMsg}`);
       await this.onStepFailure(stepId);
     } finally {
+      // Flush any nudges that arrived after the adapter closed stdin back into
+      // pendingMessages so they are processed as a post-completion re-run.
+      if (status.nudgeQueue) {
+        for (const msg of status.nudgeQueue.drain()) {
+          status.pendingMessages.push(msg);
+        }
+        status.nudgeQueue = undefined;
+      }
+
       // Clean up IPC server after step completes
       const ipc = this.ipcServers.get(stepId);
       if (ipc) {

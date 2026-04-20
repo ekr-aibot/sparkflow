@@ -235,7 +235,11 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       summary = fallback.summary;
     }
 
-    // Step 5: Create PR (or adopt an existing one for this branch).
+    // Step 5: Append "Fixes #N" if the plan references a GitHub issue.
+    const issueMatch = ctx.prompt?.match(/Work GitHub Issue #(\d+)/i);
+    const body = issueMatch ? `${summary}\n\nFixes #${issueMatch[1]}` : summary;
+
+    // Step 6: Create PR (or adopt an existing one for this branch).
     // `gh pr create` prints the new PR URL to stdout — capture it directly
     // so we don't need a follow-up `gh pr view`, which is brittle when the
     // branch isn't yet tracked.
@@ -251,7 +255,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
           "--title",
           title,
           "--body",
-          summary,
+          body,
         ],
         ctx.cwd,
       );

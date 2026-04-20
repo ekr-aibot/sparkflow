@@ -166,6 +166,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const FAILED_CONCLUSIONS = new Set([
+  "failure", "FAILURE",
+  "cancelled", "CANCELLED",
+  "timed_out", "TIMED_OUT",
+  "action_required", "ACTION_REQUIRED",
+]);
+
+function isFailedConclusion(conclusion: string): boolean {
+  return FAILED_CONCLUSIONS.has(conclusion);
+}
+
 export class PrWatcherAdapter implements RuntimeAdapter {
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
     const runtime = ctx.runtime as PrWatcherRuntime;
@@ -232,7 +243,7 @@ export class PrWatcherAdapter implements RuntimeAdapter {
     const initialChecks = getChecks(pr.number, ctx.cwd, repoArgs);
     const initialFailedChecks = new Set(
       initialChecks
-        .filter((c) => c.conclusion === "failure" || c.conclusion === "FAILURE")
+        .filter((c) => isFailedConclusion(c.conclusion))
         .map((c) => c.name),
     );
 
@@ -291,9 +302,7 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       // Check for new CI failures
       const checks = getChecks(pr.number, ctx.cwd, repoArgs);
       const newFailures = checks.filter(
-        (c) =>
-          (c.conclusion === "failure" || c.conclusion === "FAILURE") &&
-          !initialFailedChecks.has(c.name),
+        (c) => isFailedConclusion(c.conclusion) && !initialFailedChecks.has(c.name),
       );
 
       if (newFailures.length > 0) {
@@ -376,9 +385,7 @@ export class PrWatcherAdapter implements RuntimeAdapter {
         const allCompleted = checks.every(
           (c) => c.state === "completed" || c.state === "COMPLETED",
         );
-        const noneFailed = checks.every(
-          (c) => c.conclusion !== "failure" && c.conclusion !== "FAILURE",
-        );
+        const noneFailed = checks.every((c) => !isFailedConclusion(c.conclusion));
         if (allCompleted && noneFailed) {
           ctx.logger?.info(`[${ctx.stepId}] all checks passed`);
           return {

@@ -244,6 +244,53 @@ describe("PrWatcherAdapter", () => {
     expect(result.outputs.feedback as string).toContain("reviewer1");
   });
 
+  it("detects cancelled/timed_out check as CI failure", async () => {
+    let pollCount = 0;
+
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
+      if (cmd === "git" && argsArr?.[0] === "remote") {
+        return Buffer.from("https://github.com/test-owner/test-repo.git\n");
+      }
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+
+      if (key.includes("pr view") && key.includes("number,url,state,mergedAt")) {
+        return Buffer.from(JSON.stringify({ number: 10, url: "https://github.com/o/r/pull/10", state: "OPEN", mergedAt: null }) + "\n");
+      }
+
+      if (key.includes("pr view") && key.includes("state,mergedAt,url")) {
+        return Buffer.from(JSON.stringify({ state: "OPEN", mergedAt: null, url: "https://github.com/o/r/pull/10" }) + "\n");
+      }
+
+      if (key.includes("pr checks")) {
+        pollCount++;
+        if (pollCount <= 1) {
+          return Buffer.from(JSON.stringify([]) + "\n");
+        }
+        return Buffer.from(JSON.stringify([
+          { name: "ci/test", state: "completed", conclusion: "timed_out" },
+        ]) + "\n");
+      }
+
+      if (key.includes("/reviews") || key.includes("/comments")) {
+        return Buffer.from(JSON.stringify([]) + "\n");
+      }
+
+      throw new Error(`Unexpected gh command: ${key}`);
+    });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.outputs.feedback as string).toContain("CI Failure");
+    expect(result.outputs.feedback as string).toContain("ci/test");
+  });
+
   it("times out when no activity occurs", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];

@@ -1,7 +1,7 @@
 {
   "version": "1",
   "name": "github-poller",
-  "description": "Poll GitHub for new issues labeled 'ready-for-claude' and dispatch feature-development for each.",
+  "description": "Poll GitHub for new issues labeled 'ready-for-sparkflow' and dispatch feature-development for each.",
   "entry": "poll",
   "steps": {
     "poll": {

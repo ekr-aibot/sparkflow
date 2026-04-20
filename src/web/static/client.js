@@ -111,6 +111,8 @@ if (!toastsEl) {
 
 // --------------------------- tooltip ---------------------------
 
+let currentAnchor = null;
+
 function attachTooltip(el, text) {
   if (!text) return;
   el.classList.add("has-tooltip");
@@ -118,9 +120,15 @@ function attachTooltip(el, text) {
   el.addEventListener("mouseleave", hideTooltip);
   el.addEventListener("focus", () => showTooltip(el, text));
   el.addEventListener("blur", hideTooltip);
+  el.addEventListener("click", hideTooltip);
 }
 
 function showTooltip(anchor, text) {
+  if (currentAnchor && !currentAnchor.isConnected) {
+    hideTooltip();
+    return;
+  }
+  currentAnchor = anchor;
   const tip = els.tooltip;
   tip.textContent = text;
   tip.setAttribute("aria-hidden", "false");
@@ -142,6 +150,7 @@ function showTooltip(anchor, text) {
 }
 
 function hideTooltip() {
+  currentAnchor = null;
   els.tooltip.classList.remove("visible");
   els.tooltip.setAttribute("aria-hidden", "true");
   // Move offscreen on next frame so stale position doesn't flash on re-show.

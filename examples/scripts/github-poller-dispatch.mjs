@@ -33,8 +33,9 @@ mkdirSync(queueDir, { recursive: true });
 for (const item of items) {
   const plan = buildPlan(item);
   const slug = `issue ${item.issue_number}`;
+  const description = item.title ? `#${item.issue_number}: ${item.title}` : undefined;
   const nonce = `${Date.now()}-${randomBytes(3).toString("hex")}`;
-  const req = { workflow_path: "feature-development", plan_text: plan, slug };
+  const req = { workflow_path: "feature-development", plan_text: plan, slug, description };
   const reqPath = join(queueDir, `${nonce}-issue-${item.issue_number}.json`);
   writeFileSync(reqPath, JSON.stringify(req));
   process.stderr.write(`[github-poller-dispatch] queued #${item.issue_number} → ${reqPath}\n`);

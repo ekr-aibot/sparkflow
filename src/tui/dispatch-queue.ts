@@ -6,6 +6,7 @@ export interface StartWorkflowRequest {
   workflow_path: string;
   plan_text?: string;
   slug?: string;
+  description?: string;
 }
 
 export type StartWorkflowFn = (
@@ -73,6 +74,7 @@ export function watchDispatchQueue(queueDir: string, startWorkflow: StartWorkflo
         workflow_path: req.workflow_path,
         plan_text: typeof req.plan_text === "string" ? req.plan_text : undefined,
         slug: typeof req.slug === "string" ? req.slug : undefined,
+        description: typeof req.description === "string" ? req.description : undefined,
       });
       if (result.error) {
         process.stderr.write(`[dispatch-queue] start_workflow failed for ${filename}: ${result.error}\n`);

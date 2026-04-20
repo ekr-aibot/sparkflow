@@ -271,6 +271,67 @@ describe("PrCreatorAdapter", () => {
     expect(result.outputs.pr_url).toBe("https://github.com/ekr/runner-up/pull/58");
   });
 
+  it("appends 'Fixes #N' when prompt contains a GitHub issue reference", async () => {
+    let capturedBody = "";
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+      if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/_run-25\n");
+      if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc1234 Add feature\n");
+      if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" src/foo.ts | 5 +++++\n");
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+      if (key.includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      if (key.includes("pr create")) {
+        const bodyIdx = argsArr.indexOf("--body");
+        if (bodyIdx !== -1) capturedBody = argsArr[bodyIdx + 1];
+        return Buffer.from("https://github.com/o/r/pull/99\n");
+      }
+      throw new Error(`Unexpected gh: ${key}`);
+    });
+    mockSpawnClaude({ title: "Fix the thing", summary: "- Fixed the thing" });
+
+    const ctx = makeCtx({
+      prompt: "# Project Plan\n\n# Work GitHub Issue #42\n\n**Title:** Fix the thing",
+    });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(capturedBody).toContain("Fixes #42");
+    expect(capturedBody).toContain("- Fixed the thing");
+  });
+
+  it("does not append 'Fixes' when prompt has no issue reference", async () => {
+    let capturedBody = "";
+    setupBaseMocks();
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+      if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/_run-25\n");
+      if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc1234 Add feature\n");
+      if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" src/foo.ts | 5 +++++\n");
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+      if (key.includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      if (key.includes("pr create")) {
+        const bodyIdx = argsArr.indexOf("--body");
+        if (bodyIdx !== -1) capturedBody = argsArr[bodyIdx + 1];
+        return Buffer.from("https://github.com/o/r/pull/99\n");
+      }
+      throw new Error(`Unexpected gh: ${key}`);
+    });
+    mockSpawnClaude({ title: "Some change", summary: "- Some change" });
+
+    const ctx = makeCtx({ prompt: "Do something without an issue number" });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(capturedBody).not.toContain("Fixes #");
+    expect(capturedBody).toBe("- Some change");
+  });
+
   it("handles gh pr create failure", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];

@@ -25,18 +25,20 @@ export async function handleIpcRequest(
 
   switch (msg.type) {
     case "start_workflow": {
-      const { workflowPath, cwd: jobCwd, plan, planText, slug } = msg.payload as {
+      const { workflowPath, cwd: jobCwd, plan, planText, slug, description } = msg.payload as {
         workflowPath: string;
         cwd?: string;
         plan?: string;
         planText?: string;
         slug?: string;
+        description?: string;
       };
       const jobId = jobManager.startJob(workflowPath, {
         cwd: jobCwd ?? cwd,
         plan,
         planText,
         slug,
+        description,
       });
       return response({ jobId });
     }

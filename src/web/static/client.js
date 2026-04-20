@@ -489,7 +489,7 @@ function renderJobCard(job) {
   name.className = "name";
   const base = job.workflowName || job.workflowPath || "workflow";
   name.textContent = job.slug ? `${base}: ${job.slug}` : base;
-  attachTooltip(name, name.textContent);
+  attachTooltip(name, job.description || name.textContent);
   top.appendChild(name);
 
   const pill = document.createElement("span");

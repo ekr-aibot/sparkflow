@@ -110,8 +110,9 @@ server.tool(
     plan: z.string().optional().describe("Path to a plan file to prepend to prompts"),
     plan_text: z.string().optional().describe("Plan text to prepend to prompts (written to a temp file automatically)"),
     slug: z.string().max(40).optional().describe("Short label (3 words or less) describing what this run is doing, shown in the dashboard"),
+    description: z.string().max(200).optional().describe("Longer description shown in the dashboard tooltip (e.g. a GitHub issue title)"),
   },
-  withReloadNotice(async ({ workflow_path, cwd, plan, plan_text, slug }) => {
+  withReloadNotice(async ({ workflow_path, cwd, plan, plan_text, slug, description }) => {
     const resolvedCwd = cwd ?? dashboardCwd;
     let resolvedPath: string;
     try {
@@ -126,7 +127,7 @@ server.tool(
     const msg: IpcMessage = {
       type: "start_workflow",
       id: randomBytes(8).toString("hex"),
-      payload: { workflowPath: resolvedPath, cwd, plan, planText: plan_text, slug },
+      payload: { workflowPath: resolvedPath, cwd, plan, planText: plan_text, slug, description },
     };
     const response = await ipc.request(msg);
     if (response.type === "error") {
@@ -504,7 +505,7 @@ watchDispatchQueue(dispatchQueueDir, async (req) => {
   const msg: IpcMessage = {
     type: "start_workflow",
     id: randomBytes(8).toString("hex"),
-    payload: { workflowPath: req.workflow_path, planText: req.plan_text, slug: req.slug },
+    payload: { workflowPath: req.workflow_path, planText: req.plan_text, slug: req.slug, description: req.description },
   };
   const response = await ipc.request(msg);
   if (response.type === "error") {

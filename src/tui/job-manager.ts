@@ -116,7 +116,7 @@ export class JobManager {
     }
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string }): string {
     const id = randomBytes(6).toString("hex");
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
@@ -154,6 +154,7 @@ export class JobManager {
       workflowPath,
       workflowName: workflowPath,
       slug: opts?.slug,
+      description: opts?.description,
       state: "running",
       summary: "starting…",
       startTime: Date.now(),
@@ -601,6 +602,7 @@ export class JobManager {
       plan: job.originalPlan,
       planText: job.originalPlanText,
       slug: job.info.slug,
+      description: job.info.description,
     });
 
     // Remove the old entry from the dashboard so the restarted job replaces it.

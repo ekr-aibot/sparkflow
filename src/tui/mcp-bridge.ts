@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { watchDispatchQueue } from "./dispatch-queue.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -481,6 +482,22 @@ Ask the user what went wrong and how to fix it before calling the tool. Do NOT c
     };
   }
 );
+
+// Start the dispatch-queue watcher so fixer workflows can redispatch jobs
+// through the dashboard by dropping *.json files into this directory.
+const dispatchQueueDir = resolve(dashboardCwd, ".sparkflow", "dispatch-queue");
+watchDispatchQueue(dispatchQueueDir, async (req) => {
+  const msg: IpcMessage = {
+    type: "start_workflow",
+    id: randomBytes(8).toString("hex"),
+    payload: { workflowPath: req.workflow_path, planText: req.plan_text, slug: req.slug },
+  };
+  const response = await ipc.request(msg);
+  if (response.type === "error") {
+    return { error: response.payload.error as string };
+  }
+  return { job_id: response.payload.jobId as string };
+});
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

@@ -232,6 +232,29 @@ test("POST /api/preferences rejects invalid values with 400", async () => {
   expect(body.error).toMatch(/invalid jobs/i);
 });
 
+// ---- Chat summary ----
+
+test("GET /api/chat/summary returns 200 with a summary string", async () => {
+  // Wait briefly for the fake-chat PTY to have written output into the ring buffer.
+  await new Promise((r) => setTimeout(r, 500));
+  const res = await fetch(`${httpBase()}/api/chat/summary`, { headers: { Cookie: cookieHeader() } });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(typeof body.summary).toBe("string");
+});
+
+test("GET /api/chat/summary includes the fake-chat ready marker (ANSI-stripped)", async () => {
+  await new Promise((r) => setTimeout(r, 500));
+  const res = await fetch(`${httpBase()}/api/chat/summary`, { headers: { Cookie: cookieHeader() } });
+  const body = await res.json();
+  expect(body.summary).toContain("SF_TEST_READY");
+});
+
+test("GET /api/chat/summary returns 401 without a token", async () => {
+  const res = await fetch(`${httpBase()}/api/chat/summary`);
+  expect(res.status).toBe(401);
+});
+
 // ---- Live reload: edits to src/web/static/* are picked up without a rebuild ----
 
 test("serves app files from src/ — editing src is visible on next request", async () => {

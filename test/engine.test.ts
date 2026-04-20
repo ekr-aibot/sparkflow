@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { WorkflowEngine } from "../src/engine/engine.js";
 import type { SparkflowWorkflow } from "../src/schema/types.js";
+import { NudgeQueue } from "../src/runtime/types.js";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "../src/runtime/types.js";
 
 // Silent logger for tests
@@ -930,6 +931,157 @@ describe("WorkflowEngine", () => {
       expect(result.success).toBe(true);
       // Token limit resume should not fire the fallback
       expect(calls.some((c) => c.stepId === "fallback")).toBe(false);
+    });
+  });
+
+  describe("nudge queue", () => {
+    it("provides a NudgeQueue to claude-code steps", async () => {
+      let capturedQueue: unknown;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "nudge-queue-presence",
+        entry: "a",
+        defaults: {},
+        steps: {
+          a: { name: "A", interactive: false, runtime: { type: "claude-code" } },
+        },
+      };
+
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async (ctx) => {
+          capturedQueue = ctx.nudgeQueue;
+          return { success: true, outputs: {} };
+        })],
+      ]);
+
+      await new WorkflowEngine(workflow, { logger: silentLogger }, adapters).run();
+
+      expect(capturedQueue).toBeInstanceOf(NudgeQueue);
+    });
+
+    it("does not provide a nudgeQueue to non-claude-code steps", async () => {
+      let capturedQueue: unknown = "not-set";
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "nudge-queue-shell",
+        entry: "a",
+        defaults: {},
+        steps: {
+          a: { name: "A", interactive: false, runtime: { type: "shell", command: "echo" } },
+        },
+      };
+
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["shell", new MockAdapter(async (ctx) => {
+          capturedQueue = ctx.nudgeQueue;
+          return { success: true, outputs: {} };
+        })],
+      ]);
+
+      await new WorkflowEngine(workflow, { logger: silentLogger }, adapters).run();
+
+      expect(capturedQueue).toBeUndefined();
+    });
+
+    it("routes mid-run message to nudgeQueue when target claude-code step is running", async () => {
+      // Fan-out: start → [A (claude-code, long-running), B (shell, fast)]
+      // B's on_success triggers A with a nudge. Since A is still running when B
+      // completes, the message must land in A's nudgeQueue (not pendingMessages).
+      let releaseA!: (r: RuntimeResult) => void;
+      let capturedQueue: NudgeQueue | undefined;
+
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "nudge-routing-test",
+        entry: "start",
+        defaults: {},
+        steps: {
+          start: {
+            name: "Start", interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_success: [{ step: "a" }, { step: "b" }],
+          },
+          a: { name: "A", interactive: false, runtime: { type: "claude-code" } },
+          b: {
+            name: "B", interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_success: [{ step: "a", message: "nudge from b" }],
+          },
+        },
+      };
+
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async (ctx) => {
+          capturedQueue = ctx.nudgeQueue as NudgeQueue | undefined;
+          // Hold A running so B can complete and push a nudge while A is live
+          return new Promise<RuntimeResult>((r) => { releaseA = r; });
+        })],
+        ["shell", new MockAdapter(async () => ({ success: true, outputs: {} }))],
+      ]);
+
+      const runPromise = new WorkflowEngine(workflow, { logger: silentLogger }, adapters).run();
+
+      // One setImmediate boundary lets all pending microtasks drain: start → B
+      // completes → on_success fires → nudge pushed to A's queue.
+      await new Promise<void>((r) => setImmediate(r));
+
+      expect(capturedQueue).toBeInstanceOf(NudgeQueue);
+      expect(capturedQueue?.shift()).toBe("nudge from b");
+
+      releaseA({ success: true, outputs: {} });
+      const result = await runPromise;
+      expect(result.success).toBe(true);
+    });
+
+    it("flushes undelivered nudges to pendingMessages on step completion", async () => {
+      // Simulate a nudge that was pushed to the queue just as A was about to
+      // finish — i.e., we push to the queue manually after capturing it, then
+      // release A. The engine's finally block should move those nudges into
+      // pendingMessages, causing A to re-run with them.
+      let releaseA!: (r: RuntimeResult) => void;
+      let capturedQueue: NudgeQueue | undefined;
+      const aRunMessages: Array<string | undefined> = [];
+
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "nudge-flush-test",
+        entry: "a",
+        defaults: {},
+        steps: {
+          a: { name: "A", interactive: false, runtime: { type: "claude-code" } },
+        },
+      };
+
+      let callCount = 0;
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async (ctx) => {
+          callCount++;
+          aRunMessages.push(ctx.transitionMessage);
+          if (callCount === 1) {
+            capturedQueue = ctx.nudgeQueue as NudgeQueue | undefined;
+            return new Promise<RuntimeResult>((r) => { releaseA = r; });
+          }
+          return { success: true, outputs: {} };
+        })],
+      ]);
+
+      const runPromise = new WorkflowEngine(workflow, { logger: silentLogger }, adapters).run();
+
+      // Let A start and capture its queue
+      await new Promise<void>((r) => setImmediate(r));
+      expect(capturedQueue).toBeInstanceOf(NudgeQueue);
+
+      // Push a nudge directly into the queue (simulates a late-arriving nudge)
+      capturedQueue!.push("late nudge");
+
+      // Release A — its run loop will see the nudge, drain it into pendingMessages,
+      // which triggers a second invocation of A with "late nudge" as transitionMessage.
+      releaseA({ success: true, outputs: {} });
+
+      const result = await runPromise;
+      expect(result.success).toBe(true);
+      expect(callCount).toBe(2);
+      expect(aRunMessages[1]).toBe("late nudge");
     });
   });
 

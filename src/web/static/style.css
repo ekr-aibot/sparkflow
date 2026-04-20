@@ -220,6 +220,25 @@ button {
   margin-bottom: 10px;
 }
 
+.monitor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.monitor-toggle[hidden] { display: none; }
+.monitor-toggle input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent);
+  margin: 0;
+}
+.monitor-toggle-count {
+  color: var(--fg-dim);
+}
+
 .prefs {
   margin-left: auto;
   display: flex;

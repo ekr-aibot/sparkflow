@@ -11,7 +11,7 @@ function gh(args) {
 
 const candidates = JSON.parse(gh([
   "issue", "list", ...repoArgs,
-  "--label", "ready-for-claude", "--state", "open",
+  "--label", "ready-for-sparkflow", "--state", "open",
   "--json", "number,title,body,labels",
 ]));
 
@@ -28,7 +28,7 @@ for (const item of toDispatch) {
   execFileSync(
     "gh",
     ["issue", "edit", String(item.issue_number), ...repoArgs, "--add-label", "in-progress"],
-    { stdio: ["ignore", "inherit", "inherit"] },
+    { stdio: ["ignore", "ignore", "inherit"] },
   );
 }
 

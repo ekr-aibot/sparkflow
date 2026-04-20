@@ -1,5 +1,6 @@
-import { watch, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
+import { watch, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, renameSync } from "node:fs";
 import { join, basename } from "node:path";
+import { randomBytes } from "node:crypto";
 
 export interface StartWorkflowRequest {
   workflow_path: string;
@@ -26,18 +27,27 @@ export function watchDispatchQueue(queueDir: string, startWorkflow: StartWorkflo
     if (!filename.endsWith(".json") || filename.endsWith(".result.json")) return;
 
     const reqPath = join(queueDir, filename);
+    const lockPath = join(queueDir, filename + "." + randomBytes(4).toString("hex") + ".lock");
     const resultPath = join(queueDir, basename(filename, ".json") + ".result.json");
+
+    // Atomic claim: try to rename to a unique lock file.
+    // If multiple watchers are active, only one wins the rename.
+    try {
+      renameSync(reqPath, lockPath);
+    } catch {
+      return; // Already claimed or disappeared
+    }
 
     let content: string;
     try {
-      content = readFileSync(reqPath, "utf-8");
+      content = readFileSync(lockPath, "utf-8");
     } catch {
-      return; // file already consumed by a concurrent event
+      return; // Should not happen after successful rename
     }
 
     async function finish(result: { job_id?: string; error?: string }): Promise<void> {
       writeFileSync(resultPath, JSON.stringify(result));
-      try { unlinkSync(reqPath); } catch { /* already gone */ }
+      try { unlinkSync(lockPath); } catch { /* already gone */ }
     }
 
     let parsed: unknown;

@@ -64,6 +64,18 @@ export class JobManager {
     const persisted = this.store.loadJobs();
     for (const p of persisted) {
       const alive = isAlive(p.pid);
+      // Monitor jobs are ephemeral to a daemon lifetime: if the process is gone
+      // or already terminal, drop the persisted state entirely rather than
+      // leaving a ghost in the dashboard. autoStartMonitors() runs right after
+      // and will spin up a fresh replacement from config. A pid can look alive
+      // after recycling, so state check matters independently of the pid probe.
+      if (p.info.kind === "monitor") {
+        const terminal = p.info.state === "failed" || p.info.state === "succeeded";
+        if (!alive || terminal) {
+          this.store.removeJob(p.info.id);
+          continue;
+        }
+      }
       const info: JobInfo = { ...p.info };
       if (!alive && (info.state === "running" || info.state === "blocked")) {
         info.state = "failed";

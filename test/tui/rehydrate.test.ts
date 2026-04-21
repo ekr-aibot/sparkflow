@@ -107,6 +107,68 @@ describe("JobManager.rehydrate", () => {
     expect(reloaded[0].originalPlanText).toContain("Step 1");
   });
 
+  it("drops terminal monitor jobs even when the persisted pid still looks alive (recycled pid)", () => {
+    const logDir = join(tmpDir, ".sparkflow", "logs");
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, "job-stale.log");
+    appendFileSync(logPath, "");
+
+    const store = new StateStore(tmpDir);
+    store.saveJob({
+      info: {
+        id: "stale",
+        workflowPath: "/tmp/wf.json",
+        workflowName: "wf",
+        kind: "monitor",
+        state: "failed",
+        summary: "exit code null",
+        startTime: Date.now() - 10_000,
+        endTime: Date.now() - 5_000,
+      },
+      pid: process.pid,
+      logPath,
+      logOffset: 0,
+    });
+
+    const manager = new JobManager(tmpDir);
+    manager.rehydrate();
+    expect(manager.getJobs()).toHaveLength(0);
+    expect(store.loadJobs()).toHaveLength(0);
+
+    manager.release();
+  });
+
+  it("drops dead monitor jobs entirely instead of leaving a failed ghost", () => {
+    const logDir = join(tmpDir, ".sparkflow", "logs");
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, "job-mon.log");
+    appendFileSync(logPath, "");
+
+    const store = new StateStore(tmpDir);
+    store.saveJob({
+      info: {
+        id: "mon",
+        workflowPath: "/tmp/wf.json",
+        workflowName: "wf",
+        kind: "monitor",
+        state: "running",
+        summary: "was running",
+        startTime: Date.now() - 1000,
+      },
+      pid: 2_000_000,
+      logPath,
+      logOffset: 0,
+    });
+
+    const manager = new JobManager(tmpDir);
+    manager.rehydrate();
+    expect(manager.getJobs()).toHaveLength(0);
+    // State file should be gone so subsequent rehydrates stay clean.
+    expect(store.loadJobs()).toHaveLength(0);
+
+    manager.release();
+  });
+
   it("marks a rehydrated job failed if its pid is already dead", () => {
     const logDir = join(tmpDir, ".sparkflow", "logs");
     mkdirSync(logDir, { recursive: true });

@@ -202,6 +202,69 @@ button {
   margin: 0;
 }
 
+/* ---- nudge bar (bottom of job pane) ---- */
+
+.pane-nudge {
+  display: none;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: rgba(22, 23, 31, 0.95);
+  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+.pane.job-pane.has-nudge .pane-nudge {
+  display: flex;
+}
+.pane.job-pane.has-nudge .pane-xterm {
+  bottom: 40px;
+}
+.nudge-step {
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  font-size: 12px;
+  max-width: 130px;
+}
+.nudge-input {
+  flex: 1;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  min-width: 0;
+}
+.nudge-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.nudge-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.nudge-send {
+  padding: 4px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.nudge-error {
+  font-size: 11px;
+  color: var(--danger, #f7768e);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
 /* ---- jobs panel ---- */
 
 #status {

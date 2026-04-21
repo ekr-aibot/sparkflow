@@ -161,3 +161,115 @@ describe("JobManager verbose line parsing", () => {
     expect(manager.getJobs()[0].state).toBe("failed");
   });
 });
+
+describe("JobManager.nudgeJob", () => {
+  let manager: JobManager;
+  let tmpDir3: string;
+
+  beforeEach(() => {
+    tmpDir3 = mkdtempSync(join(tmpdir(), "sparkflow-test-jm3-"));
+    manager = new JobManager(tmpDir3);
+  });
+
+  afterEach(() => {
+    manager.killAll();
+    try { rmSync(tmpDir3, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("returns error for unknown job", () => {
+    const result = manager.nudgeJob("nonexistent", "step1", "hello");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/not found/);
+  });
+
+  it("returns error when job is not running (terminal state)", async () => {
+    const id = manager.startJob("/nonexistent/workflow.json");
+    await waitFor(() => manager.getJobs()[0]?.state === "failed");
+    const result = manager.nudgeJob(id, "step1", "hello");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/not running/);
+  });
+
+  it("writes nudge line to child stdin when job is running", () => {
+    // Write a valid workflow JSON so sparkflow-run can start
+    const wfPath = join(tmpDir3, "wf.json");
+    writeFileSync(wfPath, JSON.stringify({
+      version: "1",
+      name: "test",
+      entry: "s",
+      steps: { s: { name: "S", runtime: { type: "shell", command: "sleep", args: ["60"] } } },
+    }));
+
+    const id = manager.startJob(wfPath);
+    const jobs = manager.getJobs();
+    expect(jobs[0].state).toBe("running");
+
+    // Mock the child stdin so we can inspect the write
+    const job = (manager as unknown as { jobs: Map<string, { child: { stdin: { write: (s: string) => void }; }; info: { state: string } }> }).jobs.get(id);
+    expect(job).toBeDefined();
+
+    if (job?.child?.stdin) {
+      const written: string[] = [];
+      const originalWrite = job.child.stdin.write.bind(job.child.stdin);
+      job.child.stdin.write = (s: string) => { written.push(s); return true; };
+
+      const result = manager.nudgeJob(id, "step-a", "please do X instead");
+      expect(result.ok).toBe(true);
+      expect(written.length).toBe(1);
+      const parsed = JSON.parse(written[0].trim());
+      expect(parsed.type).toBe("nudge");
+      expect(parsed.step_id).toBe("step-a");
+      expect(parsed.message).toBe("please do X instead");
+
+      // Restore
+      job.child.stdin.write = originalWrite;
+    }
+  });
+
+  it("canNudge is true for running jobs with a live child", () => {
+    const wfPath = join(tmpDir3, "wf2.json");
+    writeFileSync(wfPath, JSON.stringify({
+      version: "1",
+      name: "test",
+      entry: "s",
+      steps: { s: { name: "S", runtime: { type: "shell", command: "sleep", args: ["60"] } } },
+    }));
+
+    manager.startJob(wfPath);
+    const jobs = manager.getJobs();
+    expect(jobs[0].state).toBe("running");
+    expect(jobs[0].canNudge).toBe(true);
+  });
+
+  it("claudeCodeSteps populated from workflow_steps event", () => {
+    const id = manager.startJob("/tmp/wf.json");
+    // Simulate receiving the workflow_steps event via handleStatusLine (private)
+    const handleStatusLine = (manager as unknown as { handleStatusLine: (id: string, line: string) => void }).handleStatusLine.bind(manager);
+    handleStatusLine(id, JSON.stringify({
+      type: "workflow_steps",
+      steps: [
+        { id: "build", runtime: "shell" },
+        { id: "review", runtime: "claude-code" },
+        { id: "test", runtime: "gemini" },
+      ],
+    }));
+    const jobs = manager.getJobs();
+    expect(jobs[0].claudeCodeSteps).toEqual(["review"]);
+  });
+
+  it("activeSteps updated from step_status events", () => {
+    const id = manager.startJob("/tmp/wf.json");
+    const handleStatusLine = (manager as unknown as { handleStatusLine: (id: string, line: string) => void }).handleStatusLine.bind(manager);
+
+    handleStatusLine(id, JSON.stringify({ type: "step_status", step: "build", state: "running" }));
+    handleStatusLine(id, JSON.stringify({ type: "step_status", step: "test", state: "running" }));
+    let jobs = manager.getJobs();
+    expect(jobs[0].activeSteps).toContain("build");
+    expect(jobs[0].activeSteps).toContain("test");
+
+    handleStatusLine(id, JSON.stringify({ type: "step_status", step: "build", state: "succeeded" }));
+    jobs = manager.getJobs();
+    expect(jobs[0].activeSteps).not.toContain("build");
+    expect(jobs[0].activeSteps).toContain("test");
+  });
+});

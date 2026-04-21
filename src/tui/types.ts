@@ -18,6 +18,12 @@ export interface JobInfo {
   failedStep?: string;
   /** The error message from the failure, if available. */
   failedError?: string;
+  /** Step IDs that are currently running, derived from step_status events. */
+  activeSteps?: string[];
+  /** Step IDs with runtime type "claude-code", populated from workflow_steps event. */
+  claudeCodeSteps?: string[];
+  /** True when the job is running and its stdin pipe is live (nudges available). */
+  canNudge?: boolean;
 }
 
 export type DashboardRequest =
@@ -29,7 +35,8 @@ export type DashboardRequest =
   | { type: "kill_job"; id: string; payload: { jobId: string } }
   | { type: "restart_job"; id: string; payload: { jobId: string; mode?: "fresh" | "resume" } }
   | { type: "remove_job"; id: string; payload: { jobId: string } }
-  | { type: "clear_terminal_jobs"; id: string; payload: Record<string, never> };
+  | { type: "clear_terminal_jobs"; id: string; payload: Record<string, never> }
+  | { type: "nudge_job"; id: string; payload: { jobId: string; stepId: string; message: string } };
 
 export type DashboardResponse = {
   type: string;

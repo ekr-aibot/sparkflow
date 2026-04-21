@@ -88,6 +88,12 @@ export async function handleIpcRequest(
       const removed = jobManager.clearTerminalJobs();
       return response({ removed });
     }
+    case "nudge_job": {
+      const { jobId, stepId, message } = msg.payload as { jobId: string; stepId: string; message: string };
+      const result = jobManager.nudgeJob(jobId, stepId, message);
+      if (!result.ok) return errorResponse(result.error ?? "nudge failed");
+      return response({});
+    }
     default:
       return errorResponse(`Unknown message type: ${msg.type}`);
   }

@@ -321,6 +321,32 @@ function openJobTab(jobId) {
   term.loadAddon(fit);
   term.open(termContainer);
 
+  // Nudge bar — shown when there are running claude-code steps and stdin is live.
+  const nudgeDiv = document.createElement("div");
+  nudgeDiv.className = "pane-nudge";
+
+  const nudgeStep = document.createElement("select");
+  nudgeStep.className = "nudge-step";
+  nudgeDiv.appendChild(nudgeStep);
+
+  const nudgeInput = document.createElement("input");
+  nudgeInput.className = "nudge-input";
+  nudgeInput.type = "text";
+  nudgeInput.placeholder = "Redirect the running step…";
+  nudgeDiv.appendChild(nudgeInput);
+
+  const nudgeSend = document.createElement("button");
+  nudgeSend.type = "button";
+  nudgeSend.className = "btn primary nudge-send";
+  nudgeSend.textContent = "Send";
+  nudgeDiv.appendChild(nudgeSend);
+
+  const nudgeError = document.createElement("span");
+  nudgeError.className = "nudge-error";
+  nudgeDiv.appendChild(nudgeError);
+
+  pane.appendChild(nudgeDiv);
+
   const view = {
     term,
     fit,
@@ -330,6 +356,11 @@ function openJobTab(jobId) {
     lineLength: 0,
     verbose: false,
     verboseCheckbox,
+    nudgeEl: nudgeDiv,
+    nudgeStep,
+    nudgeInput,
+    nudgeSend,
+    nudgeError,
     polling: false,
     pollTimer: null,
     stopped: false,
@@ -339,6 +370,38 @@ function openJobTab(jobId) {
   verboseCheckbox.addEventListener("change", () => {
     view.verbose = verboseCheckbox.checked;
     rerenderJobView(view);
+  });
+
+  async function sendNudge() {
+    const message = nudgeInput.value.trim();
+    if (!message) return;
+    const stepId = nudgeStep.value;
+    if (!stepId) return;
+    nudgeSend.disabled = true;
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/nudge`, {
+        method: "POST",
+        headers: { "content-type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ stepId, message }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        nudgeInput.value = "";
+        nudgeError.textContent = "";
+      } else {
+        nudgeError.textContent = `nudge failed: ${body?.error ?? `HTTP ${res.status}`}`;
+        setTimeout(() => { nudgeError.textContent = ""; }, 3000);
+      }
+    } catch (err) {
+      nudgeError.textContent = `nudge failed: ${String(err?.message ?? err)}`;
+      setTimeout(() => { nudgeError.textContent = ""; }, 3000);
+    }
+    nudgeSend.disabled = false;
+  }
+
+  nudgeSend.addEventListener("click", sendNudge);
+  nudgeInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); sendNudge(); }
   });
 
   activateTab(jobId);
@@ -470,6 +533,51 @@ function elapsed(startTime, endTime) {
   if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
   return `${mins}m ${secs % 60}s`;
+}
+
+function updateNudgeBars() {
+  for (const [jobId, view] of state.jobViews) {
+    const job = findJob(jobId);
+    if (!job) continue;
+
+    // Compute nudgeable steps: running AND claude-code AND stdin alive.
+    const activeKeys = job.activeSteps && Array.isArray(job.activeSteps)
+      ? job.activeSteps
+      : Object.keys(job.activeSteps || {});
+    const ccSteps = job.claudeCodeSteps || [];
+    const nudgeable = activeKeys.filter((s) => ccSteps.includes(s));
+
+    const hasNudge = nudgeable.length > 0;
+    view.pane.classList.toggle("has-nudge", hasNudge);
+
+    if (!hasNudge) continue;
+
+    // Repopulate step dropdown.
+    const prevStep = view.nudgeStep.value;
+    view.nudgeStep.replaceChildren();
+    for (const s of nudgeable) {
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      view.nudgeStep.appendChild(opt);
+    }
+    if (prevStep && nudgeable.includes(prevStep)) view.nudgeStep.value = prevStep;
+    // Hide select when only one step — show a label instead.
+    view.nudgeStep.hidden = nudgeable.length === 1;
+
+    // Disable input when canNudge is false (rehydrated job).
+    const disabled = !job.canNudge;
+    view.nudgeInput.disabled = disabled;
+    view.nudgeSend.disabled = disabled;
+    if (disabled) {
+      view.nudgeInput.title = "nudges unavailable after reload";
+    } else {
+      view.nudgeInput.title = "";
+    }
+
+    // Refit so xterm knows its new height.
+    requestAnimationFrame(() => { try { view.fit.fit(); } catch { /* ignore */ } });
+  }
 }
 
 function renderJobs() {
@@ -750,6 +858,7 @@ function connectEvents() {
         state.jobs = data.jobs;
         renderJobs();
         updateJobTabLabels();
+        updateNudgeBars();
         // If a viewed job disappears, close its tab.
         for (const id of state.jobViews.keys()) {
           if (!findJob(id)) closeJobTab(id);

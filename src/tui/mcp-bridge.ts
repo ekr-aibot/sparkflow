@@ -295,6 +295,33 @@ server.tool(
 );
 
 server.tool(
+  "nudge_job",
+  "Send a mid-run message to redirect a running claude-code step. The message is delivered as an additional conversation turn at the next turn boundary. Only works while the job is running with a live stdin pipe (not after a reload).",
+  {
+    job_id: z.string().describe("The job ID (shown in status pane or list_jobs output)"),
+    step_id: z.string().describe("The step ID to nudge (must be a running claude-code step)"),
+    message: z.string().describe("The redirection message delivered to the agent as the next conversation turn"),
+  },
+  withReloadNotice(async ({ job_id, step_id, message }) => {
+    const msg: IpcMessage = {
+      type: "nudge_job",
+      id: randomBytes(8).toString("hex"),
+      payload: { jobId: job_id, stepId: step_id, message },
+    };
+    const response = await ipc.request(msg);
+    if (response.type === "error") {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${response.payload.error}` }],
+        isError: true,
+      };
+    }
+    return {
+      content: [{ type: "text" as const, text: `Nudge sent to step ${step_id} in job ${job_id}.` }],
+    };
+  })
+);
+
+server.tool(
   "clear_terminal_jobs",
   "Drop every succeeded / failed job from the dashboard in one call. Leaves running, blocked, and failed_waiting jobs alone. Returns how many entries were removed.",
   {},

@@ -50,9 +50,17 @@ function setupStdinAnswerReader(engine: WorkflowEngine): void {
   const rl = createInterface({ input: process.stdin });
   rl.on("line", (line) => {
     try {
-      const event = JSON.parse(line) as { type: string; request_id: string; response: string };
+      const event = JSON.parse(line) as {
+        type: string;
+        request_id?: string;
+        response?: string;
+        step_id?: string;
+        message?: string;
+      };
       if (event.type === "answer" && event.request_id) {
-        engine.answerPendingQuestion(event.request_id, event.response);
+        engine.answerPendingQuestion(event.request_id, event.response ?? "");
+      } else if (event.type === "nudge" && event.step_id && typeof event.message === "string") {
+        engine.pushNudge(event.step_id, event.message);
       }
     } catch {
       // ignore non-JSON lines

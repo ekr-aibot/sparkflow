@@ -450,6 +450,30 @@ async function main(): Promise<void> {
       return r.ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 400, { error: r.error ?? "remove failed" });
     }
 
+    const nudgeMatch = pathname.match(/^\/api\/jobs\/([A-Za-z0-9_-]+)\/nudge$/);
+    if (nudgeMatch && req.method === "POST") {
+      const jobId = nudgeMatch[1];
+      readJsonBody(req).then((body) => {
+        const { stepId, message } = body as { stepId?: unknown; message?: unknown };
+        if (typeof message !== "string" || message.trim() === "") {
+          return sendJson(res, 400, { error: "message is required and must be non-empty" });
+        }
+        if (message.length > 32 * 1024) {
+          return sendJson(res, 400, { error: "message too large (max 32KB)" });
+        }
+        if (typeof stepId !== "string" || !stepId) {
+          return sendJson(res, 400, { error: "stepId is required" });
+        }
+        const r = jobManager.nudgeJob(jobId, stepId, message);
+        if (r.ok) sendJson(res, 200, { ok: true });
+        else sendJson(res, 400, { error: r.error ?? "nudge failed" });
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        sendJson(res, 400, { error: msg });
+      });
+      return;
+    }
+
     if (pathname === "/api/preferences" && req.method === "GET") {
       return sendJson(res, 200, getPreferences());
     }

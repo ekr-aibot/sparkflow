@@ -149,9 +149,38 @@ export class WorkflowEngine {
     }
   }
 
+  /**
+   * Push a nudge message into a running step's nudge queue (claude-code) or its
+   * pendingMessages queue (non-claude-code or not-yet-running). Returns an error
+   * if the stepId is not part of this workflow.
+   */
+  pushNudge(stepId: string, message: string): { ok: boolean; error?: string } {
+    if (!this.stepStatuses.has(stepId)) {
+      return { ok: false, error: `unknown step: ${stepId}` };
+    }
+    this.triggerStep(stepId, message);
+    return { ok: true };
+  }
+
   async run(): Promise<RunResult> {
     this.logger.info(`[sparkflow] runId=${this.runId}`);
     this.logger.info(`[sparkflow] Starting workflow "${this.workflow.name}"`);
+
+    // Emit a one-shot event listing every step and its (possibly overridden)
+    // runtime type so the dashboard can filter the nudge dropdown to
+    // claude-code steps.
+    if (this.statusJson) {
+      const steps = Object.entries(this.workflow.steps).map(([id, step]) => {
+        let runtimeType: string;
+        try {
+          runtimeType = this.resolveRuntime(step).type;
+        } catch {
+          runtimeType = "unknown";
+        }
+        return { id, runtime: runtimeType };
+      });
+      process.stderr.write(JSON.stringify({ type: "workflow_steps", steps }) + "\n");
+    }
 
     // If workflow default worktree is "fork" or "isolated", create a single
     // worktree for the entire run. All steps share this directory.

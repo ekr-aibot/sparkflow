@@ -27,6 +27,8 @@ interface ManagedJob {
   originalPlanText?: string;
   originalCwd?: string;
   killedByUser?: boolean;
+  /** Tracks per-step running state for the nudge dropdown. */
+  stepStates: Map<string, string>;
 }
 
 const OUTPUT_BUFFER_MAX = 2000;
@@ -100,6 +102,7 @@ export class JobManager {
         originalPlan: p.originalPlan,
         originalPlanText: p.originalPlanText,
         originalCwd: p.originalCwd,
+        stepStates: new Map(),
       };
       this.jobs.set(info.id, managed);
       tailer.start();
@@ -189,6 +192,7 @@ export class JobManager {
       originalPlan: opts?.plan,
       originalPlanText: opts?.planText,
       originalCwd: opts?.cwd,
+      stepStates: new Map(),
     };
 
     this.jobs.set(id, managed);
@@ -251,6 +255,18 @@ export class JobManager {
       job.info.currentStep = event.step as string;
       job.info.stepState = event.state as string;
       job.info.summary = `${event.step}: ${event.state}`;
+      if (event.state === "running") {
+        job.stepStates.set(event.step as string, "running");
+      } else {
+        job.stepStates.delete(event.step as string);
+      }
+      job.info.activeSteps = Array.from(job.stepStates.keys());
+      changed = true;
+    } else if (type === "workflow_steps") {
+      const steps = (event.steps as Array<{ id: string; runtime: string }>) ?? [];
+      job.info.claudeCodeSteps = steps
+        .filter((s) => s.runtime === "claude-code")
+        .map((s) => s.id);
       changed = true;
     } else if (type === "ask_user") {
       job.info.state = "blocked";
@@ -264,6 +280,8 @@ export class JobManager {
     } else if (type === "workflow_start") {
       job.info.workflowName = event.name as string;
       job.info.summary = "running";
+      job.stepStates.clear();
+      job.info.activeSteps = [];
       changed = true;
     } else if (type === "workflow_complete") {
       // A workflow_complete with success:false can arrive either because the
@@ -389,8 +407,24 @@ export class JobManager {
     return true;
   }
 
+  nudgeJob(jobId: string, stepId: string, message: string): { ok: boolean; error?: string } {
+    const job = this.jobs.get(jobId);
+    if (!job) return { ok: false, error: `Job not found: ${jobId}` };
+    if (job.info.state !== "running") return { ok: false, error: `Job ${jobId} is not running` };
+    if (!job.child || !job.child.stdin) {
+      return { ok: false, error: "nudges unavailable after reload" };
+    }
+    job.child.stdin.write(
+      JSON.stringify({ type: "nudge", step_id: stepId, message }) + "\n",
+    );
+    return { ok: true };
+  }
+
   getJobs(): JobInfo[] {
-    return Array.from(this.jobs.values()).map((m) => ({ ...m.info }));
+    return Array.from(this.jobs.values()).map((m) => ({
+      ...m.info,
+      canNudge: m.info.state === "running" && !!m.child?.stdin,
+    }));
   }
 
   /**

@@ -1120,3 +1120,59 @@ describe("WorkflowEngine", () => {
     expect(seenTypes).toEqual(["claude-code:a"]);
   });
 });
+
+describe("WorkflowEngine.pushNudge", () => {
+  it("returns error for unknown step", () => {
+    const workflow = makeWorkflow();
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, makeAdapters());
+    const result = engine.pushNudge("nonexistent", "hello");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/unknown step/);
+  });
+
+  it("pushes to nudgeQueue when step is running as claude-code", async () => {
+    let resolveRun!: () => void;
+    const running = new Promise<void>((res) => { resolveRun = res; });
+
+    // Adapter blocks on `running` promise so the step stays live while we nudge.
+    let nudgeQueueRef: import("../src/runtime/types.js").NudgeQueue | undefined;
+    const workflow = makeWorkflow({
+      defaults: { runtime: { type: "claude-code" }, max_retries: 0 },
+      steps: {
+        start: { name: "Start", interactive: false },
+      },
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      nudgeQueueRef = ctx.nudgeQueue;
+      await running;
+      // drain the nudge so the step succeeds cleanly
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    const runPromise = engine.run();
+
+    // Wait briefly for the step to start executing
+    await new Promise((r) => setTimeout(r, 20));
+
+    // pushNudge while running — should push into the nudgeQueue
+    const result = engine.pushNudge("start", "redirect!");
+    expect(result.ok).toBe(true);
+    expect(nudgeQueueRef).toBeDefined();
+    expect(nudgeQueueRef!.drain().length).toBeGreaterThan(0);
+
+    resolveRun();
+    await runPromise;
+  });
+
+  it("returns ok for a known step before it starts (lands in pendingMessages path)", () => {
+    const workflow = makeWorkflow({
+      steps: { start: { name: "Start", interactive: false } },
+    });
+    // Don't run — just test that pushNudge accepts the call without throwing
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, makeAdapters());
+    const result = engine.pushNudge("start", "test");
+    expect(result.ok).toBe(true);
+  });
+});

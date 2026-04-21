@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { JobManager } from "../../src/tui/job-manager.js";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -271,5 +271,50 @@ describe("JobManager.nudgeJob", () => {
     jobs = manager.getJobs();
     expect(jobs[0].activeSteps).not.toContain("build");
     expect(jobs[0].activeSteps).toContain("test");
+  });
+});
+
+describe("JobManager startJob path canonicalization", () => {
+  let manager: JobManager;
+  let tmpDir: string;
+
+  const minimalWorkflow = JSON.stringify({
+    version: "1",
+    name: "test",
+    entry: "s",
+    steps: { s: { name: "S", runtime: { type: "shell", command: "true", args: [] } } },
+  });
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-test-jm-paths-"));
+    manager = new JobManager(tmpDir);
+  });
+
+  afterEach(() => {
+    manager.killAll();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("resolves a bare workflow name to an absolute path before spawning", () => {
+    const wfDir = join(tmpDir, ".sparkflow", "workflows");
+    mkdirSync(wfDir, { recursive: true });
+    const wfFile = join(wfDir, "my-flow.json");
+    writeFileSync(wfFile, minimalWorkflow);
+
+    const id = manager.startJob("my-flow");
+    const job = manager.getJobs().find((j) => j.id === id);
+    expect(job).toBeDefined();
+    expect(job!.workflowPath).toBe(wfFile);
+  });
+
+  it("leaves an already-absolute path unchanged", () => {
+    const id = manager.startJob("/absolute/workflow.json");
+    const job = manager.getJobs().find((j) => j.id === id);
+    expect(job).toBeDefined();
+    expect(job!.workflowPath).toBe("/absolute/workflow.json");
+  });
+
+  it("throws when a bare name cannot be resolved", () => {
+    expect(() => manager.startJob("no-such-workflow")).toThrow();
   });
 });

@@ -2,7 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, resolve, join, basename } from "node:path";
+import { dirname, resolve, join, basename, isAbsolute } from "node:path";
 import type { JobInfo } from "./types.js";
 import { LogTailer } from "./log-tailer.js";
 import { StateStore, type PersistedJob } from "./state-store.js";
@@ -133,9 +133,14 @@ export class JobManager {
 
   startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor" }): string {
     const id = randomBytes(6).toString("hex");
+    const jobCwd = opts?.cwd ?? this.cwd;
+
+    if (!isAbsolute(workflowPath)) {
+      const projectConfig = loadProjectConfig(jobCwd);
+      workflowPath = resolveWorkflowPath(workflowPath, jobCwd, projectConfig);
+    }
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
-    const jobCwd = opts?.cwd ?? this.cwd;
     if (opts?.cwd) args.push("--cwd", opts.cwd);
 
     let planPath = opts?.plan;

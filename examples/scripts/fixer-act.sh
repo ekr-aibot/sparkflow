@@ -43,8 +43,8 @@ case "$action" in
 
   alert-user)
     msg=$(jq -r '.user_message' <<<"$decision")
-    echo "[fixer] alerting user for job $job_id: $msg" >&2
-    exit 1
+    echo "[fixer] ALERT for job $job_id: $msg" >&2
+    exit 0
     ;;
 
   *)

@@ -41,14 +41,7 @@ function makeWorkflow(): SparkflowWorkflow {
 describe("WorktreeManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: branch doesn't exist (so findAvailableBranch returns base)
-    mockExec.mockImplementation((cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr[0] === "rev-parse" && argsArr[1] === "--verify") {
-        throw new Error("branch not found");
-      }
-      return Buffer.from("");
-    });
+    mockExec.mockReturnValue(Buffer.from(""));
   });
 
   afterEach(() => {
@@ -155,6 +148,44 @@ describe("WorktreeManager", () => {
       expect(addCall).toBeDefined();
       expect((addCall![1] as string[]).join(" ")).toContain("fork1234");
       expect((addCall![1] as string[]).join(" ")).toContain("review");
+    });
+  });
+
+  describe("isolated mode branch naming", () => {
+    it("uses sparkflow/<stepId>-<runId> as the default branch name", () => {
+      const manager = new WorktreeManager("/repo", "abcd1234");
+      manager.resolve("build", makeIsolatedStep(), makeWorkflow());
+
+      const addCall = mockExec.mock.calls.find(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      );
+      expect(addCall).toBeDefined();
+      const args = addCall![1] as string[];
+      const branchIdx = args.indexOf("-b");
+      expect(args[branchIdx + 1]).toBe("sparkflow/build-abcd1234");
+    });
+
+    it("passes explicit branch verbatim without suffix", () => {
+      const manager = new WorktreeManager("/repo", "abcd1234");
+      manager.resolve("build", makeIsolatedStep("my-feature-branch"), makeWorkflow());
+
+      const addCall = mockExec.mock.calls.find(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      );
+      expect(addCall).toBeDefined();
+      const args = addCall![1] as string[];
+      const branchIdx = args.indexOf("-b");
+      expect(args[branchIdx + 1]).toBe("my-feature-branch");
+    });
+
+    it("does not call rev-parse --verify", () => {
+      const manager = new WorktreeManager("/repo", "abcd1234");
+      manager.resolve("build", makeIsolatedStep(), makeWorkflow());
+
+      const revParseCalls = mockExec.mock.calls.filter(
+        (c) => (c[1] as string[])[0] === "rev-parse"
+      );
+      expect(revParseCalls).toHaveLength(0);
     });
   });
 });

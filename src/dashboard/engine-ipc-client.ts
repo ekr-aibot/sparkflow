@@ -226,7 +226,15 @@ export class EngineIpcClient extends EventEmitter {
     this.socket = null;
     if (!sock) return;
     if (opts.detach && sock.writable) {
-      sock.end(JSON.stringify({ type: "detach" }) + "\n");
+      try {
+        sock.end(JSON.stringify({ type: "detach" }) + "\n");
+      } catch {
+        // `socket.end()` normally surfaces errors via events, but an
+        // unusual state could synchronously throw — fall through to
+        // destroy so shutdown is never blocked on a stuck end().
+        try { sock.destroy(); } catch { /* ignore */ }
+        return;
+      }
       // Destroy safety net in case FIN ack never arrives.
       setTimeout(() => {
         try { sock.destroy(); } catch { /* ignore */ }

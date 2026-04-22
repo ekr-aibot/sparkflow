@@ -289,6 +289,18 @@ export class FrontendIpcServer extends EventEmitter {
         if (seen.size === group.length) break;
         len++;
       }
+      // Sanity check: if the full repoId still didn't disambiguate, two
+      // engines collided on sha256(repoPath). Unreachable in practice
+      // (`engines` is keyed by repoId and already_attached rejects
+      // duplicates), but surface it loudly if it ever does happen.
+      if (len === MAX) {
+        const seen = new Set(group.map((g) => g.repoId.slice(0, len)));
+        if (seen.size !== group.length) {
+          console.error(
+            `[sparkflow frontend] unreachable: ${group.length} engines with identical repoId for basename "${group[0].repoName}"`,
+          );
+        }
+      }
       for (const g of group) suffixLen.set(g.repoId, len);
     }
 

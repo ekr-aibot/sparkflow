@@ -308,6 +308,42 @@ describe("engine ↔ frontend IPC integration", () => {
     client2.close();
   });
 
+  it("3-way basename collision: all suffixes are distinct", async () => {
+    // Synthesised repoIds share the first 6 chars, so the suffix loop
+    // must extend at least to length 7 for three engines to be distinct.
+    const mk = (repoId: string, home: string): EngineIpcClient =>
+      new EngineIpcClient({
+        frontendSocketPath: sockPath,
+        repoId,
+        repoPath: `/home/${home}/repo`,
+        repoName: "repo",
+        mcpSocket: join(tmpDir, `mcp-${home}.sock`),
+        version: SPARKFLOW_VERSION,
+        protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
+      });
+
+    const c1 = mk("aaaaaa0001", "alice");
+    const c2 = mk("aaaaaa0002", "bob");
+    const c3 = mk("aaaaaa0003", "carol");
+
+    const allAttached = new Promise<void>((resolve) => {
+      let remaining = 3;
+      server.on("engineAttached", () => {
+        if (--remaining === 0) resolve();
+      });
+    });
+    await Promise.all([c1.connect(), c2.connect(), c3.connect()]);
+    await allAttached;
+
+    const names = new Set(server.getRepos().map((r) => r.repoName));
+    expect(names.size).toBe(3);
+    for (const n of names) expect(n).toMatch(/^repo \([0-9a-f]{6,}\)$/);
+
+    c1.close();
+    c2.close();
+    c3.close();
+  });
+
   it("post-attach un-correlated error does NOT trigger attachError or reconnect", async () => {
     // The frontend sends `attachAck` on a successful attach. The client must
     // record that and subsequently ignore any un-correlated error frames —

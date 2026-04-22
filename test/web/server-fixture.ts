@@ -18,6 +18,23 @@ export interface WebServerHandle {
 
 const READY_RE = /ready at (http:\/\/127\.0\.0\.1:(\d+)\/\?token=([0-9a-f]+))/;
 
+async function waitForEngine(port: number, token: string, timeoutMs = 15_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/repos`, {
+        headers: { Cookie: `sf_token=${token}` },
+      });
+      if (r.ok) {
+        const body = await r.json() as { repos: unknown[] };
+        if (body.repos.length > 0) return;
+      }
+    } catch { /* not ready yet */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("Timed out waiting for engine daemon to attach");
+}
+
 /** Spawns `sparkflow --web` with fake-chat as the chat command and waits for the ready banner. */
 export async function startWebServer(
   opts: { extraArgs?: string[]; extraEnv?: Record<string, string>; chatTool?: "claude" | "gemini" } = {},
@@ -80,6 +97,10 @@ export async function startWebServer(
     proc.stdout?.on("data", onData);
     proc.on("exit", onExit);
   });
+
+  // The ready banner is written BEFORE the engine daemon starts connecting.
+  // Poll /repos until at least one engine attaches so PTY bridge is available.
+  await waitForEngine(ready.port, ready.token);
 
   const stop = async (): Promise<void> => {
     if (proc.exitCode !== null || proc.signalCode !== null) return;

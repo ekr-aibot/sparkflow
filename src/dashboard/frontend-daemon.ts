@@ -29,8 +29,8 @@ import type { JobInfo } from "../tui/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// frontend-daemon.js lives at <pkg>/dist/src/dashboard/. Package root is 4 up.
-const PKG_ROOT = resolve(__dirname, "..", "..", "..", "..");
+// frontend-daemon.js lives at <pkg>/dist/src/dashboard/. Package root is 3 up.
+const PKG_ROOT = resolve(__dirname, "..", "..", "..");
 const STATIC_DIR = resolve(__dirname, "..", "web", "static");
 const SRC_STATIC_DIR = resolve(PKG_ROOT, "src", "web", "static");
 const NODE_MODULES = resolve(PKG_ROOT, "node_modules");

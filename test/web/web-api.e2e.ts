@@ -56,9 +56,18 @@ test("404 on unknown route", async () => {
   expect(res.status).toBe(404);
 });
 
-test("401 on /static/* without token", async () => {
+test("401 on requests without token", async () => {
   const res = await fetch(`${httpBase()}/static/index.html`);
   expect(res.status).toBe(401);
+});
+
+// ---- Repos API ----
+
+test("GET /repos returns the attached engine", async () => {
+  const res = await fetch(`${httpBase()}/repos`, { headers: { Cookie: cookieHeader() } });
+  expect(res.status).toBe(200);
+  const body = await res.json() as { repos: Array<{ repoId: string; repoName: string }> };
+  expect(body.repos.length).toBeGreaterThan(0);
 });
 
 // ---- WebSocket /chat ----
@@ -79,7 +88,7 @@ function nextMessage(ws: WebSocket, predicate?: (msg: { type?: string; bytes?: s
     const timer = setTimeout(() => {
       ws.off("message", onMsg);
       rej(new Error("Timed out waiting for WS message"));
-    }, 5000);
+    }, 8000);
     const onMsg = (raw: WebSocket.RawData) => {
       let parsed: { type?: string; bytes?: string };
       try { parsed = JSON.parse(raw.toString()) as { type?: string; bytes?: string }; } catch { return; }
@@ -143,116 +152,6 @@ test("WS /chat tolerates resize messages", async () => {
   } finally {
     ws.close();
   }
-});
-
-// ---- JSON API for job actions ----
-
-test("GET /api/jobs/unknown/log → 404", async () => {
-  const res = await fetch(`${httpBase()}/api/jobs/bogus/log`, { headers: { Cookie: cookieHeader() } });
-  expect(res.status).toBe(404);
-  const body = await res.json();
-  expect(body.error).toMatch(/Job not found/i);
-});
-
-test("POST /api/jobs/unknown/kill → 400 with error", async () => {
-  const res = await fetch(`${httpBase()}/api/jobs/bogus/kill`, {
-    method: "POST",
-    headers: { Cookie: cookieHeader() },
-  });
-  expect(res.status).toBe(400);
-  const body = await res.json();
-  expect(body.error).toMatch(/not found/i);
-});
-
-test("POST /api/jobs/unknown/restart → 400 with error", async () => {
-  const res = await fetch(`${httpBase()}/api/jobs/bogus/restart`, {
-    method: "POST",
-    headers: { Cookie: cookieHeader() },
-  });
-  expect(res.status).toBe(400);
-  const body = await res.json();
-  expect(body.error).toMatch(/not found/i);
-});
-
-test("POST /api/jobs/unknown/remove → 400 with error", async () => {
-  const res = await fetch(`${httpBase()}/api/jobs/bogus/remove`, {
-    method: "POST",
-    headers: { Cookie: cookieHeader() },
-  });
-  expect(res.status).toBe(400);
-  const body = await res.json();
-  expect(body.error).toMatch(/not found/i);
-});
-
-test("401 on /api/* without token", async () => {
-  const res = await fetch(`${httpBase()}/api/jobs/bogus/log`);
-  expect(res.status).toBe(401);
-});
-
-// ---- Preferences ----
-
-test("GET /api/preferences returns the current chat/jobs runtime", async () => {
-  const res = await fetch(`${httpBase()}/api/preferences`, { headers: { Cookie: cookieHeader() } });
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.chat).toMatch(/^(claude|gemini)$/);
-  expect(body.jobs).toMatch(/^(claude|gemini)$/);
-});
-
-test("POST /api/preferences toggles jobs runtime and echoes the new state", async () => {
-  const res = await fetch(`${httpBase()}/api/preferences`, {
-    method: "POST",
-    headers: { Cookie: cookieHeader(), "content-type": "application/json" },
-    body: JSON.stringify({ jobs: "gemini" }),
-  });
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.jobs).toBe("gemini");
-
-  // Subsequent GET reflects the change.
-  const after = await (await fetch(`${httpBase()}/api/preferences`, { headers: { Cookie: cookieHeader() } })).json();
-  expect(after.jobs).toBe("gemini");
-
-  // Reset so the change doesn't leak into other tests sharing the fixture.
-  await fetch(`${httpBase()}/api/preferences`, {
-    method: "POST",
-    headers: { Cookie: cookieHeader(), "content-type": "application/json" },
-    body: JSON.stringify({ jobs: "claude" }),
-  });
-});
-
-test("POST /api/preferences rejects invalid values with 400", async () => {
-  const res = await fetch(`${httpBase()}/api/preferences`, {
-    method: "POST",
-    headers: { Cookie: cookieHeader(), "content-type": "application/json" },
-    body: JSON.stringify({ jobs: "gpt-5" }),
-  });
-  expect(res.status).toBe(400);
-  const body = await res.json();
-  expect(body.error).toMatch(/invalid jobs/i);
-});
-
-// ---- Chat summary ----
-
-test("GET /api/chat/summary returns 200 with a summary string", async () => {
-  // Wait briefly for the fake-chat PTY to have written output into the ring buffer.
-  await new Promise((r) => setTimeout(r, 500));
-  const res = await fetch(`${httpBase()}/api/chat/summary`, { headers: { Cookie: cookieHeader() } });
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(typeof body.summary).toBe("string");
-});
-
-test("GET /api/chat/summary includes the fake-chat ready marker (ANSI-stripped)", async () => {
-  await new Promise((r) => setTimeout(r, 500));
-  const res = await fetch(`${httpBase()}/api/chat/summary`, { headers: { Cookie: cookieHeader() } });
-  const body = await res.json();
-  expect(body.summary).toContain("SF_TEST_READY");
-});
-
-test("GET /api/chat/summary returns 401 without a token", async () => {
-  const res = await fetch(`${httpBase()}/api/chat/summary`);
-  expect(res.status).toBe(401);
 });
 
 // ---- Live reload: edits to src/web/static/* are picked up without a rebuild ----

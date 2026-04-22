@@ -129,3 +129,4 @@ If you see that block, the capabilities listed in this document may have changed
 
 - `doc/schema.md` — workflow JSON schema reference.
 - `doc/hot-reload.md` — dev-mode internals and limitations.
+- `doc/web.md` — browser UI guide (`sparkflow --web`).

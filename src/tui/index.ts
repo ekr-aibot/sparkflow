@@ -263,7 +263,7 @@ const SLASH_COMMANDS: Record<string, SlashCommandSpec> = {
     description: "Enter planning mode; produce a structured plan for a task.",
     body: `I want to build a plan for a task. Read my description below, then:
 
-1. If anything is unclear or ambiguous, ask me your questions **all at once** in a single message. Wait for my answers before proceeding.
+1. If anything is unclear or ambiguous, **interview me**: ask one question at a time (or a small group only when they share a single decision) and wait for my answer before asking the next. Be judicious — prefer stating a reasonable assumption to asking a question, and only ask when something is truly load-bearing for the plan. Stop asking once you have what you need, or when I signal to move on (e.g., "just plan it", "good enough").
 2. Once you have enough information, produce a complete project plan and stop. Do not ask what to do next or offer to help further — just present the plan.
 
 The plan will be passed to workflow agents as their instructions, so it must be specific enough for them to execute autonomously. Structure the plan with these sections:

@@ -109,4 +109,59 @@ describe("ClaudeCodeAdapter", () => {
       expect(adapter.isTokenLimitError(null, "exit code 1")).toBe(false);
     });
   });
+
+  describe("extractJsonFromResult", () => {
+    it("extracts a flat JSON object from result text", () => {
+      const result = adapter.extractJsonFromResult('{"approved": true, "review": "LGTM"}');
+      expect(result).toEqual({ approved: true, review: "LGTM" });
+    });
+
+    it("returns null for non-JSON text", () => {
+      expect(adapter.extractJsonFromResult("some prose output")).toBeNull();
+    });
+
+    it("returns null for a JSON array", () => {
+      expect(adapter.extractJsonFromResult("[1, 2, 3]")).toBeNull();
+    });
+
+    it("returns null for a JSON primitive", () => {
+      expect(adapter.extractJsonFromResult('"just a string"')).toBeNull();
+    });
+
+    it("handles whitespace around the JSON", () => {
+      const result = adapter.extractJsonFromResult('  {"approved": false}  ');
+      expect(result).toEqual({ approved: false });
+    });
+  });
+
+  describe("applySuccessGate", () => {
+    it("passes when gate output is true", () => {
+      const result = adapter.applySuccessGate({ approved: true, review: "lgtm" }, "approved");
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+    });
+
+    it("fails when gate output is false", () => {
+      const result = adapter.applySuccessGate({ approved: false, review: "issues found" }, "approved");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("approved");
+      expect(result.error).toContain("false");
+    });
+
+    it("fails when gate output is missing", () => {
+      const result = adapter.applySuccessGate({ review: "issues found" }, "approved");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("approved");
+    });
+
+    it("fails when gate output is a truthy non-boolean string", () => {
+      const result = adapter.applySuccessGate({ approved: "true" }, "approved");
+      expect(result.success).toBe(false);
+    });
+
+    it("fails when gate output is a truthy number", () => {
+      const result = adapter.applySuccessGate({ approved: 1 }, "approved");
+      expect(result.success).toBe(false);
+    });
+  });
 });

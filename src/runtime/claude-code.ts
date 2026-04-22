@@ -182,7 +182,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         cb?.();
 
         const exitCode = code ?? 1;
-        const success = exitCode === 0;
+        let success = exitCode === 0;
 
         if (timedOut) {
           resolve({
@@ -199,9 +199,22 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
 
         if (success && parsed) {
+          // For json-typed outputs, parse the result text as JSON and extract
+          // named fields. For other typed outputs, look up named fields in the
+          // event object directly (legacy path for callers that embed structured
+          // data at the top level of the result event).
+          const resultText = (parsed as Record<string, unknown>).result;
+          const parsedResultJson = typeof resultText === "string"
+            ? this.extractJsonFromResult(resultText)
+            : null;
+
           if (ctx.step.outputs) {
-            for (const name of Object.keys(ctx.step.outputs)) {
-              if ((parsed as Record<string, unknown>)[name] !== undefined) {
+            for (const [name, decl] of Object.entries(ctx.step.outputs)) {
+              if (decl.type === "json" && parsedResultJson !== null) {
+                if (parsedResultJson[name] !== undefined) {
+                  outputs[name] = parsedResultJson[name];
+                }
+              } else if ((parsed as Record<string, unknown>)[name] !== undefined) {
                 outputs[name] = (parsed as Record<string, unknown>)[name];
               }
             }
@@ -216,11 +229,22 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           }
         }
 
+        // Apply success_output gate: the named output must be strictly true.
+        // Outputs are preserved so on_failure templates can still reference them.
+        let gateError: string | undefined;
+        if (success && ctx.step.success_output) {
+          const gate = this.applySuccessGate(outputs, ctx.step.success_output);
+          if (!gate.success) {
+            success = false;
+            gateError = gate.error;
+          }
+        }
+
         resolve({
           success,
           outputs,
           exitCode,
-          error: success ? undefined : stderr.trim() || `Exit code ${exitCode}`,
+          error: success ? undefined : (gateError ?? (stderr.trim() || `Exit code ${exitCode}`)),
           sessionId,
           tokenLimitHit,
         });
@@ -274,6 +298,38 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         child.stdin?.end();
       });
     });
+  }
+
+  /**
+   * Parses a result text string as a flat JSON object.
+   * Returns the parsed object, or null if the text is not valid JSON or not an object.
+   */
+  extractJsonFromResult(resultText: string): Record<string, unknown> | null {
+    try {
+      const val = JSON.parse(resultText.trim());
+      if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+        return val as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Checks whether the named gate output is strictly true.
+   * Returns success: true when it passes, or success: false with an error message when not.
+   */
+  applySuccessGate(
+    outputs: Record<string, unknown>,
+    gateName: string,
+  ): { success: boolean; error?: string } {
+    const gateValue = outputs[gateName];
+    if (gateValue === true) return { success: true };
+    return {
+      success: false,
+      error: `step gated on output \`${gateName}\` which was ${JSON.stringify(gateValue)}`,
+    };
   }
 
   /**

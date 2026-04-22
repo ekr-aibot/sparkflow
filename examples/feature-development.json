@@ -52,10 +52,15 @@
       ],
       "outputs": {
         "review": {
-          "type": "text",
+          "type": "json",
           "description": "Review comments explaining what needs to change and why"
+        },
+        "approved": {
+          "type": "json",
+          "description": "true if the code is ready to merge"
         }
-      }
+      },
+      "success_output": "approved"
     },
     "test": {
       "name": "Test Runner",

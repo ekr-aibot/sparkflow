@@ -142,6 +142,51 @@ describe("PrWatcherAdapter", () => {
     expect(seenArgs[0][2]).toBe("60");
   });
 
+  it("fails immediately when PR has pre-existing CI failures", async () => {
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
+      if (cmd === "git" && argsArr?.[0] === "remote") {
+        return Buffer.from("https://github.com/test-owner/test-repo.git\n");
+      }
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+
+      if (key.includes("pr view") && key.includes("number,url,state,mergedAt")) {
+        return Buffer.from(JSON.stringify({
+          number: 10,
+          url: "https://github.com/o/r/pull/10",
+          state: "OPEN",
+          mergedAt: null,
+        }) + "\n");
+      }
+
+      // Initial checks call — returns a pre-existing failure
+      if (key.includes("pr checks")) {
+        return Buffer.from(JSON.stringify([
+          { name: "ci/build", state: "completed", conclusion: "failure" },
+        ]) + "\n");
+      }
+
+      if (key.includes("/reviews") || key.includes("/comments")) {
+        return Buffer.from(JSON.stringify([]) + "\n");
+      }
+
+      throw new Error(`Unexpected gh command: ${key}`);
+    });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Pre-existing");
+    expect(result.outputs.feedback as string).toContain("CI Failure");
+    expect(result.outputs.feedback as string).toContain("ci/build");
+    expect(result.outputs.pr_url).toBe("https://github.com/o/r/pull/10");
+  });
+
   it("detects new CI failure and returns feedback", async () => {
     let pollCount = 0;
 

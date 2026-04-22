@@ -124,6 +124,10 @@
           "additionalProperties": { "$ref": "#/$defs/OutputDeclaration" },
           "description": "Named outputs this step produces."
         },
+        "success_output": {
+          "type": "string",
+          "description": "Name of a declared output that must be strictly true for the step to succeed. Only applies to claude-code steps."
+        },
         "env": {
           "type": "object",
           "additionalProperties": { "type": "string" },

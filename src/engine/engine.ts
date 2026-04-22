@@ -599,6 +599,9 @@ export class WorkflowEngine {
         status.state = "failed";
         status.lastError = result.error;
         status.inPlaceAttempt = 0;
+        // Store outputs even on failure so on_failure message templates
+        // (e.g. ${steps.reviewer.output.review}) can still resolve them.
+        this.stepOutputs.set(stepId, result.outputs);
         this.logger.error(`[${stepId}] failed${errSuffix}`);
         await this.onStepFailure(stepId);
       }

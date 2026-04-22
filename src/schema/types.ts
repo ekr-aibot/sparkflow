@@ -157,6 +157,13 @@ export interface Step {
   timeout?: number;
   /** Named outputs this step produces. */
   outputs?: Record<string, OutputDeclaration>;
+  /**
+   * Name of a declared output that must be strictly `true` for the step to
+   * count as successful. Only applies to claude-code steps. On gate failure,
+   * `success` is false but `outputs` are still returned so `on_failure`
+   * templates can reference them.
+   */
+  success_output?: string;
   /** Extra environment variables. Values support templates. */
   env?: Record<string, string>;
 }

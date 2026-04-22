@@ -259,11 +259,19 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       : getOwnerRepo(ctx.cwd);
 
     const initialChecks = getChecks(pr.number, ctx.cwd, repoArgs);
-    const initialFailedChecks = new Set(
-      initialChecks
-        .filter((c) => isFailedConclusion(c.conclusion))
-        .map((c) => c.name),
-    );
+    const initialFailed = initialChecks.filter((c) => isFailedConclusion(c.conclusion));
+    if (initialFailed.length > 0) {
+      const details = initialFailed.map((c) => `- ${c.name}: ${c.conclusion}`).join("\n");
+      ctx.logger?.info(`[${ctx.stepId}] pre-existing CI failures detected`);
+      return {
+        success: false,
+        outputs: {
+          feedback: formatFeedback("CI Failure", details),
+          pr_url: pr.url,
+        },
+        error: "Pre-existing CI failures on PR",
+      };
+    }
 
     const initialReviews = getReviews(owner, repo, pr.number, ctx.cwd);
     const initialReviewCount = initialReviews.length;
@@ -335,24 +343,22 @@ export class PrWatcherAdapter implements RuntimeAdapter {
         };
       }
 
-      // Check for new CI failures
+      // Check for CI failures
       const checks = getChecks(pr.number, ctx.cwd, repoArgs);
-      const newFailures = checks.filter(
-        (c) => isFailedConclusion(c.conclusion) && !initialFailedChecks.has(c.name),
-      );
+      const failures = checks.filter((c) => isFailedConclusion(c.conclusion));
 
-      if (newFailures.length > 0) {
-        const details = newFailures
+      if (failures.length > 0) {
+        const details = failures
           .map((c) => `- ${c.name}: ${c.conclusion}`)
           .join("\n");
-        ctx.logger?.info(`[${ctx.stepId}] new CI failures detected`);
+        ctx.logger?.info(`[${ctx.stepId}] CI failures detected`);
         return {
           success: false,
           outputs: {
             feedback: formatFeedback("CI Failure", details),
             pr_url: current.url,
           },
-          error: "New CI failures detected",
+          error: "CI failures detected",
         };
       }
 

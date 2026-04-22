@@ -35,9 +35,9 @@ import { JobManager } from "../tui/job-manager.js";
 import { IpcServer } from "../mcp/ipc.js";
 import { handleIpcRequest } from "../tui/ipc-handler.js";
 import { EngineIpcClient } from "./engine-ipc-client.js";
-import { repoIdFor, repoDisplayName, SPARKFLOW_VERSION } from "./discovery.js";
+import { repoIdFor, SPARKFLOW_VERSION } from "./discovery.js";
 import { buildChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpec } from "../tui/chat-tool.js";
-import type { FrontendToEngine } from "./ipc-protocol.js";
+import type { ErrorMessage, FrontendToEngine } from "./ipc-protocol.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,7 +141,11 @@ async function main(): Promise<void> {
 
   // --- Repo identity ---
   const repoId = repoIdFor(cwd);
-  const repoName = process.env.SPARKFLOW_ENGINE_NAME ?? repoDisplayName(cwd, repoId, new Set());
+  // Send the bare basename as repoName. Disambiguation of colliding names
+  // across attached engines happens on the frontend side in getRepos(),
+  // which is the only place that knows the full set.
+  const repoName =
+    process.env.SPARKFLOW_ENGINE_NAME ?? (cwd.split("/").at(-1) ?? cwd);
 
   // --- Frontend IPC client ---
   const ipcClient = new EngineIpcClient({
@@ -185,6 +189,13 @@ async function main(): Promise<void> {
         break;
       }
 
+      case "removeJob": {
+        const result = jobManager.removeJob(msg.jobId);
+        if (result.ok) ipcClient.sendResponse(msg.id, { ok: true });
+        else ipcClient.sendError(msg.id, result.error ?? "remove failed");
+        break;
+      }
+
       case "answerRecovery": {
         const ok = jobManager.answerRecovery(msg.jobId, msg.action, msg.message);
         if (ok) ipcClient.sendResponse(msg.id, { ok: true });
@@ -203,6 +214,27 @@ async function main(): Promise<void> {
 
   ipcClient.on("frontendDisconnect", () => {
     console.error("[sparkflow engine] frontend disconnected — will attempt to reconnect");
+  });
+
+  // Frontend rejected our attach (duplicate repo, version mismatch, etc.)
+  // — exit cleanly rather than loop-reconnect forever.
+  ipcClient.on("attachError", (err: ErrorMessage) => {
+    if (err.code === "already_attached") {
+      console.error(
+        `[sparkflow engine] another sparkflow --web is already attached for this repo (${repoName})`,
+      );
+    } else if (err.code === "version_mismatch") {
+      console.error(
+        `[sparkflow engine] version mismatch: frontend is v${err.frontendVersion}, this engine is v${err.engineVersion}. ` +
+          `Restart the frontend ('pkill -f frontend-daemon') or install a matching sparkflow version.`,
+      );
+    } else {
+      console.error(`[sparkflow engine] frontend rejected attach: ${err.error}`);
+    }
+    jobManager.release();
+    try { ipcClient.close(); } catch { /* ignore */ }
+    try { ipcServer.close(); } catch { /* ignore */ }
+    process.exit(1);
   });
 
   // Connect to frontend
@@ -254,9 +286,8 @@ async function main(): Promise<void> {
 
     pty.onData((data) => {
       const chunk = Buffer.from(data, "utf-8");
-      ring = ring.length + chunk.length <= RING_BUFFER_BYTES
-        ? Buffer.concat([ring, chunk])
-        : Buffer.concat([ring.subarray(ring.length + chunk.length - RING_BUFFER_BYTES), chunk]);
+      const next = Buffer.concat([ring, chunk]);
+      ring = next.length > RING_BUFFER_BYTES ? next.subarray(next.length - RING_BUFFER_BYTES) : next;
       broadcastPtyFrame(JSON.stringify({ type: "pty_data", bytes: chunk.toString("base64") }) + "\n");
     });
 

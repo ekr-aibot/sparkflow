@@ -30,6 +30,8 @@ export interface EngineIpcClientOptions {
  *  "command" (msg: FrontendToEngine)  — a command from the frontend
  *  "reconnect"                         — after a successful reconnect
  *  "frontendDisconnect"                — lost connection (will attempt to reconnect)
+ *  "attachError" (msg: ErrorMessage)   — frontend rejected our attach (fatal,
+ *                                        no reconnect scheduled)
  */
 export class EngineIpcClient extends EventEmitter {
   private socket: Socket | null = null;
@@ -38,6 +40,8 @@ export class EngineIpcClient extends EventEmitter {
   private reconnectDelay = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private hasConnectedOnce = false;
+  /** Set when the frontend rejects our attach — suppresses reconnect. */
+  private attachRejected = false;
 
   constructor(private readonly opts: EngineIpcClientOptions) {
     super();
@@ -90,7 +94,7 @@ export class EngineIpcClient extends EventEmitter {
     const onDisconnect = () => {
       if (this.socket !== sock) return;
       this.socket = null;
-      if (this.closed) return;
+      if (this.closed || this.attachRejected) return;
       this.emit("frontendDisconnect");
       this.scheduleReconnect();
     };
@@ -101,12 +105,24 @@ export class EngineIpcClient extends EventEmitter {
   }
 
   private handleLine(line: string): void {
+    let msg: FrontendToEngine | ResponseMessage | ErrorMessage | PongMessage;
     try {
-      const msg = JSON.parse(line) as FrontendToEngine | ResponseMessage | ErrorMessage | PongMessage;
-      this.emit("command", msg);
+      msg = JSON.parse(line) as FrontendToEngine | ResponseMessage | ErrorMessage | PongMessage;
     } catch {
-      /* ignore malformed */
+      return;
     }
+
+    // Un-correlated error frames are only sent by the frontend when rejecting
+    // an attach (bad first message, duplicate repoId, version mismatch). This
+    // is fatal — suppress the reconnect loop and surface it so the engine
+    // daemon can exit cleanly instead of spinning forever.
+    if (msg.type === "error" && !(msg as ErrorMessage).id) {
+      this.attachRejected = true;
+      this.closed = true;
+      this.emit("attachError", msg as ErrorMessage);
+      return;
+    }
+    this.emit("command", msg);
   }
 
   private scheduleReconnect(): void {
@@ -130,14 +146,6 @@ export class EngineIpcClient extends EventEmitter {
 
   sendJobSnapshot(jobs: JobInfo[]): void {
     this.write(JSON.stringify({ type: "jobSnapshot", jobs }) + "\n");
-  }
-
-  sendJobUpdate(job: JobInfo): void {
-    this.write(JSON.stringify({ type: "jobUpdate", job }) + "\n");
-  }
-
-  sendJobRemoved(jobId: string): void {
-    this.write(JSON.stringify({ type: "jobRemoved", jobId }) + "\n");
   }
 
   sendResponse(id: string, payload: Record<string, unknown>): void {

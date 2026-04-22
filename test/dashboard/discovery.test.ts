@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -99,6 +99,55 @@ describe("discovery", () => {
     existingNames.add("foo");
     const name2 = repoDisplayName("/home/other/foo", id, existingNames);
     expect(name2).toBe(`foo (${id.slice(0, 4)})`);
+  });
+
+  it("acquireFrontendLock cleans up a stale lock whose writer pid is dead", async () => {
+    const { ensureSparkflowHomePerms, acquireFrontendLock, releaseFrontendLock, dashboardLockPath } = await importDiscovery();
+    ensureSparkflowHomePerms();
+
+    // Plant a lock file claiming ownership by an unlikely-to-exist pid.
+    const lock = dashboardLockPath();
+    writeFileSync(lock, "999999999", { mode: 0o600 });
+
+    // Acquire should succeed: the stale lock is detected and cleaned.
+    const ok = acquireFrontendLock();
+    expect(ok).toBe(true);
+
+    releaseFrontendLock();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("acquireFrontendLock returns false when the current process already holds it", async () => {
+    const { ensureSparkflowHomePerms, acquireFrontendLock, releaseFrontendLock, dashboardLockPath } = await importDiscovery();
+    ensureSparkflowHomePerms();
+
+    expect(acquireFrontendLock()).toBe(true);
+
+    // Second call with the live holder (this process) should fail.
+    expect(acquireFrontendLock()).toBe(false);
+
+    // Sanity check: the lock file contains our pid.
+    const lock = dashboardLockPath();
+    expect(existsSync(lock)).toBe(true);
+
+    releaseFrontendLock();
+  });
+
+  it("writeDashboardInfo writes the token file with mode 0700", async () => {
+    const { ensureSparkflowHomePerms, writeDashboardInfo, dashboardJsonPath } = await importDiscovery();
+    ensureSparkflowHomePerms();
+
+    writeDashboardInfo({
+      socketPath: join(home, "dashboard.sock"),
+      port: 1111,
+      token: "c".repeat(64),
+      pid: process.pid,
+      version: "0.1.0",
+      startedAt: Date.now(),
+    });
+
+    const st = statSync(dashboardJsonPath());
+    expect(st.mode & 0o777).toBe(0o700);
   });
 
   it("probeFrontend returns false for dead pid", async () => {

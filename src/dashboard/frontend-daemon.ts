@@ -25,7 +25,6 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { FrontendIpcServer } from "./frontend-ipc-server.js";
-import type { JobInfo } from "../tui/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,10 +140,6 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-function enrichJobs(jobs: Array<JobInfo & { repoId: string }>): Array<Record<string, unknown>> {
-  return jobs.map((info) => ({ ...info }));
-}
-
 // ---------------------------------------------------------------------------
 // PTY bridge proxy (connects to the primary engine's PTY bridge socket)
 // ---------------------------------------------------------------------------
@@ -238,9 +233,8 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       connectPtyBridge(conn.ptyBridgePath).then((bridge) => {
         ptyBridge = bridge;
         bridge.onData((chunk) => {
-          ring = ring.length + chunk.length <= RING_CAP
-            ? Buffer.concat([ring, chunk])
-            : Buffer.concat([ring.subarray(ring.length + chunk.length - RING_CAP), chunk]);
+          const next = Buffer.concat([ring, chunk]);
+          ring = next.length > RING_CAP ? next.subarray(next.length - RING_CAP) : next;
           const payload = JSON.stringify({ type: "data", bytes: chunk.toString("base64") });
           if (wssRef.wss) {
             for (const ws of wssRef.wss.clients) {
@@ -295,17 +289,20 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       });
       const send = () => {
         try {
-          const jobs = enrichJobs(registry.getAllJobs());
+          const jobs = registry.getAllJobs();
           const repos = registry.getRepos();
           res.write(`data: ${JSON.stringify({ jobs, repos })}\n\n`);
         } catch { /* client gone */ }
       };
       send();
-      registry.onUpdate(send);
+      const unsubscribe = registry.onUpdate(send);
       const heartbeat = setInterval(() => {
         try { res.write(": ping\n\n"); } catch { /* ignore */ }
       }, 15_000);
-      req.on("close", () => clearInterval(heartbeat));
+      req.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
       return;
     }
 
@@ -366,7 +363,7 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
 
       if (action === "remove" && req.method === "POST") {
         registry
-          .sendCommand(repoId, { type: "killJob", jobId, id: randomBytes(8).toString("hex") })
+          .sendCommand(repoId, { type: "removeJob", jobId, id: randomBytes(8).toString("hex") })
           .then((r) => {
             if (!r || "error" in r) return sendJson(res, 400, { error: (r as { error?: string } | null)?.error ?? "remove failed" });
             sendJson(res, 200, { ok: true });

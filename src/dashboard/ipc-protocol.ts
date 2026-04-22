@@ -31,30 +31,16 @@ export interface DetachMessage {
   type: "detach";
 }
 
-/** Full job state snapshot sent once immediately after attach. */
+/** Full job state snapshot. The engine re-sends this on every state change. */
 export interface JobSnapshotMessage {
   type: "jobSnapshot";
   jobs: JobInfo[];
-}
-
-/** Incremental job state update. */
-export interface JobUpdateMessage {
-  type: "jobUpdate";
-  job: JobInfo;
-}
-
-/** A job was removed from the engine's registry. */
-export interface JobRemovedMessage {
-  type: "jobRemoved";
-  jobId: string;
 }
 
 export type EngineToFrontend =
   | AttachMessage
   | DetachMessage
   | JobSnapshotMessage
-  | JobUpdateMessage
-  | JobRemovedMessage
   | ResponseMessage
   | PongMessage
   | ErrorMessage;
@@ -76,6 +62,12 @@ export interface StartWorkflowCommand {
 
 export interface KillJobCommand {
   type: "killJob";
+  id: string;
+  jobId: string;
+}
+
+export interface RemoveJobCommand {
+  type: "removeJob";
   id: string;
   jobId: string;
 }
@@ -102,6 +94,7 @@ export interface PingMessage {
 export type FrontendToEngine =
   | StartWorkflowCommand
   | KillJobCommand
+  | RemoveJobCommand
   | AnswerRecoveryCommand
   | GetJobDetailCommand
   | PingMessage;
@@ -116,11 +109,19 @@ export interface ResponseMessage {
   payload: Record<string, unknown>;
 }
 
+/**
+ * Error response. `id` correlates with a command id when the error is a
+ * response to a specific request. Pre-attach errors (bad first message,
+ * duplicate repoId, version mismatch) have no id.
+ */
 export interface ErrorMessage {
   type: "error";
-  id: string;
+  id?: string;
   error: string;
   code?: string;
+  /** Populated on version_mismatch so the engine can render a useful message. */
+  frontendVersion?: string;
+  engineVersion?: string;
 }
 
 export interface PongMessage {

@@ -11,29 +11,40 @@ import {
   mkdirSync,
   openSync,
   closeSync,
-  writeFileSync,
+  writeSync,
   readFileSync,
   statSync,
   unlinkSync,
-  chmodSync,
 } from "node:fs";
 import { createConnection } from "node:net";
 import { createHash } from "node:crypto";
-import { readFileSync as _readPkg } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const PKG_JSON_PATH = resolve(__dirname, "..", "..", "..", "package.json");
 
+/**
+ * Walk up from this module until we find a package.json with a sparkflow
+ * name. This makes the version resolve identically whether the code is
+ * loaded from `src/dashboard/` (tests, tsx) or `dist/src/dashboard/` (npm
+ * install, production).
+ */
 function readPackageVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(PKG_JSON_PATH, "utf-8")) as { version?: string };
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
+  let dir = __dirname;
+  for (let i = 0; i < 6; i++) {
+    const candidate = resolve(dir, "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, "utf-8")) as { name?: string; version?: string };
+      if (pkg.name === "sparkflow" && typeof pkg.version === "string") return pkg.version;
+    } catch {
+      /* keep walking */
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
+  return "0.0.0";
 }
 
 export const SPARKFLOW_VERSION = readPackageVersion();
@@ -90,17 +101,46 @@ export function ensureSparkflowHomePerms(): void {
 /**
  * Attempt to atomically create the lock file.
  * Returns true if the lock was acquired, false if another process holds it.
+ *
+ * If an existing lock file refers to a dead pid, it is removed and the
+ * acquire is retried once. This prevents a crashed holder from deadlocking
+ * future invocations.
  */
 export function acquireFrontendLock(): boolean {
   const lock = dashboardLockPath();
+  const tryCreate = (): boolean => {
+    try {
+      const fd = openSync(lock, "ax", 0o600);
+      try {
+        writeSync(fd, String(process.pid));
+      } finally {
+        closeSync(fd);
+      }
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw err;
+    }
+  };
+
+  if (tryCreate()) return true;
+
+  // EEXIST: inspect the holder pid. If dead, clean up and retry once.
+  let holderPid = 0;
   try {
-    const fd = openSync(lock, "ax", 0o600);
-    closeSync(fd);
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw err;
+    const raw = readFileSync(lock, "utf-8").trim();
+    holderPid = parseInt(raw, 10);
+  } catch {
+    holderPid = 0;
   }
+  if (holderPid > 0 && isAlive(holderPid)) return false;
+
+  try {
+    unlinkSync(lock);
+  } catch {
+    return false;
+  }
+  return tryCreate();
 }
 
 /** Release the lock file if we hold it. */
@@ -122,14 +162,23 @@ export function readDashboardInfo(): DashboardInfo | null {
   }
 }
 
-/** Write dashboard info with mode 0600. */
+/**
+ * Write dashboard info with mode 0700 (rwx------) from the start.
+ * Opening with an explicit mode avoids the brief window where the file
+ * would otherwise be world-readable between write and chmod.
+ */
 export function writeDashboardInfo(info: DashboardInfo): void {
   const path = dashboardJsonPath();
-  writeFileSync(path, JSON.stringify(info, null, 2));
   try {
-    chmodSync(path, 0o600);
+    unlinkSync(path);
   } catch {
-    /* best-effort */
+    /* not present */
+  }
+  const fd = openSync(path, "w", 0o700);
+  try {
+    writeSync(fd, JSON.stringify(info, null, 2));
+  } finally {
+    closeSync(fd);
   }
 }
 

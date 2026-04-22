@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { createFrontendDaemon, type FrontendDaemonHandle } from "../../src/dashboard/frontend-daemon.js";
 import { EngineIpcClient } from "../../src/dashboard/engine-ipc-client.js";
+import { SPARKFLOW_VERSION } from "../../src/dashboard/discovery.js";
 import type { JobInfo } from "../../src/tui/types.js";
 
 const TEST_TOKEN = "a".repeat(64);
@@ -51,7 +52,7 @@ describe("frontend-daemon HTTP routes", () => {
       repoPath: "/repo",
       repoName: "My Repo",
       mcpSocket: engineSock,
-      version: "0.1.0",
+      version: SPARKFLOW_VERSION,
     });
     await client.connect();
 
@@ -62,7 +63,7 @@ describe("frontend-daemon HTTP routes", () => {
         client.sendPong(msg.id);
         return;
       }
-      if (msg.type === "killJob" || msg.type === "answerRecovery") {
+      if (msg.type === "killJob" || msg.type === "removeJob" || msg.type === "answerRecovery") {
         client.sendResponse(msg.id, { ok: true });
         return;
       }
@@ -122,6 +123,24 @@ describe("frontend-daemon HTTP routes", () => {
     expect(res.ok).toBe(true);
     const body = await res.json() as { ok: boolean };
     expect(body.ok).toBe(true);
+  });
+
+  it("POST /repos/:repoId/jobs/:jobId/remove sends removeJob (not killJob)", async () => {
+    // Override the default command handler to distinguish remove vs kill.
+    const observed: string[] = [];
+    client.removeAllListeners("command");
+    client.on("command", (msg: { type: string; id?: string }) => {
+      if (!msg.id) return;
+      observed.push(msg.type);
+      client.sendResponse(msg.id, { ok: true });
+    });
+
+    const res = await fetch(`${baseUrl()}/repos/testrepo/jobs/job-002/remove`, {
+      method: "POST",
+      headers,
+    });
+    expect(res.ok).toBe(true);
+    expect(observed).toEqual(["removeJob"]);
   });
 
   it("POST /repos/:repoId/jobs/:jobId/recovery validates action field", async () => {

@@ -10,7 +10,7 @@
  */
 
 import { createServer, type Server, type Socket } from "node:net";
-import { unlinkSync } from "node:fs";
+import { chmodSync, unlinkSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { randomBytes } from "node:crypto";
 import type { JobInfo } from "../tui/types.js";
@@ -21,6 +21,7 @@ import type {
   ErrorMessage,
   PongMessage,
 } from "./ipc-protocol.js";
+import { SPARKFLOW_VERSION, repoDisplayName } from "./discovery.js";
 
 type CommandResponse = ResponseMessage | ErrorMessage | PongMessage;
 
@@ -57,7 +58,17 @@ export class FrontendIpcServer extends EventEmitter {
     return new Promise<void>((resolve, reject) => {
       this.server = createServer((sock) => this.handleConnection(sock));
       this.server.on("error", reject);
-      this.server.listen(this.socketPath, () => resolve());
+      this.server.listen(this.socketPath, () => {
+        // Node inherits umask for the socket inode; lock it down so only
+        // the owner can connect.
+        try {
+          chmodSync(this.socketPath, 0o700);
+        } catch (err) {
+          reject(err as Error);
+          return;
+        }
+        resolve();
+      });
     });
   }
 
@@ -137,6 +148,24 @@ export class FrontendIpcServer extends EventEmitter {
         return;
       }
 
+      // Version check: refuse engines that disagree with the frontend's
+      // sparkflow version. Empty/missing version strings are tolerated so
+      // the protocol can evolve, but any non-empty mismatch is rejected.
+      const engineVersion = typeof raw.version === "string" ? raw.version : "";
+      if (engineVersion && engineVersion !== SPARKFLOW_VERSION) {
+        socket.write(
+          JSON.stringify({
+            type: "error",
+            error: `version_mismatch: frontend is sparkflow v${SPARKFLOW_VERSION}, engine is v${engineVersion}`,
+            code: "version_mismatch",
+            frontendVersion: SPARKFLOW_VERSION,
+            engineVersion,
+          }) + "\n",
+        );
+        socket.destroy();
+        return;
+      }
+
       ctx.boundRepoId = repoId;
 
       const jobs = new Map<string, JobInfo>();
@@ -194,20 +223,6 @@ export class FrontendIpcServer extends EventEmitter {
         return;
       }
 
-      case "jobUpdate": {
-        const job = msg.job as JobInfo | undefined;
-        if (job?.id) conn.jobs.set(job.id, job);
-        this.fireUpdate();
-        return;
-      }
-
-      case "jobRemoved": {
-        const jobId = typeof msg.jobId === "string" ? msg.jobId : null;
-        if (jobId) conn.jobs.delete(jobId);
-        this.fireUpdate();
-        return;
-      }
-
       case "response":
       case "error":
       case "pong": {
@@ -237,14 +252,28 @@ export class FrontendIpcServer extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   getRepos(): RepoInfo[] {
-    return Array.from(this.engines.values()).map((e) => ({
-      repoId: e.repoId,
-      repoPath: e.repoPath,
-      repoName: e.repoName,
-      mcpSocket: e.mcpSocket,
-      ptyBridgePath: e.ptyBridgePath,
-      version: e.version,
-    }));
+    // Disambiguate basename collisions here — the engines send their bare
+    // basename as repoName; if two engines share one, append a short repoId
+    // suffix to both. Doing this at read-time guarantees the view is always
+    // consistent with the full set of currently-attached engines.
+    const engines = Array.from(this.engines.values());
+    const baseCounts = new Map<string, number>();
+    for (const e of engines) baseCounts.set(e.repoName, (baseCounts.get(e.repoName) ?? 0) + 1);
+
+    return engines.map((e) => {
+      const colliding = (baseCounts.get(e.repoName) ?? 0) > 1;
+      const displayName = colliding
+        ? repoDisplayName(e.repoPath, e.repoId, new Set([e.repoName]))
+        : e.repoName;
+      return {
+        repoId: e.repoId,
+        repoPath: e.repoPath,
+        repoName: displayName,
+        mcpSocket: e.mcpSocket,
+        ptyBridgePath: e.ptyBridgePath,
+        version: e.version,
+      };
+    });
   }
 
   getEngine(repoId: string): EngineConnection | null {
@@ -284,8 +313,13 @@ export class FrontendIpcServer extends EventEmitter {
     return undefined;
   }
 
-  onUpdate(cb: () => void): void {
+  /** Subscribe to registry updates. Returns an unsubscribe function. */
+  onUpdate(cb: () => void): () => void {
     this.updateCallbacks.push(cb);
+    return () => {
+      const idx = this.updateCallbacks.indexOf(cb);
+      if (idx !== -1) this.updateCallbacks.splice(idx, 1);
+    };
   }
 
   private fireUpdate(): void {

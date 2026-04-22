@@ -110,9 +110,19 @@ function setupBaseMocks(opts: { prCreateTitle?: (t: string) => void } = {}) {
   mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
     const argsArr = args as string[];
 
-    // git push -u origin HEAD
+    // git push -u <remote> HEAD
     if (cmd === "git" && argsArr?.[0] === "push") {
       return Buffer.from("");
+    }
+
+    // git fetch <remote> <branch> — best-effort; succeed by default
+    if (cmd === "git" && argsArr?.[0] === "fetch") {
+      return Buffer.from("");
+    }
+
+    // git rev-parse --verify <remote>/<branch> — succeed so remote ref is used
+    if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") {
+      return Buffer.from("abc1234\n");
     }
 
     // git rev-parse --abbrev-ref HEAD (for fallback title)
@@ -218,6 +228,8 @@ describe("PrCreatorAdapter", () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
       if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "fetch") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") throw new Error("unknown ref");
       if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/dev\n");
       if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc\n");
       if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" f.ts | 1 +\n");
@@ -253,6 +265,8 @@ describe("PrCreatorAdapter", () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
       if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "fetch") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") throw new Error("unknown ref");
       if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/_run-16\n");
       if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc\n");
       if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" f.ts | 1 +\n");
@@ -276,6 +290,8 @@ describe("PrCreatorAdapter", () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
       if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "fetch") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") throw new Error("unknown ref");
       if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/_run-25\n");
       if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc1234 Add feature\n");
       if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" src/foo.ts | 5 +++++\n");
@@ -304,10 +320,11 @@ describe("PrCreatorAdapter", () => {
 
   it("does not append 'Fixes' when prompt has no issue reference", async () => {
     let capturedBody = "";
-    setupBaseMocks();
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
       if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "fetch") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") throw new Error("unknown ref");
       if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/_run-25\n");
       if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc1234 Add feature\n");
       if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" src/foo.ts | 5 +++++\n");
@@ -337,6 +354,8 @@ describe("PrCreatorAdapter", () => {
       const argsArr = args as string[];
 
       if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "fetch") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") throw new Error("unknown ref");
       if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/dev\n");
       if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc Add thing\n");
       if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" f.ts | 1 +\n");
@@ -359,5 +378,76 @@ describe("PrCreatorAdapter", () => {
     const result = await adapter.run(makeCtx());
     expect(result.success).toBe(false);
     expect(result.error).toContain("Failed to create PR");
+  });
+
+  it("uses pull_remote for git fetch and remote ref when pull_remote is set", async () => {
+    const fetchCalls: string[][] = [];
+    const revParseCalls: string[][] = [];
+    const logCalls: string[][] = [];
+    const diffCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "push") return Buffer.from("");
+
+      if (cmd === "git" && argsArr?.[0] === "fetch") {
+        fetchCalls.push(argsArr);
+        return Buffer.from("");
+      }
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") {
+        revParseCalls.push(argsArr);
+        return Buffer.from("abc1234\n");
+      }
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("sparkflow/dev\n");
+      }
+
+      if (cmd === "git" && argsArr?.[0] === "log") {
+        logCalls.push(argsArr);
+        return Buffer.from("abc1234 Add feature\n");
+      }
+
+      if (cmd === "git" && argsArr?.[0] === "diff") {
+        diffCalls.push(argsArr);
+        return Buffer.from(" f.ts | 1 +\n");
+      }
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd} ${argsArr?.join(" ")}`);
+      const key = argsArr.join(" ");
+
+      if (key.includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      if (key.includes("pr create")) {
+        return Buffer.from("https://github.com/o/r/pull/99\n");
+      }
+
+      throw new Error(`Unexpected gh: ${key}`);
+    });
+
+    mockSpawnClaude({ title: "Add feature", summary: "- Added feature" });
+
+    const ctx = makeCtx({ git: { pull_remote: "upstream", push_remote: "fork" } });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+
+    // fetch should use pull_remote
+    expect(fetchCalls.length).toBe(1);
+    expect(fetchCalls[0]).toContain("upstream");
+    expect(fetchCalls[0]).toContain("main");
+
+    // rev-parse --verify should check upstream/main
+    expect(revParseCalls.length).toBe(1);
+    expect(revParseCalls[0]).toContain("upstream/main");
+
+    // git log and diff should use upstream/main as the base
+    expect(logCalls.length).toBe(1);
+    expect(logCalls[0][1]).toBe("upstream/main..HEAD");
+
+    expect(diffCalls.length).toBe(1);
+    expect(diffCalls[0][1]).toBe("upstream/main...HEAD");
   });
 });

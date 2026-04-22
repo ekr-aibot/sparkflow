@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 
-const repoArgs = process.env.SPARKFLOW_PR_REPO
-  ? ["--repo", process.env.SPARKFLOW_PR_REPO]
-  : [];
+const issuesRepo = process.env.SPARKFLOW_ISSUES_REPO ?? process.env.SPARKFLOW_PR_REPO;
+const repoArgs = issuesRepo ? ["--repo", issuesRepo] : [];
 
 function gh(args) {
   return execFileSync("gh", args, { encoding: "utf-8" });

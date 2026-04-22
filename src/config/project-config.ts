@@ -5,8 +5,12 @@ import { homedir } from "node:os";
 export interface GitConfig {
   /** Git remote name pr-creator pushes the branch to. Defaults to "origin". */
   push_remote?: string;
+  /** Git remote name pr-creator fetches the base branch from. Defaults to push_remote. */
+  pull_remote?: string;
   /** GitHub repo (OWNER/NAME) that pr-creator opens the PR against and pr-watcher polls. Defaults to gh's auto-detection. */
   pr_repo?: string;
+  /** GitHub repo (OWNER/NAME) that issue polling targets. Defaults to pr_repo. */
+  issues_repo?: string;
   /** Base branch for the PR. Defaults to the target repo's default branch. */
   base?: string;
 }
@@ -53,7 +57,7 @@ function parseConfigObject(obj: Record<string, unknown>, label: string): Project
     }
     const gitObj = obj.git as Record<string, unknown>;
     const git: GitConfig = {};
-    for (const key of ["push_remote", "pr_repo", "base"] as const) {
+    for (const key of ["push_remote", "pull_remote", "pr_repo", "issues_repo", "base"] as const) {
       const value = gitObj[key];
       if (value === undefined) continue;
       if (typeof value !== "string") {

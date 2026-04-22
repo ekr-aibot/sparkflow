@@ -141,6 +141,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
 
     const model = runtime.model ?? DEFAULT_MODEL;
     const pushRemote = ctx.git?.push_remote ?? "origin";
+    const pullRemote = ctx.git?.pull_remote ?? pushRemote;
     const targetRepo = ctx.git?.pr_repo;
     const repoArgs = targetRepo ? ["--repo", targetRepo] : [];
 
@@ -185,7 +186,7 @@ export class PrCreatorAdapter implements RuntimeAdapter {
         // one more time to surface the real error if it persists.
         ctx.logger?.info(`[${ctx.stepId}] push failed (${errMsg}), retrying...`);
         try {
-          execFileSync("git", ["push", "-u", "origin", "HEAD"], {
+          execFileSync("git", ["push", "-u", pushRemote, "HEAD"], {
             cwd: ctx.cwd,
             stdio: "pipe",
             timeout: 60_000,
@@ -203,14 +204,38 @@ export class PrCreatorAdapter implements RuntimeAdapter {
     }
 
     // Step 3: Gather diff context
+    // Fetch from pull_remote best-effort so the remote ref is up to date for diffing.
+    try {
+      execFileSync("git", ["fetch", pullRemote, baseBranch], {
+        cwd: ctx.cwd,
+        stdio: "pipe",
+        timeout: 30_000,
+      });
+    } catch (fetchErr) {
+      const fetchMsg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+      ctx.logger?.info(`[${ctx.stepId}] fetch from ${pullRemote} failed (offline?): ${fetchMsg}`);
+    }
+
+    // Use <pullRemote>/<baseBranch> as diff base if available, else fall back to bare branch.
+    let diffBase = baseBranch;
+    try {
+      execFileSync("git", ["rev-parse", "--verify", `${pullRemote}/${baseBranch}`], {
+        cwd: ctx.cwd,
+        stdio: "pipe",
+      });
+      diffBase = `${pullRemote}/${baseBranch}`;
+    } catch {
+      // Remote ref doesn't exist locally; use bare branch name.
+    }
+
     let diffContext: string;
     try {
-      const log = execFileSync("git", ["log", `${baseBranch}..HEAD`, "--oneline"], {
+      const log = execFileSync("git", ["log", `${diffBase}..HEAD`, "--oneline"], {
         cwd: ctx.cwd,
         stdio: "pipe",
       }).toString().trim();
 
-      const stat = execFileSync("git", ["diff", `${baseBranch}...HEAD`, "--stat"], {
+      const stat = execFileSync("git", ["diff", `${diffBase}...HEAD`, "--stat"], {
         cwd: ctx.cwd,
         stdio: "pipe",
       }).toString().trim();

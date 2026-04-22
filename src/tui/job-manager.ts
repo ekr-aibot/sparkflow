@@ -1,6 +1,6 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join, basename, isAbsolute } from "node:path";
 import type { JobInfo } from "./types.js";
@@ -468,7 +468,15 @@ export class JobManager {
   getJobDetail(jobId: string): { info: JobInfo; output: string[] } | null {
     const job = this.jobs.get(jobId);
     if (!job) return null;
-    return { info: { ...job.info }, output: [...job.outputBuffer] };
+    let output: string[] = [];
+    try {
+      const raw = readFileSync(job.logPath, "utf-8");
+      output = raw.length === 0 ? [] : raw.split("\n");
+      if (output.length > 0 && output[output.length - 1] === "") output.pop();
+    } catch {
+      output = [...job.outputBuffer];
+    }
+    return { info: { ...job.info }, output };
   }
 
   onUpdate(cb: () => void): void {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { JobManager } from "../../src/tui/job-manager.js";
-import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -94,7 +94,7 @@ describe("JobManager", () => {
     expect(manager.getJobs().length).toBe(2);
   });
 
-  it("returns job detail with output buffer", () => {
+  it("returns job detail with output array", () => {
     const id = manager.startJob("/tmp/wf.json");
     const detail = manager.getJobDetail(id);
 
@@ -105,6 +105,34 @@ describe("JobManager", () => {
 
   it("returns null for unknown job detail", () => {
     expect(manager.getJobDetail("nonexistent")).toBeNull();
+  });
+
+  it("getJobDetail reads from log file, not in-memory buffer", () => {
+    const id = manager.startJob("/tmp/wf.json");
+
+    // Get the internal job record and write known content directly to the log file
+    const job = (manager as unknown as { jobs: Map<string, { outputBuffer: string[]; logPath: string }> }).jobs.get(id);
+    expect(job).toBeDefined();
+    writeFileSync(job!.logPath, "hello-from-log\nsecond-line\n");
+    job!.outputBuffer = [];
+
+    const detail = manager.getJobDetail(id);
+    expect(detail).not.toBeNull();
+    expect(detail!.output).toEqual(["hello-from-log", "second-line"]);
+  });
+
+  it("getJobDetail falls back to in-memory buffer when log file missing", () => {
+    const id = manager.startJob("/tmp/wf.json");
+
+    // Point logPath at a nonexistent location and inject buffer content
+    const job = (manager as unknown as { jobs: Map<string, { outputBuffer: string[]; logPath: string }> }).jobs.get(id);
+    expect(job).toBeDefined();
+    job!.logPath = "/nonexistent/path/that/does/not/exist.log";
+    job!.outputBuffer = ["fallback-line-1", "fallback-line-2"];
+
+    const detail = manager.getJobDetail(id);
+    expect(detail).not.toBeNull();
+    expect(detail!.output).toEqual(["fallback-line-1", "fallback-line-2"]);
   });
 
   it("answerQuestion returns false for unknown job", () => {

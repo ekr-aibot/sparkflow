@@ -140,4 +140,31 @@ describe("loadProjectConfig / resolveWorkflowPath — user + project layering", 
     writeProjectConfig({ monitors: [42] });
     expect(() => loadProjectConfig(projectCwd)).toThrow(/"monitors" must be an array of strings/);
   });
+
+  it("parses pull_remote and issues_repo from project config", () => {
+    writeProjectConfig({ git: { pull_remote: "upstream", issues_repo: "org/issues" } });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.git?.pull_remote).toBe("upstream");
+    expect(cfg.git?.issues_repo).toBe("org/issues");
+  });
+
+  it("pull_remote and issues_repo preserved alongside other git fields", () => {
+    writeProjectConfig({ git: { push_remote: "fork", pull_remote: "upstream", pr_repo: "org/app", issues_repo: "org/issues", base: "develop" } });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.git?.push_remote).toBe("fork");
+    expect(cfg.git?.pull_remote).toBe("upstream");
+    expect(cfg.git?.pr_repo).toBe("org/app");
+    expect(cfg.git?.issues_repo).toBe("org/issues");
+    expect(cfg.git?.base).toBe("develop");
+  });
+
+  it("throws when pull_remote is not a string", () => {
+    writeProjectConfig({ git: { pull_remote: 42 } });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"git.pull_remote" must be a string/);
+  });
+
+  it("throws when issues_repo is not a string", () => {
+    writeProjectConfig({ git: { issues_repo: true } });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"git.issues_repo" must be a string/);
+  });
 });

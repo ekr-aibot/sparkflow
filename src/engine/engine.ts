@@ -436,6 +436,8 @@ export class WorkflowEngine {
       if (this.config.git.pr_repo) env.SPARKFLOW_PR_REPO = this.config.git.pr_repo;
       if (this.config.git.push_remote) env.SPARKFLOW_PUSH_REMOTE = this.config.git.push_remote;
       if (this.config.git.base) env.SPARKFLOW_BASE_BRANCH = this.config.git.base;
+      const issuesRepo = this.config.git.issues_repo ?? this.config.git.pr_repo;
+      if (issuesRepo) env.SPARKFLOW_ISSUES_REPO = issuesRepo;
     }
 
     if (step.env) {

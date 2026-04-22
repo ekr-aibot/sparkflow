@@ -88,19 +88,6 @@ describe("discovery", () => {
     expect(id1).toMatch(/^[0-9a-f]{10}$/);
   });
 
-  it("repoDisplayName appends id when basename conflicts", async () => {
-    const { repoDisplayName, repoIdFor } = await importDiscovery();
-    const id = repoIdFor("/home/user/foo");
-    const existingNames = new Set<string>();
-
-    const name1 = repoDisplayName("/home/user/foo", id, existingNames);
-    expect(name1).toBe("foo");
-
-    existingNames.add("foo");
-    const name2 = repoDisplayName("/home/other/foo", id, existingNames);
-    expect(name2).toBe(`foo (${id.slice(0, 4)})`);
-  });
-
   it("acquireFrontendLock cleans up a stale lock whose writer pid is dead", async () => {
     const { ensureSparkflowHomePerms, acquireFrontendLock, releaseFrontendLock, dashboardLockPath } = await importDiscovery();
     ensureSparkflowHomePerms();

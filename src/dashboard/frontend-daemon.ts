@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { FrontendIpcServer } from "./frontend-ipc-server.js";
+import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -222,8 +223,7 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   await registry.listen();
 
   // PTY bridge — lazily connect to the first engine that provides one
-  const RING_CAP = 64 * 1024;
-  let ring = Buffer.alloc(0);
+  let ring: Buffer = Buffer.alloc(0);
   let ptyBridge: PtyBridge | null = null;
   const wssRef: { wss: WebSocketServer | null } = { wss: null };
 
@@ -233,8 +233,7 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       connectPtyBridge(conn.ptyBridgePath).then((bridge) => {
         ptyBridge = bridge;
         bridge.onData((chunk) => {
-          const next = Buffer.concat([ring, chunk]);
-          ring = next.length > RING_CAP ? next.subarray(next.length - RING_CAP) : next;
+          ring = appendRing(ring, chunk, RING_BUFFER_BYTES);
           const payload = JSON.stringify({ type: "data", bytes: chunk.toString("base64") });
           if (wssRef.wss) {
             for (const ws of wssRef.wss.clients) {

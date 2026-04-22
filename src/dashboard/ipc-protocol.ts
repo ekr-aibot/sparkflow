@@ -23,7 +23,10 @@ export interface AttachMessage {
   mcpSocket: string;
   /** Path to the PTY bridge socket, if this engine exposes a chat terminal. */
   ptyBridgePath?: string;
+  /** Informational sparkflow package version (for display in error messages). */
   version: string;
+  /** Wire-format version — must match the frontend's SPARKFLOW_PROTOCOL_VERSION. */
+  protocolVersion: number;
 }
 
 /** Graceful disconnect — engine is going away cleanly. */
@@ -122,6 +125,9 @@ export interface ErrorMessage {
   /** Populated on version_mismatch so the engine can render a useful message. */
   frontendVersion?: string;
   engineVersion?: string;
+  /** Populated on version_mismatch for protocol mismatches. */
+  frontendProtocolVersion?: number;
+  engineProtocolVersion?: number;
 }
 
 export interface PongMessage {

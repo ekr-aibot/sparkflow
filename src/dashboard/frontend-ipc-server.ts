@@ -21,7 +21,7 @@ import type {
   ErrorMessage,
   PongMessage,
 } from "./ipc-protocol.js";
-import { SPARKFLOW_VERSION, repoDisplayName } from "./discovery.js";
+import { SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "./discovery.js";
 
 type CommandResponse = ResponseMessage | ErrorMessage | PongMessage;
 
@@ -127,42 +127,49 @@ export class FrontendIpcServer extends EventEmitter {
   ): void {
     const raw = JSON.parse(line) as Record<string, unknown>;
 
+    // Reject the connection with a final error frame. `socket.end(payload)`
+    // flushes the payload before FIN, which `write` + `destroy` does not
+    // guarantee — on fast rejects this would otherwise race the destroy and
+    // the client would see only a close (no error) and loop-reconnect.
+    const rejectAttach = (payload: Record<string, unknown>): void => {
+      socket.end(JSON.stringify(payload) + "\n");
+    };
+
     // ---- First message must be `attach` ----
     if (ctx.boundRepoId === null) {
       if (raw.type !== "attach") {
-        socket.write(JSON.stringify({ type: "error", error: "first message must be attach", code: "protocol_error" }) + "\n");
-        socket.destroy();
+        rejectAttach({ type: "error", error: "first message must be attach", code: "protocol_error" });
         return;
       }
       const repoId = typeof raw.repoId === "string" ? raw.repoId : null;
       if (!repoId) {
-        socket.write(JSON.stringify({ type: "error", error: "attach missing repoId", code: "protocol_error" }) + "\n");
-        socket.destroy();
+        rejectAttach({ type: "error", error: "attach missing repoId", code: "protocol_error" });
         return;
       }
       if (this.engines.has(repoId)) {
-        socket.write(
-          JSON.stringify({ type: "error", error: "already_attached", code: "already_attached" }) + "\n",
-        );
-        socket.destroy();
+        rejectAttach({ type: "error", error: "already_attached", code: "already_attached" });
         return;
       }
 
-      // Version check: refuse engines that disagree with the frontend's
-      // sparkflow version. Empty/missing version strings are tolerated so
-      // the protocol can evolve, but any non-empty mismatch is rejected.
+      // Protocol check: refuse engines whose wire version differs from the
+      // frontend's. Bumped explicitly when the IPC format changes, so
+      // patch-level sparkflow upgrades don't break live engines. The `version`
+      // field is only used for human-readable error text.
       const engineVersion = typeof raw.version === "string" ? raw.version : "";
-      if (engineVersion && engineVersion !== SPARKFLOW_VERSION) {
-        socket.write(
-          JSON.stringify({
-            type: "error",
-            error: `version_mismatch: frontend is sparkflow v${SPARKFLOW_VERSION}, engine is v${engineVersion}`,
-            code: "version_mismatch",
-            frontendVersion: SPARKFLOW_VERSION,
-            engineVersion,
-          }) + "\n",
-        );
-        socket.destroy();
+      const engineProtocol =
+        typeof raw.protocolVersion === "number" ? raw.protocolVersion : 0;
+      if (engineProtocol !== SPARKFLOW_PROTOCOL_VERSION) {
+        rejectAttach({
+          type: "error",
+          error:
+            `version_mismatch: frontend is sparkflow v${SPARKFLOW_VERSION} (protocol ${SPARKFLOW_PROTOCOL_VERSION}), ` +
+            `engine is v${engineVersion || "unknown"} (protocol ${engineProtocol})`,
+          code: "version_mismatch",
+          frontendVersion: SPARKFLOW_VERSION,
+          engineVersion,
+          frontendProtocolVersion: SPARKFLOW_PROTOCOL_VERSION,
+          engineProtocolVersion: engineProtocol,
+        });
         return;
       }
 
@@ -254,26 +261,24 @@ export class FrontendIpcServer extends EventEmitter {
   getRepos(): RepoInfo[] {
     // Disambiguate basename collisions here — the engines send their bare
     // basename as repoName; if two engines share one, append a short repoId
-    // suffix to both. Doing this at read-time guarantees the view is always
-    // consistent with the full set of currently-attached engines.
+    // suffix to each so the dashboard can tell them apart. Read-time
+    // disambiguation keeps the view consistent with the set of currently-
+    // attached engines without round-trips to the engines.
     const engines = Array.from(this.engines.values());
     const baseCounts = new Map<string, number>();
     for (const e of engines) baseCounts.set(e.repoName, (baseCounts.get(e.repoName) ?? 0) + 1);
 
-    return engines.map((e) => {
-      const colliding = (baseCounts.get(e.repoName) ?? 0) > 1;
-      const displayName = colliding
-        ? repoDisplayName(e.repoPath, e.repoId, new Set([e.repoName]))
-        : e.repoName;
-      return {
-        repoId: e.repoId,
-        repoPath: e.repoPath,
-        repoName: displayName,
-        mcpSocket: e.mcpSocket,
-        ptyBridgePath: e.ptyBridgePath,
-        version: e.version,
-      };
-    });
+    return engines.map((e) => ({
+      repoId: e.repoId,
+      repoPath: e.repoPath,
+      repoName:
+        (baseCounts.get(e.repoName) ?? 0) > 1
+          ? `${e.repoName} (${e.repoId.slice(0, 4)})`
+          : e.repoName,
+      mcpSocket: e.mcpSocket,
+      ptyBridgePath: e.ptyBridgePath,
+      version: e.version,
+    }));
   }
 
   getEngine(repoId: string): EngineConnection | null {
@@ -323,7 +328,9 @@ export class FrontendIpcServer extends EventEmitter {
   }
 
   private fireUpdate(): void {
-    for (const cb of this.updateCallbacks) cb();
+    // Iterate a snapshot so a callback that unsubscribes itself (or another
+    // callback) during delivery doesn't perturb the loop.
+    for (const cb of [...this.updateCallbacks]) cb();
   }
 
   async close(): Promise<void> {

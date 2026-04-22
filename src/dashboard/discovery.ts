@@ -11,6 +11,8 @@ import {
   mkdirSync,
   openSync,
   closeSync,
+  fchmodSync,
+  renameSync,
   writeSync,
   readFileSync,
   statSync,
@@ -48,6 +50,14 @@ function readPackageVersion(): string {
 }
 
 export const SPARKFLOW_VERSION = readPackageVersion();
+
+/**
+ * Frontend ↔ engine wire-format version. Bump this integer whenever the IPC
+ * message shapes change in a way that older peers can't understand; leave
+ * it alone for patch-level sparkflow upgrades that don't touch the wire
+ * format. The frontend rejects attaches that disagree on this value.
+ */
+export const SPARKFLOW_PROTOCOL_VERSION = 1;
 
 function sparkflowHome(): string {
   return process.env.SPARKFLOW_HOME ?? join(homedir(), ".sparkflow");
@@ -105,6 +115,11 @@ export function ensureSparkflowHomePerms(): void {
  * If an existing lock file refers to a dead pid, it is removed and the
  * acquire is retried once. This prevents a crashed holder from deadlocking
  * future invocations.
+ *
+ * Concurrent stale-lock cleanup is handled by a verify-after-acquire check:
+ * after creating the lock, we re-read it and confirm the pid on disk is
+ * ours. If two processes race to replace the same stale lock, only the one
+ * whose pid remains in the file actually holds it.
  */
 export function acquireFrontendLock(): boolean {
   const lock = dashboardLockPath();
@@ -123,7 +138,16 @@ export function acquireFrontendLock(): boolean {
     }
   };
 
-  if (tryCreate()) return true;
+  const confirmOwnership = (): boolean => {
+    try {
+      const pid = parseInt(readFileSync(lock, "utf-8").trim(), 10);
+      return pid === process.pid;
+    } catch {
+      return false;
+    }
+  };
+
+  if (tryCreate()) return confirmOwnership();
 
   // EEXIST: inspect the holder pid. If dead, clean up and retry once.
   let holderPid = 0;
@@ -138,9 +162,10 @@ export function acquireFrontendLock(): boolean {
   try {
     unlinkSync(lock);
   } catch {
-    return false;
+    /* another racer may have unlinked it first — fall through and retry */
   }
-  return tryCreate();
+  if (!tryCreate()) return false;
+  return confirmOwnership();
 }
 
 /** Release the lock file if we hold it. */
@@ -163,23 +188,28 @@ export function readDashboardInfo(): DashboardInfo | null {
 }
 
 /**
- * Write dashboard info with mode 0700 (rwx------) from the start.
- * Opening with an explicit mode avoids the brief window where the file
- * would otherwise be world-readable between write and chmod.
+ * Atomically write dashboard info with mode 0700.
+ *
+ * Uses the write-to-tmp-then-rename pattern so readers never see a partial
+ * file or a brief ENOENT: the tmp file is created with explicit mode 0700
+ * (fchmod after open beats umask), written in full, then renamed over the
+ * destination. rename(2) on the same filesystem is atomic on POSIX.
  */
 export function writeDashboardInfo(info: DashboardInfo): void {
   const path = dashboardJsonPath();
+  const tmpPath = `${path}.tmp.${process.pid}`;
+  const fd = openSync(tmpPath, "w", 0o700);
   try {
-    unlinkSync(path);
-  } catch {
-    /* not present */
-  }
-  const fd = openSync(path, "w", 0o700);
-  try {
+    // openSync's mode arg is subject to process umask; force 0700 explicitly.
+    fchmodSync(fd, 0o700);
     writeSync(fd, JSON.stringify(info, null, 2));
-  } finally {
+  } catch (err) {
     closeSync(fd);
+    try { unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw err;
   }
+  closeSync(fd);
+  renameSync(tmpPath, path);
 }
 
 /**
@@ -209,16 +239,6 @@ export function probeFrontend(info: DashboardInfo): Promise<boolean> {
 /** Derive a stable 10-hex-char repo ID from the absolute repo path. */
 export function repoIdFor(absPath: string): string {
   return createHash("sha256").update(absPath).digest("hex").slice(0, 10);
-}
-
-/**
- * Derive a display name for a repo. If another repo in `existingNames` already
- * uses the same basename, append the first 4 chars of `repoId` in parens.
- */
-export function repoDisplayName(absPath: string, repoId: string, existingNames: Set<string>): string {
-  const base = absPath.split("/").at(-1) ?? absPath;
-  if (!existingNames.has(base)) return base;
-  return `${base} (${repoId.slice(0, 4)})`;
 }
 
 function isAlive(pid: number): boolean {

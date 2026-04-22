@@ -27,7 +27,6 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, mkdtempSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 
@@ -35,14 +34,13 @@ import { JobManager } from "../tui/job-manager.js";
 import { IpcServer } from "../mcp/ipc.js";
 import { handleIpcRequest } from "../tui/ipc-handler.js";
 import { EngineIpcClient } from "./engine-ipc-client.js";
-import { repoIdFor, SPARKFLOW_VERSION } from "./discovery.js";
+import { repoIdFor, SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "./discovery.js";
+import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
 import { buildChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpec } from "../tui/chat-tool.js";
 import type { ErrorMessage, FrontendToEngine } from "./ipc-protocol.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-const RING_BUFFER_BYTES = 64 * 1024;
 
 // ---------------------------------------------------------------------------
 // Args / env
@@ -156,6 +154,7 @@ async function main(): Promise<void> {
     mcpSocket: mcpSocketPath,
     ptyBridgePath: ptyBridgePath || undefined,
     version: SPARKFLOW_VERSION,
+    protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
   });
 
   // Wire job updates to frontend
@@ -225,7 +224,8 @@ async function main(): Promise<void> {
       );
     } else if (err.code === "version_mismatch") {
       console.error(
-        `[sparkflow engine] version mismatch: frontend is v${err.frontendVersion}, this engine is v${err.engineVersion}. ` +
+        `[sparkflow engine] version mismatch: frontend is v${err.frontendVersion} (protocol ${err.frontendProtocolVersion ?? "?"}), ` +
+          `this engine is v${err.engineVersion} (protocol ${err.engineProtocolVersion ?? "?"}). ` +
           `Restart the frontend ('pkill -f frontend-daemon') or install a matching sparkflow version.`,
       );
     } else {
@@ -233,8 +233,7 @@ async function main(): Promise<void> {
     }
     jobManager.release();
     try { ipcClient.close(); } catch { /* ignore */ }
-    try { ipcServer.close(); } catch { /* ignore */ }
-    process.exit(1);
+    void ipcServer.close().finally(() => process.exit(1));
   });
 
   // Connect to frontend
@@ -251,7 +250,7 @@ async function main(): Promise<void> {
   const ingredients = readChatIngredients();
   let pty: IPty | null = null;
   let currentCleanup: (() => void) | null = null;
-  let ring = Buffer.alloc(0);
+  let ring: Buffer = Buffer.alloc(0);
   const ptyClients = new Set<Socket>();
   let bridgeServer: NetServer | null = null;
 
@@ -286,8 +285,7 @@ async function main(): Promise<void> {
 
     pty.onData((data) => {
       const chunk = Buffer.from(data, "utf-8");
-      const next = Buffer.concat([ring, chunk]);
-      ring = next.length > RING_BUFFER_BYTES ? next.subarray(next.length - RING_BUFFER_BYTES) : next;
+      ring = appendRing(ring, chunk, RING_BUFFER_BYTES);
       broadcastPtyFrame(JSON.stringify({ type: "pty_data", bytes: chunk.toString("base64") }) + "\n");
     });
 

@@ -23,7 +23,10 @@ export interface EngineIpcClientOptions {
   repoName: string;
   mcpSocket: string;
   ptyBridgePath?: string;
+  /** Sparkflow package version (informational, shown in error messages). */
   version: string;
+  /** Wire-format version — must match the frontend's SPARKFLOW_PROTOCOL_VERSION. */
+  protocolVersion: number;
 }
 
 /** Events emitted by EngineIpcClient:
@@ -42,6 +45,13 @@ export class EngineIpcClient extends EventEmitter {
   private hasConnectedOnce = false;
   /** Set when the frontend rejects our attach — suppresses reconnect. */
   private attachRejected = false;
+  /**
+   * True once we've seen any inbound frame from the frontend OTHER than a
+   * pre-attach rejection. Un-correlated errors are only fatal while this is
+   * false — a mid-session error without an id is a protocol bug, not an
+   * attach rejection.
+   */
+  private attachAcknowledged = false;
 
   constructor(private readonly opts: EngineIpcClientOptions) {
     super();
@@ -64,6 +74,7 @@ export class EngineIpcClient extends EventEmitter {
           mcpSocket: this.opts.mcpSocket,
           ...(this.opts.ptyBridgePath ? { ptyBridgePath: this.opts.ptyBridgePath } : {}),
           version: this.opts.version,
+          protocolVersion: this.opts.protocolVersion,
         });
         const isReconnect = this.hasConnectedOnce;
         this.hasConnectedOnce = true;
@@ -79,6 +90,7 @@ export class EngineIpcClient extends EventEmitter {
   private attachSocket(sock: Socket): void {
     this.socket = sock;
     this.buffer = "";
+    this.attachAcknowledged = false;
 
     sock.setEncoding("utf-8");
     sock.on("data", (chunk) => {
@@ -112,16 +124,23 @@ export class EngineIpcClient extends EventEmitter {
       return;
     }
 
-    // Un-correlated error frames are only sent by the frontend when rejecting
-    // an attach (bad first message, duplicate repoId, version mismatch). This
-    // is fatal — suppress the reconnect loop and surface it so the engine
-    // daemon can exit cleanly instead of spinning forever.
+    // Pre-attach rejection: the frontend sends one un-correlated error frame
+    // and closes the socket. If we haven't yet received anything else, treat
+    // this as a fatal attach rejection — suppress the reconnect loop and
+    // surface it so the engine daemon can exit cleanly.
+    //
+    // Any un-correlated error received AFTER the first valid frame is a
+    // protocol bug on the frontend side, not a rejection — log and ignore
+    // rather than tearing down a healthy session.
     if (msg.type === "error" && !(msg as ErrorMessage).id) {
-      this.attachRejected = true;
-      this.closed = true;
-      this.emit("attachError", msg as ErrorMessage);
+      if (!this.attachAcknowledged) {
+        this.attachRejected = true;
+        this.closed = true;
+        this.emit("attachError", msg as ErrorMessage);
+      }
       return;
     }
+    this.attachAcknowledged = true;
     this.emit("command", msg);
   }
 

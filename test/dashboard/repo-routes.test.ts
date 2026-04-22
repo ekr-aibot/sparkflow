@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { createFrontendDaemon, type FrontendDaemonHandle } from "../../src/dashboard/frontend-daemon.js";
 import { EngineIpcClient } from "../../src/dashboard/engine-ipc-client.js";
-import { SPARKFLOW_VERSION } from "../../src/dashboard/discovery.js";
+import { SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "../../src/dashboard/discovery.js";
 import type { JobInfo } from "../../src/tui/types.js";
 
 const TEST_TOKEN = "a".repeat(64);
@@ -53,6 +53,7 @@ describe("frontend-daemon HTTP routes", () => {
       repoName: "My Repo",
       mcpSocket: engineSock,
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client.connect();
 

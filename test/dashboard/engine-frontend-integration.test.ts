@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { createConnection } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { FrontendIpcServer } from "../../src/dashboard/frontend-ipc-server.js";
 import { EngineIpcClient } from "../../src/dashboard/engine-ipc-client.js";
-import { SPARKFLOW_VERSION } from "../../src/dashboard/discovery.js";
+import { SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "../../src/dashboard/discovery.js";
 import type { ErrorMessage } from "../../src/dashboard/ipc-protocol.js";
 import type { JobInfo } from "../../src/tui/types.js";
 
@@ -48,6 +49,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "testrepo",
       mcpSocket: join(tmpDir, "mcp.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client.connect();
 
@@ -73,6 +75,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "r1",
       mcpSocket: join(tmpDir, "mcp.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client.connect();
     await attached;
@@ -105,6 +108,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "r2",
       mcpSocket: join(tmpDir, "mcp.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client.connect();
     await attached;
@@ -138,6 +142,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "r3",
       mcpSocket: join(tmpDir, "mcp.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client.connect();
     await attached;
@@ -162,6 +167,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "r",
       mcpSocket: join(tmpDir, "mcp.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client1.connect();
     await attached;
@@ -173,6 +179,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "r",
       mcpSocket: join(tmpDir, "mcp2.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
 
     let reconnectCount = 0;
@@ -194,7 +201,7 @@ describe("engine ↔ frontend IPC integration", () => {
     client2.close();
   });
 
-  it("attach with mismatched version is rejected with version_mismatch", async () => {
+  it("attach with mismatched protocol version is rejected with version_mismatch", async () => {
     const client = new EngineIpcClient({
       frontendSocketPath: sockPath,
       repoId: "v-mismatch",
@@ -202,6 +209,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "vm",
       mcpSocket: join(tmpDir, "mcp.sock"),
       version: "99.99.99",
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION + 1,
     });
 
     const attachErr = new Promise<ErrorMessage>((resolve) => {
@@ -213,9 +221,34 @@ describe("engine ↔ frontend IPC integration", () => {
     expect(err.code).toBe("version_mismatch");
     expect(err.frontendVersion).toBe(SPARKFLOW_VERSION);
     expect(err.engineVersion).toBe("99.99.99");
+    expect(err.frontendProtocolVersion).toBe(SPARKFLOW_PROTOCOL_VERSION);
+    expect(err.engineProtocolVersion).toBe(SPARKFLOW_PROTOCOL_VERSION + 1);
 
     // Registry must NOT list the rejected engine.
     expect(server.getRepos().length).toBe(0);
+
+    client.close();
+  });
+
+  it("patch-level sparkflow version mismatch does NOT trigger rejection", async () => {
+    // Bumping the sparkflow package version but keeping the wire protocol
+    // stable should not break attaches — only protocolVersion mismatches do.
+    const client = new EngineIpcClient({
+      frontendSocketPath: sockPath,
+      repoId: "patch-bump",
+      repoPath: "/pb",
+      repoName: "pb",
+      mcpSocket: join(tmpDir, "mcp.sock"),
+      version: "99.99.99", // different sparkflow package version
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
+    });
+
+    const attached = new Promise<void>((resolve) => {
+      server.once("engineAttached", () => resolve());
+    });
+    await client.connect();
+    await attached;
+    expect(server.getRepos().length).toBe(1);
 
     client.close();
   });
@@ -237,6 +270,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "sparkflow",
       mcpSocket: join(tmpDir, "mcp-a.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client1.connect();
     await attached1;
@@ -255,6 +289,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "sparkflow",
       mcpSocket: join(tmpDir, "mcp-b.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client2.connect();
     await attached2;
@@ -280,6 +315,7 @@ describe("engine ↔ frontend IPC integration", () => {
       repoName: "r",
       mcpSocket: join(tmpDir, "mcp.sock"),
       version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
     });
     await client.connect();
     await waitFor(() => count >= 1);
@@ -295,33 +331,50 @@ describe("engine ↔ frontend IPC integration", () => {
     client.close();
   });
 
-  it("anti-spoofing: post-attach repoId field is ignored", async () => {
+  it("anti-spoofing: a spoofed repoId field in post-attach messages is ignored", async () => {
+    // Bypass EngineIpcClient so we can send a raw frame the real client
+    // would never emit. The registry MUST bind jobs to the attach-time
+    // repoId, not to whatever the sender later claims.
     const attached = new Promise<void>((resolve) => {
       server.once("engineAttached", () => resolve());
     });
 
-    const client = new EngineIpcClient({
-      frontendSocketPath: sockPath,
-      repoId: "legit",
-      repoPath: "/legit",
-      repoName: "legit",
-      mcpSocket: join(tmpDir, "mcp.sock"),
-      version: SPARKFLOW_VERSION,
+    const sock = createConnection(sockPath);
+    await new Promise<void>((res, rej) => {
+      sock.once("connect", () => res());
+      sock.once("error", rej);
     });
-    await client.connect();
+
+    // Legitimate attach as "legit".
+    sock.write(
+      JSON.stringify({
+        type: "attach",
+        repoId: "legit",
+        repoPath: "/legit",
+        repoName: "legit",
+        mcpSocket: join(tmpDir, "mcp.sock"),
+        version: SPARKFLOW_VERSION,
+        protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
+      }) + "\n",
+    );
     await attached;
 
-    // After attach, send a jobSnapshot with a spoofed repoId field.
-    // The FrontendIpcServer should strip it and use the bound "legit" id.
-    const jobs: JobInfo[] = [makeJobInfo("spoofed-job")];
-    client.sendJobSnapshot(jobs);
+    // Now send a jobSnapshot with an explicit spoofed repoId.
+    sock.write(
+      JSON.stringify({
+        type: "jobSnapshot",
+        repoId: "evil",
+        jobs: [makeJobInfo("spoofed-job")],
+      }) + "\n",
+    );
 
     await waitFor(() => server.getAllJobs().length === 1);
-
     const all = server.getAllJobs();
-    expect(all[0].repoId).toBe("legit"); // not "evil"
+    expect(all[0].repoId).toBe("legit");
+    expect(all.find((j) => j.repoId === "evil")).toBeUndefined();
+    expect(server.getEngine("evil")).toBeNull();
 
-    client.close();
+    sock.destroy();
   });
 });
 

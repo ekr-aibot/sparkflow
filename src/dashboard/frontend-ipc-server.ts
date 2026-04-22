@@ -156,8 +156,9 @@ export class FrontendIpcServer extends EventEmitter {
       // patch-level sparkflow upgrades don't break live engines. The `version`
       // field is only used for human-readable error text.
       const engineVersion = typeof raw.version === "string" ? raw.version : "";
-      const engineProtocol =
-        typeof raw.protocolVersion === "number" ? raw.protocolVersion : 0;
+      const engineProtocol = Number.isInteger(raw.protocolVersion)
+        ? (raw.protocolVersion as number)
+        : 0;
       if (engineProtocol !== SPARKFLOW_PROTOCOL_VERSION) {
         rejectAttach({
           type: "error",
@@ -204,6 +205,10 @@ export class FrontendIpcServer extends EventEmitter {
       };
 
       this.engines.set(repoId, conn);
+      // Positive ack so the engine can distinguish "frontend accepted me and
+      // went silent" from "frontend rejected me". Without this, the engine's
+      // reconnect suppression can't tell the two apart in an idle session.
+      if (socket.writable) socket.write(JSON.stringify({ type: "attachAck" }) + "\n");
       this.emit("engineAttached", conn);
       this.fireUpdate();
       return;
@@ -260,25 +265,44 @@ export class FrontendIpcServer extends EventEmitter {
 
   getRepos(): RepoInfo[] {
     // Disambiguate basename collisions here — the engines send their bare
-    // basename as repoName; if two engines share one, append a short repoId
-    // suffix to each so the dashboard can tell them apart. Read-time
-    // disambiguation keeps the view consistent with the set of currently-
-    // attached engines without round-trips to the engines.
+    // basename as repoName; if two engines share one, append a repoId
+    // prefix that's long enough to distinguish them within the colliding
+    // group. 6 hex chars is usually enough (birthday-paradox collisions are
+    // ~1 in 8M per pair); if that's not enough we extend up to the full
+    // 10-char repoId. Read-time disambiguation keeps the view consistent
+    // with the set of currently-attached engines.
     const engines = Array.from(this.engines.values());
-    const baseCounts = new Map<string, number>();
-    for (const e of engines) baseCounts.set(e.repoName, (baseCounts.get(e.repoName) ?? 0) + 1);
+    const byBase = new Map<string, EngineConnection[]>();
+    for (const e of engines) {
+      const arr = byBase.get(e.repoName) ?? [];
+      arr.push(e);
+      byBase.set(e.repoName, arr);
+    }
 
-    return engines.map((e) => ({
-      repoId: e.repoId,
-      repoPath: e.repoPath,
-      repoName:
-        (baseCounts.get(e.repoName) ?? 0) > 1
-          ? `${e.repoName} (${e.repoId.slice(0, 4)})`
-          : e.repoName,
-      mcpSocket: e.mcpSocket,
-      ptyBridgePath: e.ptyBridgePath,
-      version: e.version,
-    }));
+    const suffixLen = new Map<string, number>(); // repoId → chars to slice
+    for (const group of byBase.values()) {
+      if (group.length <= 1) continue;
+      let len = 6;
+      const MAX = group[0].repoId.length; // 10 in practice
+      while (len < MAX) {
+        const seen = new Set(group.map((g) => g.repoId.slice(0, len)));
+        if (seen.size === group.length) break;
+        len++;
+      }
+      for (const g of group) suffixLen.set(g.repoId, len);
+    }
+
+    return engines.map((e) => {
+      const len = suffixLen.get(e.repoId);
+      return {
+        repoId: e.repoId,
+        repoPath: e.repoPath,
+        repoName: len ? `${e.repoName} (${e.repoId.slice(0, len)})` : e.repoName,
+        mcpSocket: e.mcpSocket,
+        ptyBridgePath: e.ptyBridgePath,
+        version: e.version,
+      };
+    });
   }
 
   getEngine(repoId: string): EngineConnection | null {
@@ -329,8 +353,16 @@ export class FrontendIpcServer extends EventEmitter {
 
   private fireUpdate(): void {
     // Iterate a snapshot so a callback that unsubscribes itself (or another
-    // callback) during delivery doesn't perturb the loop.
-    for (const cb of [...this.updateCallbacks]) cb();
+    // callback) during delivery doesn't perturb the loop. A throwing
+    // callback should not prevent other subscribers from seeing the update,
+    // so each invocation is isolated.
+    for (const cb of [...this.updateCallbacks]) {
+      try {
+        cb();
+      } catch {
+        /* subscriber bug — don't let it derail other subscribers */
+      }
+    }
   }
 
   async close(): Promise<void> {

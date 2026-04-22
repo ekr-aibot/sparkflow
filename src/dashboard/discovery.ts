@@ -113,13 +113,21 @@ export function ensureSparkflowHomePerms(): void {
  * Returns true if the lock was acquired, false if another process holds it.
  *
  * If an existing lock file refers to a dead pid, it is removed and the
- * acquire is retried once. This prevents a crashed holder from deadlocking
- * future invocations.
+ * acquire is retried so a crashed holder can't deadlock future starts.
  *
- * Concurrent stale-lock cleanup is handled by a verify-after-acquire check:
- * after creating the lock, we re-read it and confirm the pid on disk is
- * ours. If two processes race to replace the same stale lock, only the one
- * whose pid remains in the file actually holds it.
+ * CAVEAT: the stale-lock recovery is NOT race-free. Two processes racing
+ * to replace the same stale lock can both observe the dead pid, sequence
+ * their own unlink+create in an interleaving where both end up with their
+ * own pid on disk at different moments, and both return `true`. The
+ * damage is bounded because the caller (findOrCreateFrontend) also races
+ * to spawn a frontend, and the second frontend's `listen(socketPath)`
+ * will fail loudly — the overall system self-heals. If true atomicity is
+ * ever needed, replace this with flock(2) via a helper module.
+ *
+ * We do two things to narrow the window:
+ *  - Compare-and-unlink: re-read the pid immediately before unlinking so
+ *    we don't blow away a fresh live lock that a racer just created.
+ *  - Verify-after-acquire: confirm our own pid is what ends up on disk.
  */
 export function acquireFrontendLock(): boolean {
   const lock = dashboardLockPath();
@@ -138,28 +146,27 @@ export function acquireFrontendLock(): boolean {
     }
   };
 
-  const confirmOwnership = (): boolean => {
+  const readPid = (): number => {
     try {
-      const pid = parseInt(readFileSync(lock, "utf-8").trim(), 10);
-      return pid === process.pid;
+      return parseInt(readFileSync(lock, "utf-8").trim(), 10) || 0;
     } catch {
-      return false;
+      return 0;
     }
   };
 
+  const confirmOwnership = (): boolean => readPid() === process.pid;
+
   if (tryCreate()) return confirmOwnership();
 
-  // EEXIST: inspect the holder pid. If dead, clean up and retry once.
-  let holderPid = 0;
-  try {
-    const raw = readFileSync(lock, "utf-8").trim();
-    holderPid = parseInt(raw, 10);
-  } catch {
-    holderPid = 0;
-  }
+  // EEXIST: inspect the holder pid. Back off if it looks alive.
+  const holderPid = readPid();
   if (holderPid > 0 && isAlive(holderPid)) return false;
 
+  // Compare-and-unlink: only remove the lock if the pid we sampled is
+  // still the one on disk. A racer who already swapped in a live lock
+  // will have a different pid here and we'll back off.
   try {
+    if (readPid() !== holderPid) return false;
     unlinkSync(lock);
   } catch {
     /* another racer may have unlinked it first — fall through and retry */
@@ -191,25 +198,41 @@ export function readDashboardInfo(): DashboardInfo | null {
  * Atomically write dashboard info with mode 0700.
  *
  * Uses the write-to-tmp-then-rename pattern so readers never see a partial
- * file or a brief ENOENT: the tmp file is created with explicit mode 0700
- * (fchmod after open beats umask), written in full, then renamed over the
+ * file or a brief ENOENT: the tmp file is created exclusively (wx) so we
+ * can't follow a planted symlink, chmod'd to 0700 via fchmod (openSync's
+ * mode arg is subject to umask), written in full, then renamed over the
  * destination. rename(2) on the same filesystem is atomic on POSIX.
  */
 export function writeDashboardInfo(info: DashboardInfo): void {
   const path = dashboardJsonPath();
   const tmpPath = `${path}.tmp.${process.pid}`;
-  const fd = openSync(tmpPath, "w", 0o700);
+
+  // Remove any straggler from a previous crash before opening exclusively.
   try {
-    // openSync's mode arg is subject to process umask; force 0700 explicitly.
+    unlinkSync(tmpPath);
+  } catch {
+    /* not present */
+  }
+
+  // "wx" = O_WRONLY|O_CREAT|O_EXCL — fails if tmpPath exists as any inode
+  // type, including symlinks, so an attacker can't redirect the write.
+  const fd = openSync(tmpPath, "wx", 0o700);
+  try {
     fchmodSync(fd, 0o700);
     writeSync(fd, JSON.stringify(info, null, 2));
-  } catch (err) {
     closeSync(fd);
+  } catch (err) {
+    try { closeSync(fd); } catch { /* ignore */ }
     try { unlinkSync(tmpPath); } catch { /* ignore */ }
     throw err;
   }
-  closeSync(fd);
-  renameSync(tmpPath, path);
+
+  try {
+    renameSync(tmpPath, path);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw err;
+  }
 }
 
 /**

@@ -34,6 +34,17 @@ export interface DetachMessage {
   type: "detach";
 }
 
+/**
+ * Positive acknowledgement from the frontend that an `attach` was accepted.
+ * The engine uses this to distinguish a successful attach (followed by
+ * silence) from a rejection (followed by an un-correlated error frame).
+ * Without it, a post-attach protocol bug that produced an un-correlated
+ * error would be indistinguishable from a rejection.
+ */
+export interface AttachAckMessage {
+  type: "attachAck";
+}
+
 /** Full job state snapshot. The engine re-sends this on every state change. */
 export interface JobSnapshotMessage {
   type: "jobSnapshot";
@@ -94,6 +105,12 @@ export interface PingMessage {
   id: string;
 }
 
+/**
+ * Commands the frontend can issue to an engine. `AttachAckMessage` is a
+ * protocol-level frame (handshake) the engine client filters internally,
+ * so it is NOT part of this command union — engine-daemon's command
+ * switch never sees it.
+ */
 export type FrontendToEngine =
   | StartWorkflowCommand
   | KillJobCommand

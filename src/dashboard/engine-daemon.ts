@@ -22,11 +22,8 @@
  *   SPARKFLOW_ENGINE_NAME  — optional display name override (--name flag)
  */
 
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { readFileSync, mkdtempSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { resolve } from "node:path";
+import { readFileSync, unlinkSync } from "node:fs";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 
@@ -38,9 +35,6 @@ import { repoIdFor, SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "./disc
 import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
 import { buildChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpec } from "../tui/chat-tool.js";
 import type { ErrorMessage, FrontendToEngine } from "./ipc-protocol.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 // ---------------------------------------------------------------------------
 // Args / env
@@ -341,8 +335,9 @@ async function main(): Promise<void> {
     if (exiting) return;
     exiting = true;
     jobManager.flush();
-    ipcClient.sendDetach();
-    ipcClient.close();
+    // Detach frame is flushed before FIN via socket.end(); destroy safety
+    // net inside close() keeps shutdown bounded.
+    ipcClient.close({ detach: true });
     ipcServer.close().finally(() => {
       cleanup();
       process.exit(code);

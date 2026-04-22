@@ -10,11 +10,19 @@ import { createConnection, type Socket } from "node:net";
 import { EventEmitter } from "node:events";
 import type { JobInfo } from "../tui/types.js";
 import type {
+  AttachAckMessage,
   FrontendToEngine,
   ResponseMessage,
   ErrorMessage,
   PongMessage,
 } from "./ipc-protocol.js";
+
+type IncomingFrame =
+  | AttachAckMessage
+  | FrontendToEngine
+  | ResponseMessage
+  | ErrorMessage
+  | PongMessage;
 
 export interface EngineIpcClientOptions {
   frontendSocketPath: string;
@@ -117,21 +125,29 @@ export class EngineIpcClient extends EventEmitter {
   }
 
   private handleLine(line: string): void {
-    let msg: FrontendToEngine | ResponseMessage | ErrorMessage | PongMessage;
+    let msg: IncomingFrame;
     try {
-      msg = JSON.parse(line) as FrontendToEngine | ResponseMessage | ErrorMessage | PongMessage;
+      msg = JSON.parse(line) as IncomingFrame;
     } catch {
       return;
     }
 
+    // Positive attach acknowledgement. The frontend sends exactly one of
+    // these on successful attach — any later un-correlated errors are
+    // protocol bugs, not rejections, and we must not tear down the session.
+    if (msg.type === "attachAck") {
+      this.attachAcknowledged = true;
+      return;
+    }
+
     // Pre-attach rejection: the frontend sends one un-correlated error frame
-    // and closes the socket. If we haven't yet received anything else, treat
-    // this as a fatal attach rejection — suppress the reconnect loop and
-    // surface it so the engine daemon can exit cleanly.
+    // and closes the socket. If we haven't yet been acknowledged, treat this
+    // as fatal — suppress the reconnect loop and surface it so the engine
+    // daemon can exit cleanly.
     //
-    // Any un-correlated error received AFTER the first valid frame is a
-    // protocol bug on the frontend side, not a rejection — log and ignore
-    // rather than tearing down a healthy session.
+    // Any un-correlated error received AFTER the ack is a protocol bug on
+    // the frontend side, not a rejection — ignore it rather than tearing
+    // down a healthy session.
     if (msg.type === "error" && !(msg as ErrorMessage).id) {
       if (!this.attachAcknowledged) {
         this.attachRejected = true;
@@ -140,7 +156,6 @@ export class EngineIpcClient extends EventEmitter {
       }
       return;
     }
-    this.attachAcknowledged = true;
     this.emit("command", msg);
   }
 
@@ -158,10 +173,6 @@ export class EngineIpcClient extends EventEmitter {
   // ---------------------------------------------------------------------------
   // Outbound messages
   // ---------------------------------------------------------------------------
-
-  sendDetach(): void {
-    this.write(JSON.stringify({ type: "detach" }) + "\n");
-  }
 
   sendJobSnapshot(jobs: JobInfo[]): void {
     this.write(JSON.stringify({ type: "jobSnapshot", jobs }) + "\n");
@@ -198,15 +209,30 @@ export class EngineIpcClient extends EventEmitter {
     }
   }
 
-  close(): void {
+  /**
+   * Graceful shutdown. If `detach` is true and a socket is open, writes a
+   * `{type:"detach"}` frame and sends FIN via `socket.end(...)`, which
+   * flushes before teardown. Otherwise destroys immediately. Use `detach:
+   * true` for orderly exit, `detach: false` for fatal error paths where
+   * the peer shouldn't wait around for a clean goodbye.
+   */
+  close(opts: { detach?: boolean } = {}): void {
     this.closed = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.socket) {
-      this.socket.destroy();
-      this.socket = null;
+    const sock = this.socket;
+    this.socket = null;
+    if (!sock) return;
+    if (opts.detach && sock.writable) {
+      sock.end(JSON.stringify({ type: "detach" }) + "\n");
+      // Destroy safety net in case FIN ack never arrives.
+      setTimeout(() => {
+        try { sock.destroy(); } catch { /* ignore */ }
+      }, 1000).unref();
+    } else {
+      sock.destroy();
     }
   }
 }

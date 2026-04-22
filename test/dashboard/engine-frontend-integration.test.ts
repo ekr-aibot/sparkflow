@@ -147,8 +147,7 @@ describe("engine ↔ frontend IPC integration", () => {
     await client.connect();
     await attached;
 
-    client.sendDetach();
-    client.close();
+    client.close({ detach: true });
 
     const repoId = await detached;
     expect(repoId).toBe("repo3");
@@ -297,11 +296,60 @@ describe("engine ↔ frontend IPC integration", () => {
     const reposAfter = server.getRepos();
     expect(reposAfter.length).toBe(2);
     for (const r of reposAfter) {
-      expect(r.repoName).toMatch(/^sparkflow \([0-9a-f]{4}\)$/);
+      // Suffix is 6+ hex chars (extended on collision).
+      expect(r.repoName).toMatch(/^sparkflow \([0-9a-f]{6,}\)$/);
     }
+    // And the two suffixes are distinct even when the first 6 chars collide
+    // (the synthesized repoIds here share "abcdef" — the implementation
+    // must extend the suffix until unique).
+    expect(reposAfter[0].repoName).not.toBe(reposAfter[1].repoName);
 
     client1.close();
     client2.close();
+  });
+
+  it("post-attach un-correlated error does NOT trigger attachError or reconnect", async () => {
+    // The frontend sends `attachAck` on a successful attach. The client must
+    // record that and subsequently ignore any un-correlated error frames —
+    // they're protocol bugs on the frontend, not attach rejections.
+    const attached = new Promise<void>((resolve) => {
+      server.once("engineAttached", () => resolve());
+    });
+
+    const client = new EngineIpcClient({
+      frontendSocketPath: sockPath,
+      repoId: "post-attach-err",
+      repoPath: "/p",
+      repoName: "p",
+      mcpSocket: join(tmpDir, "mcp.sock"),
+      version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
+    });
+
+    let attachErrors = 0;
+    let reconnects = 0;
+    client.on("attachError", () => attachErrors++);
+    client.on("reconnect", () => reconnects++);
+
+    await client.connect();
+    await attached;
+
+    // Fabricate a post-attach un-correlated error by reaching into the
+    // server's connection and writing a raw frame. This is exactly the
+    // kind of wayward frame a buggy future frontend change might emit.
+    const conn = server.getEngine("post-attach-err");
+    if (!conn) throw new Error("expected engine in registry");
+    conn.send({ type: "error", error: "spurious mid-session error" } as unknown as Parameters<typeof conn.send>[0]);
+
+    // Give the client time to mis-react if it's going to.
+    await new Promise<void>((r) => setTimeout(r, 200));
+
+    expect(attachErrors).toBe(0);
+    expect(reconnects).toBe(0);
+    // Engine is still in the registry — we did not tear down the session.
+    expect(server.getRepos().length).toBe(1);
+
+    client.close();
   });
 
   it("onUpdate returns an unsubscribe that actually detaches the callback", async () => {

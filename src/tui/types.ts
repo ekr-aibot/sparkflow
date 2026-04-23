@@ -24,6 +24,8 @@ export interface JobInfo {
   claudeCodeSteps?: string[];
   /** True when the job is running and its stdin pipe is live (nudges available). */
   canNudge?: boolean;
+  /** True when the job was explicitly killed by the user via killJob(). */
+  killedByUser?: boolean;
 }
 
 export type DashboardRequest =

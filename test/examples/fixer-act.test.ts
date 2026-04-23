@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -71,6 +71,27 @@ describe("fixer-act.sh", () => {
       const { status, stderr } = runFixerAct({ action: "redispatch" }, "job1", tmpDir);
       expect(status).toBe(1);
       expect(stderr).toContain("missing workflow_path");
+    } finally {
+      teardown();
+    }
+  });
+
+  it("exits 0 and writes dispatch file for redispatch with workflow_path", () => {
+    setup();
+    try {
+      const { status, stderr } = runFixerAct(
+        { action: "redispatch", workflow_path: "/some/workflow.json", plan_text: "" },
+        "job42",
+        tmpDir,
+      );
+      expect(status).toBe(0);
+      expect(stderr).toContain("[fixer] queued redispatch");
+      expect(stderr).toContain("/some/workflow.json");
+
+      // A dispatch file should have been created
+      const queueDir = join(tmpDir, ".sparkflow", "dispatch-queue");
+      const files = readdirSync(queueDir).filter((f) => f.endsWith(".json"));
+      expect(files.length).toBe(1);
     } finally {
       teardown();
     }

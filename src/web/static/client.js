@@ -675,7 +675,9 @@ function visibleJobs(jobs, showMonitors, selectedRepoId) {
 }
 
 function stepsForJob(job) {
-  if (job.activeSteps) return Object.entries(job.activeSteps);
+  if (Array.isArray(job.activeSteps) && job.activeSteps.length > 0) {
+    return job.activeSteps.map((name) => [name, "running"]);
+  }
   if (job.currentStep && (job.stepState ?? "running") === "running") {
     return [[job.currentStep, "running"]];
   }

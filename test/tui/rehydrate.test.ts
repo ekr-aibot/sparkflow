@@ -107,6 +107,47 @@ describe("JobManager.rehydrate", () => {
     expect(reloaded[0].originalPlanText).toContain("Step 1");
   });
 
+  it("keeps an alive monitor whose state was incorrectly set to succeeded, resets state to running", () => {
+    // Simulates fixer.json: still looping but fixer-one completion set state="succeeded".
+    const logDir = join(tmpDir, ".sparkflow", "logs");
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, "job-alive-succ.log");
+    appendFileSync(logPath, "");
+
+    // Spawn a real long-lived process so isAlive() returns true.
+    const liveChild = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    const livePid = liveChild.pid!;
+    child = liveChild;
+
+    const store = new StateStore(tmpDir);
+    store.saveJob({
+      info: {
+        id: "alive-succ",
+        workflowPath: "/tmp/wf.json",
+        workflowName: "wf",
+        kind: "monitor",
+        state: "succeeded",
+        summary: "completed",
+        startTime: Date.now() - 5_000,
+        endTime: Date.now() - 1_000,
+      },
+      pid: livePid,
+      logPath,
+      logOffset: 0,
+    });
+
+    const manager = new JobManager(tmpDir);
+    manager.rehydrate();
+
+    // Job should be kept (process is still running) with state reset to "running".
+    const jobs = manager.getJobs();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].state).toBe("running");
+    expect(jobs[0].endTime).toBeUndefined();
+
+    manager.release();
+  });
+
   it("drops terminal monitor jobs even when the persisted pid still looks alive (recycled pid)", () => {
     const logDir = join(tmpDir, ".sparkflow", "logs");
     mkdirSync(logDir, { recursive: true });

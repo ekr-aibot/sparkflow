@@ -141,6 +141,35 @@ describe("WorkflowAdapter", () => {
     expect(elapsedTotal).toBeGreaterThanOrEqual(550);
   }, 10000);
 
+  it("child workflows do not emit workflow_start or workflow_complete via the parent logger", async () => {
+    // This verifies the fix for the process-pile-up bug: child WorkflowEngines
+    // must use ConsoleLogger (not the parent's StatusJsonLogger) so that a
+    // child completing does not emit a workflow_complete JSON event that would
+    // mark the parent job as "succeeded" in the dashboard.
+    const child = makeChildWorkflow("true");
+    const childPath = join(tmp, "child.json");
+    writeFileSync(childPath, JSON.stringify(child));
+
+    const loggedMessages: string[] = [];
+    const captureLogger = {
+      info: (msg: string) => { loggedMessages.push(msg); },
+      error: (msg: string) => { loggedMessages.push(`ERROR:${msg}`); },
+    };
+
+    const ctx = makeCtx(tmp, "./child.json", { logger: captureLogger });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+
+    await drainActiveChildren();
+
+    // The parent logger should NOT have received any workflow-lifecycle
+    // messages from the child engine.
+    const lifecycleMessages = loggedMessages.filter(
+      (m) => /\[sparkflow\] (Starting workflow|Workflow .+ (completed|failed|aborted))/.test(m),
+    );
+    expect(lifecycleMessages).toHaveLength(0);
+  });
+
   it("passes inputs as SPARKFLOW_INPUT_* env vars with per-item template values", async () => {
     // Child is a shell step that writes its ISSUE_NUMBER env var to a file.
     const outFile = join(tmp, "captured.txt");

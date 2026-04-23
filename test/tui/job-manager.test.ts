@@ -302,6 +302,51 @@ describe("JobManager.nudgeJob", () => {
   });
 });
 
+describe("JobManager startJob deduplicateByPath", () => {
+  let manager: JobManager;
+  let tmpDir: string;
+
+  const minimalWorkflow = JSON.stringify({
+    version: "1",
+    name: "test",
+    entry: "s",
+    steps: { s: { name: "S", runtime: { type: "shell", command: "sleep", args: ["60"] } } },
+  });
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-test-dedup-"));
+    manager = new JobManager(tmpDir);
+  });
+
+  afterEach(() => {
+    manager.killAll();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("returns the existing job ID instead of spawning a duplicate when deduplicateByPath is true", () => {
+    const wfPath = join(tmpDir, "wf.json");
+    writeFileSync(wfPath, minimalWorkflow);
+
+    const id1 = manager.startJob(wfPath);
+    expect(manager.getJobs()).toHaveLength(1);
+
+    // Second call with deduplicateByPath: should return id1, not create a new job.
+    const id2 = manager.startJob(wfPath, { deduplicateByPath: true });
+    expect(id2).toBe(id1);
+    expect(manager.getJobs()).toHaveLength(1);
+  });
+
+  it("spawns a new job when deduplicateByPath is false (default)", () => {
+    const wfPath = join(tmpDir, "wf2.json");
+    writeFileSync(wfPath, minimalWorkflow);
+
+    const id1 = manager.startJob(wfPath);
+    const id2 = manager.startJob(wfPath);
+    expect(id1).not.toBe(id2);
+    expect(manager.getJobs()).toHaveLength(2);
+  });
+});
+
 describe("JobManager startJob path canonicalization", () => {
   let manager: JobManager;
   let tmpDir: string;

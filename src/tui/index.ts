@@ -3,11 +3,12 @@
 import { resolve } from "node:path";
 import { writeFileSync, readFileSync, unlinkSync, mkdtempSync, mkdirSync, existsSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { execFileSync, spawnSync } from "node:child_process";
+import { tmpdir, homedir } from "node:os";
+import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { createServer as createNetServer } from "node:net";
 import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
 import { buildChatSpawn, type SlashCommandSpec } from "./chat-tool.js";
 
@@ -18,6 +19,8 @@ const MCP_BRIDGE_PATH = resolve(__dirname, "mcp-bridge.js");
 const STATUS_DISPLAY_PATH = resolve(__dirname, "status-display.js");
 const SUPERVISOR_PATH = resolve(__dirname, "supervisor.js");
 const WEB_ENTRY_PATH = resolve(__dirname, "..", "web", "index.js");
+const ENGINE_DAEMON_PATH = resolve(__dirname, "..", "dashboard", "engine-daemon.js");
+const FRONTEND_DAEMON_PATH = resolve(__dirname, "..", "dashboard", "frontend-daemon.js");
 
 function defaultSystemPrompt(mode: "tmux" | "web"): string {
   const surface = mode === "web"
@@ -354,12 +357,119 @@ This will terminate all running jobs and close the dashboard.`,
 const cols = process.stdout.columns || 80;
 const rows = process.stdout.rows || 24;
 
+// --- Multi-repo web mode helpers ---
+
+function pickFreePort(preferred: number): Promise<number> {
+  if (preferred > 0) return Promise.resolve(preferred);
+  return new Promise<number>((res, rej) => {
+    const s = createNetServer();
+    s.once("error", rej);
+    s.listen({ host: "127.0.0.1", port: 0 }, () => {
+      const addr = s.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      s.close(() => res(port));
+    });
+  });
+}
+
+async function waitForDashboard(timeoutMs: number): Promise<import("../dashboard/discovery.js").DashboardInfo | null> {
+  const { readDashboardInfo, probeFrontend } = await import("../dashboard/discovery.js");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const info = readDashboardInfo();
+    if (info) {
+      const alive = await probeFrontend(info);
+      if (alive) return info;
+    }
+    await new Promise<void>((r) => setTimeout(r, 200));
+  }
+  return null;
+}
+
+async function findOrCreateFrontend(preferredPort: number): Promise<import("../dashboard/discovery.js").DashboardInfo> {
+  const {
+    acquireFrontendLock,
+    releaseFrontendLock,
+    readDashboardInfo,
+    writeDashboardInfo,
+    probeFrontend,
+    dashboardSockPath,
+    SPARKFLOW_VERSION,
+  } = await import("../dashboard/discovery.js");
+
+  // Fast path: frontend already running
+  const existing = readDashboardInfo();
+  if (existing && (await probeFrontend(existing))) return existing;
+
+  // Try to become the lock holder
+  let lockAcquired = false;
+  for (let i = 0; i < 20 && !lockAcquired; i++) {
+    lockAcquired = acquireFrontendLock();
+    if (!lockAcquired) await new Promise<void>((r) => setTimeout(r, 100));
+  }
+
+  if (lockAcquired) {
+    try {
+      // Double-check after acquiring the lock
+      const check = readDashboardInfo();
+      if (check && (await probeFrontend(check))) return check;
+
+      // Spawn a fresh frontend
+      const port = await pickFreePort(preferredPort);
+      const token = randomBytes(32).toString("hex");
+      const sockPath = dashboardSockPath();
+
+      const frontendProc = spawn(
+        process.execPath,
+        [FRONTEND_DAEMON_PATH, sockPath, String(port)],
+        {
+          detached: true,
+          stdio: "ignore",
+          cwd: homedir(),
+          env: { ...(process.env as Record<string, string>), SPARKFLOW_WEB_TOKEN: token },
+        },
+      );
+      frontendProc.unref();
+      const pid = frontendProc.pid ?? -1;
+
+      // Write provisional dashboard.json so the lock-loser can find it
+      writeDashboardInfo({ socketPath: sockPath, port, token, pid, version: SPARKFLOW_VERSION, startedAt: Date.now() });
+    } finally {
+      releaseFrontendLock();
+    }
+  }
+
+  // Poll until the frontend socket is accepting connections (up to 10s)
+  const info = await waitForDashboard(10_000);
+  if (!info) {
+    console.error("Error: timed out waiting for sparkflow dashboard to start");
+    process.exit(1);
+  }
+  return info;
+}
+
 try {
   if (args.web) {
-    // Web mode: pass raw chat-tool ingredients to the supervisor via env so
-    // it can call buildChatSpawn itself — this is what lets the user switch
-    // chat tools at runtime via the web UI (the supervisor respawns the PTY
-    // with the new tool's config).
+    // Step 1: Ensure ~/.sparkflow/ directory permissions
+    const { ensureSparkflowHomePerms } = await import("../dashboard/discovery.js");
+    try {
+      ensureSparkflowHomePerms();
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    // Step 2: Find or create the shared frontend daemon
+    const dashInfo = await findOrCreateFrontend(args.port);
+
+    // Step 3: Print ready URL
+    process.stderr.write(
+      `\n[sparkflow web] ready at http://127.0.0.1:${dashInfo.port}/?token=${dashInfo.token}\n` +
+      `[sparkflow web] press Ctrl-C to quit\n\n`,
+    );
+
+    // Step 4: Spawn the per-repo engine daemon (blocking)
+    const ptyBridgePath = join(tmpDir, "pty.sock");
     const webEnv: Record<string, string> = {
       ...(process.env as Record<string, string>),
       SPARKFLOW_WEB_CHAT_TOOL: args.chatTool,
@@ -370,11 +480,12 @@ try {
       SPARKFLOW_WEB_SYSTEM_PROMPT_PATH: systemPromptPath,
       SPARKFLOW_WEB_MCP_SERVER_NAME: "sparkflow-dashboard",
       SPARKFLOW_WEB_SLASH_COMMANDS_JSON: JSON.stringify(SLASH_COMMANDS),
+      SPARKFLOW_WEB_TOKEN: dashInfo.token,
       ...(args.dev ? { SPARKFLOW_WEB_DEV: "1" } : {}),
     };
     const result = spawnSync(
       process.execPath,
-      [WEB_ENTRY_PATH, socketPath, args.cwd, String(args.port)],
+      [ENGINE_DAEMON_PATH, dashInfo.socketPath, args.cwd, socketPath, ptyBridgePath],
       { cwd: args.cwd, stdio: "inherit", env: webEnv },
     );
     process.exitCode = result.status ?? 0;

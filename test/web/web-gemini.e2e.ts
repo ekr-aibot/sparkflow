@@ -44,38 +44,11 @@ test("chat-tool claude: fake-chat sees --mcp-config/--append-system-prompt flags
   }
 });
 
-test("runtime chat switch: POST /api/preferences {chat:gemini} respawns PTY under Gemini", async () => {
-  const server = await startWebServer({ chatTool: "claude" });
-  try {
-    // Sanity: claude-mode PTY is up, fake-chat saw Claude flags.
-    const initial = await collectBytes(server.port, server.token);
-    expect(initial).toContain("SF_SAW_CLAUDE_FLAGS=1");
-    expect(initial).not.toContain("SF_SAW_GEMINI_FILES=1");
-
-    // Flip to gemini via the preferences API.
-    const res = await fetch(`http://127.0.0.1:${server.port}/api/preferences`, {
-      method: "POST",
-      headers: { Cookie: `sf_token=${server.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ chat: "gemini" }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.chat).toBe("gemini");
-
-    // Supervisor kills the claude PTY and spawns a new fake-chat under gemini;
-    // .gemini/settings.json + GEMINI.md appear in cwd.
-    const deadline = Date.now() + 3000;
-    let sawGeminiFiles = false;
-    while (Date.now() < deadline) {
-      const bytes = await collectBytes(server.port, server.token, 1500);
-      if (bytes.includes("SF_SAW_GEMINI_FILES=1")) { sawGeminiFiles = true; break; }
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    expect(sawGeminiFiles).toBe(true);
-  } finally {
-    await server.stop();
-  }
-});
+// The old `POST /api/preferences` runtime-chat-switch endpoint existed on
+// the single-server architecture. The shared-frontend/per-repo-engines
+// split replaced it: the chat tool is now fixed per engine at spawn time,
+// and runtime switching requires re-invoking `sparkflow --web` with the
+// new `--chat-tool` flag. Test deleted.
 
 test("chat-tool gemini: writes .gemini/settings.json + GEMINI.md; no Claude flags leak through", async () => {
   const server = await startWebServer({ chatTool: "gemini" });

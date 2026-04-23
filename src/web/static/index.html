@@ -31,20 +31,10 @@
             <span class="monitor-toggle-text">Show monitors</span>
             <span id="monitor-toggle-count" class="monitor-toggle-count"></span>
           </label>
-          <div id="prefs" class="prefs">
+          <div id="repo-selector" class="prefs" hidden>
             <label class="pref">
-              <span class="pref-label">Chat:</span>
-              <select id="pref-chat" class="pref-select" title="Switching resets the current chat session.">
-                <option value="claude">Claude</option>
-                <option value="gemini">Gemini</option>
-              </select>
-            </label>
-            <label class="pref">
-              <span class="pref-label">Jobs:</span>
-              <select id="pref-jobs" class="pref-select">
-                <option value="claude">Claude</option>
-                <option value="gemini">Gemini</option>
-              </select>
+              <span class="pref-label">Repo:</span>
+              <select id="repo-filter" class="pref-select"></select>
             </label>
           </div>
         </div>
@@ -52,18 +42,6 @@
       </section>
     </div>
     <div id="tooltip" role="tooltip" aria-hidden="true"></div>
-    <div id="chat-switch-modal" class="modal" hidden>
-      <div class="modal-backdrop"></div>
-      <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="chat-switch-title">
-        <h3 id="chat-switch-title" class="modal-title">Switch chat model?</h3>
-        <p class="modal-desc">This will end the current session. Here is what was discussed:</p>
-        <pre id="chat-switch-summary" class="modal-summary"></pre>
-        <div class="modal-actions">
-          <button id="chat-switch-cancel" class="btn btn-secondary">Cancel</button>
-          <button id="chat-switch-confirm" class="btn btn-primary">Switch</button>
-        </div>
-      </div>
-    </div>
     <script type="module" src="/static/client.js"></script>
   </body>
 </html>

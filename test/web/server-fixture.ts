@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,23 @@ export interface WebServerHandle {
 
 const READY_RE = /ready at (http:\/\/127\.0\.0\.1:(\d+)\/\?token=([0-9a-f]+))/;
 
+async function waitForEngine(port: number, token: string, timeoutMs = 15_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/repos`, {
+        headers: { Cookie: `sf_token=${token}` },
+      });
+      if (r.ok) {
+        const body = await r.json() as { repos: unknown[] };
+        if (body.repos.length > 0) return;
+      }
+    } catch { /* not ready yet */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("Timed out waiting for engine daemon to attach");
+}
+
 /** Spawns `sparkflow --web` with fake-chat as the chat command and waits for the ready banner. */
 export async function startWebServer(
   opts: { extraArgs?: string[]; extraEnv?: Record<string, string>; chatTool?: "claude" | "gemini" } = {},
@@ -26,6 +43,13 @@ export async function startWebServer(
   const sparkflowEntry = join(repoRoot, "dist", "src", "tui", "index.js");
   const fakeChat = join(repoRoot, "test", "web", "fake-chat.mjs");
   const cwd = mkdtempSync(join(tmpdir(), "sparkflow-e2e-"));
+
+  // Isolate each test run with its own SPARKFLOW_HOME so a detached
+  // frontend daemon from a previous test doesn't get discovered (and
+  // waitForEngine doesn't see a stale repo from the previous run).
+  // Also avoids interference with the user's real ~/.sparkflow state
+  // when running locally.
+  const sparkflowHome = mkdtempSync(join(tmpdir(), "sparkflow-e2e-home-"));
 
   const chatToolArgs = opts.chatTool ? ["--chat-tool", opts.chatTool] : [];
 
@@ -42,7 +66,7 @@ export async function startWebServer(
     ],
     {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...(opts.extraEnv ?? {}) },
+      env: { ...process.env, SPARKFLOW_HOME: sparkflowHome, ...(opts.extraEnv ?? {}) },
     },
   );
 
@@ -81,17 +105,31 @@ export async function startWebServer(
     proc.on("exit", onExit);
   });
 
+  // The ready banner is written BEFORE the engine daemon starts connecting.
+  // Poll /repos until at least one engine attaches so PTY bridge is available.
+  await waitForEngine(ready.port, ready.token);
+
   const stop = async (): Promise<void> => {
-    if (proc.exitCode !== null || proc.signalCode !== null) return;
-    const exit = new Promise<void>((res) => proc.once("exit", () => res()));
-    try { proc.kill("SIGINT"); } catch { /* ignore */ }
-    await Promise.race([
-      exit,
-      new Promise<void>((res) => setTimeout(() => {
-        try { proc.kill("SIGKILL"); } catch { /* ignore */ }
-        res();
-      }, 3000)),
-    ]);
+    if (proc.exitCode === null && proc.signalCode === null) {
+      const exit = new Promise<void>((res) => proc.once("exit", () => res()));
+      try { proc.kill("SIGINT"); } catch { /* ignore */ }
+      await Promise.race([
+        exit,
+        new Promise<void>((res) => setTimeout(() => {
+          try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+          res();
+        }, 3000)),
+      ]);
+    }
+    // Kill the detached frontend daemon so it doesn't linger past the test.
+    // dashboard.json's pid field is written on startup.
+    try {
+      const info = JSON.parse(readFileSync(join(sparkflowHome, "dashboard.json"), "utf-8")) as { pid?: number };
+      if (info.pid && info.pid > 0) {
+        try { process.kill(info.pid, "SIGTERM"); } catch { /* already dead */ }
+      }
+    } catch { /* no dashboard.json — nothing to kill */ }
+    try { rmSync(sparkflowHome, { recursive: true, force: true }); } catch { /* ignore */ }
     try { rmSync(cwd, { recursive: true, force: true }); } catch { /* ignore */ }
   };
 

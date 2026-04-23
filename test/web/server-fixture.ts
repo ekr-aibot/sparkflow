@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +44,13 @@ export async function startWebServer(
   const fakeChat = join(repoRoot, "test", "web", "fake-chat.mjs");
   const cwd = mkdtempSync(join(tmpdir(), "sparkflow-e2e-"));
 
+  // Isolate each test run with its own SPARKFLOW_HOME so a detached
+  // frontend daemon from a previous test doesn't get discovered (and
+  // waitForEngine doesn't see a stale repo from the previous run).
+  // Also avoids interference with the user's real ~/.sparkflow state
+  // when running locally.
+  const sparkflowHome = mkdtempSync(join(tmpdir(), "sparkflow-e2e-home-"));
+
   const chatToolArgs = opts.chatTool ? ["--chat-tool", opts.chatTool] : [];
 
   const proc = spawn(
@@ -59,7 +66,7 @@ export async function startWebServer(
     ],
     {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...(opts.extraEnv ?? {}) },
+      env: { ...process.env, SPARKFLOW_HOME: sparkflowHome, ...(opts.extraEnv ?? {}) },
     },
   );
 
@@ -103,16 +110,26 @@ export async function startWebServer(
   await waitForEngine(ready.port, ready.token);
 
   const stop = async (): Promise<void> => {
-    if (proc.exitCode !== null || proc.signalCode !== null) return;
-    const exit = new Promise<void>((res) => proc.once("exit", () => res()));
-    try { proc.kill("SIGINT"); } catch { /* ignore */ }
-    await Promise.race([
-      exit,
-      new Promise<void>((res) => setTimeout(() => {
-        try { proc.kill("SIGKILL"); } catch { /* ignore */ }
-        res();
-      }, 3000)),
-    ]);
+    if (proc.exitCode === null && proc.signalCode === null) {
+      const exit = new Promise<void>((res) => proc.once("exit", () => res()));
+      try { proc.kill("SIGINT"); } catch { /* ignore */ }
+      await Promise.race([
+        exit,
+        new Promise<void>((res) => setTimeout(() => {
+          try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+          res();
+        }, 3000)),
+      ]);
+    }
+    // Kill the detached frontend daemon so it doesn't linger past the test.
+    // dashboard.json's pid field is written on startup.
+    try {
+      const info = JSON.parse(readFileSync(join(sparkflowHome, "dashboard.json"), "utf-8")) as { pid?: number };
+      if (info.pid && info.pid > 0) {
+        try { process.kill(info.pid, "SIGTERM"); } catch { /* already dead */ }
+      }
+    } catch { /* no dashboard.json — nothing to kill */ }
+    try { rmSync(sparkflowHome, { recursive: true, force: true }); } catch { /* ignore */ }
     try { rmSync(cwd, { recursive: true, force: true }); } catch { /* ignore */ }
   };
 

@@ -230,17 +230,14 @@ async function main(): Promise<void> {
     void ipcServer.close().finally(() => process.exit(1));
   });
 
-  // Connect to frontend
-  try {
-    await ipcClient.connect();
-    // Send initial job snapshot
-    ipcClient.sendJobSnapshot(jobManager.getJobs());
-  } catch (err) {
-    console.error(`[sparkflow engine] failed to connect to frontend: ${(err as Error).message}`);
-    process.exit(1);
-  }
-
   // --- PTY bridge (optional: only if chat ingredients are available) ---
+  //
+  // IMPORTANT: the PTY bridge server must be listening BEFORE we attach to
+  // the frontend. The frontend kicks off `connectPtyBridge(ptyBridgePath)`
+  // synchronously on receiving the attach, and if the bridge isn't
+  // listening yet, that connect() gets ECONNREFUSED and silently falls
+  // through — WS /chat then serves no data. Order: spawn pty → listen on
+  // bridge → attach to frontend.
   const ingredients = readChatIngredients();
   let pty: IPty | null = null;
   let currentCleanup: (() => void) | null = null;
@@ -319,6 +316,16 @@ async function main(): Promise<void> {
     });
 
     await new Promise<void>((res) => bridgeServer!.listen(ptyBridgePath, () => res()));
+  }
+
+  // Connect to frontend — now that the PTY bridge is ready for the
+  // frontend's inbound connection triggered by engineAttached.
+  try {
+    await ipcClient.connect();
+    ipcClient.sendJobSnapshot(jobManager.getJobs());
+  } catch (err) {
+    console.error(`[sparkflow engine] failed to connect to frontend: ${(err as Error).message}`);
+    process.exit(1);
   }
 
   // --- Lifecycle ---

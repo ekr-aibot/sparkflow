@@ -13,6 +13,17 @@ test.afterAll(async () => {
 
 // ---- synthetic job fixtures ----
 
+const FAKE_REPO_ID = "testrepo01";
+const FAKE_REPOS = [
+  {
+    repoId: FAKE_REPO_ID,
+    repoPath: "/fake",
+    repoName: "fake",
+    mcpSocket: "/tmp/fake.sock",
+    version: "0.1.0",
+  },
+];
+
 function makeJobs(overrides: { monitorState?: string } = {}) {
   const now = Date.now();
   return [
@@ -23,6 +34,7 @@ function makeJobs(overrides: { monitorState?: string } = {}) {
       state: "running",
       summary: "doing work",
       startTime: now,
+      repoId: FAKE_REPO_ID,
     },
     {
       id: "mon111222333",
@@ -32,6 +44,7 @@ function makeJobs(overrides: { monitorState?: string } = {}) {
       state: overrides.monitorState ?? "running",
       summary: "watching PRs",
       startTime: now,
+      repoId: FAKE_REPO_ID,
     },
     {
       id: "mon444555666",
@@ -41,6 +54,7 @@ function makeJobs(overrides: { monitorState?: string } = {}) {
       state: "running",
       summary: "watching issues",
       startTime: now,
+      repoId: FAKE_REPO_ID,
     },
   ];
 }
@@ -101,7 +115,7 @@ export class Terminal {
       status: 200,
       contentType: "text/event-stream",
       headers: { "Cache-Control": "no-cache", "X-Accel-Buffering": "no" },
-      body: `data: ${JSON.stringify({ jobs })}\n\n`,
+      body: `data: ${JSON.stringify({ jobs, repos: FAKE_REPOS })}\n\n`,
     }),
   );
 

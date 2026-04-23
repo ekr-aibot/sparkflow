@@ -19,8 +19,10 @@ const state = {
   jobs: [],
   // Latest repos snapshot from SSE.
   repos: [],
-  // Currently selected repo filter ("all" or a repoId string).
-  selectedRepoId: "all",
+  // Currently selected repo. Null until the first repo attaches. Each repo is
+  // its own independent context — jobs, chat, and tool selections all key off
+  // this one value.
+  selectedRepoId: localStorage.getItem("sparkflow:selectedRepoId") || null,
   // Whether to show healthy monitor jobs. Persisted to localStorage.
   showMonitors: localStorage.getItem("sparkflow:showMonitors") === "true",
 };
@@ -34,9 +36,14 @@ const els = {
   tooltip: document.getElementById("tooltip"),
   repoSelector: document.getElementById("repo-selector"),
   repoFilter: document.getElementById("repo-filter"),
+  prefChat: document.getElementById("pref-chat"),
+  prefJobs: document.getElementById("pref-jobs"),
   showMonitors: document.getElementById("pref-show-monitors"),
   monitorToggleLabel: document.getElementById("monitor-toggle-label"),
   monitorToggleCount: document.getElementById("monitor-toggle-count"),
+  chatSwitchModal: document.getElementById("chat-switch-modal"),
+  chatSwitchCancel: document.getElementById("chat-switch-cancel"),
+  chatSwitchConfirm: document.getElementById("chat-switch-confirm"),
 };
 
 // --------------------------- step colors ---------------------------
@@ -169,30 +176,64 @@ chatTerm.open(els.chat);
 chatFit.fit();
 
 // --------------------------- websocket chat proxy ---------------------------
+//
+// The chat WS is bound to exactly one repoId at connect-time. When the user
+// switches the repo pulldown, we tear down the old WS and open a new one —
+// the engine on the far end is different, and its ring buffer / chat session
+// is independent.
 
-const wsUrl = (location.protocol === "https:" ? "wss" : "ws") + `://${location.host}/chat`;
+const WS_BASE = (location.protocol === "https:" ? "wss" : "ws") + `://${location.host}/chat`;
 let ws = null;
 let wsRetryDelay = 250;
+let wsRepoId = null;
+let suppressReconnectMessage = false;
 
 function b64encode(str) { return btoa(unescape(encodeURIComponent(str))); }
 function b64decode(b64) { return decodeURIComponent(escape(atob(b64))); }
 
-function connectChat() {
-  ws = new WebSocket(wsUrl);
+function closeChatWs() {
+  if (!ws) return;
+  suppressReconnectMessage = true;
+  try { ws.onclose = null; ws.onerror = null; ws.close(); } catch { /* ignore */ }
+  ws = null;
+}
+
+function connectChat(repoId) {
+  if (!repoId) return;
+  wsRepoId = repoId;
+  const url = `${WS_BASE}?repoId=${encodeURIComponent(repoId)}`;
+  ws = new WebSocket(url);
   ws.onopen = () => { wsRetryDelay = 250; sendResize(); };
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === "data" && typeof msg.bytes === "string") {
       chatTerm.write(b64decode(msg.bytes));
+    } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+      // The server announces the current tool on connect and on every switch
+      // so the pulldown can reflect the engine's live state without us having
+      // to piece it together from SSE timing.
+      syncChatToolSelect(msg.tool);
     }
   };
   ws.onclose = () => {
-    chatTerm.write("\r\n[chat disconnected — reconnecting…]\r\n");
-    setTimeout(connectChat, wsRetryDelay);
+    if (!suppressReconnectMessage) {
+      chatTerm.write("\r\n[chat disconnected — reconnecting…]\r\n");
+    }
+    suppressReconnectMessage = false;
+    const rid = wsRepoId;
+    setTimeout(() => { if (rid === wsRepoId) connectChat(rid); }, wsRetryDelay);
     wsRetryDelay = Math.min(wsRetryDelay * 2, 5000);
   };
   ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
+}
+
+function switchChatToRepo(repoId) {
+  if (!repoId || repoId === wsRepoId) return;
+  closeChatWs();
+  wsRetryDelay = 250;
+  chatTerm.reset();
+  connectChat(repoId);
 }
 
 function sendBytes(str) {
@@ -203,28 +244,50 @@ function sendResize() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: "resize", cols: chatTerm.cols, rows: chatTerm.rows }));
 }
+function sendSetChatTool(tool) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: "set_chat_tool", tool }));
+}
 
 chatTerm.onData((data) => sendBytes(data));
-connectChat();
 
 // --------------------------- repo selector ---------------------------
 
+function currentRepo() {
+  return state.repos.find((r) => r.repoId === state.selectedRepoId) ?? null;
+}
+
+function syncChatToolSelect(tool) {
+  if (els.prefChat.value !== tool) els.prefChat.value = tool;
+  const repo = currentRepo();
+  if (repo) repo.chatTool = tool;
+}
+
+function syncJobToolSelect(tool) {
+  if (els.prefJobs.value !== tool) els.prefJobs.value = tool;
+}
+
 function renderRepoSelector() {
   const repos = state.repos;
-  if (repos.length <= 1) {
-    els.repoSelector.hidden = true;
+
+  if (repos.length === 0) {
+    els.repoFilter.replaceChildren();
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No repos attached";
+    els.repoFilter.appendChild(opt);
+    els.repoFilter.disabled = true;
+    els.prefChat.disabled = true;
+    els.prefJobs.disabled = true;
+    state.selectedRepoId = null;
     return;
   }
-  els.repoSelector.hidden = false;
 
-  const prevValue = els.repoFilter.value;
+  els.repoFilter.disabled = false;
+  els.prefChat.disabled = false;
+  els.prefJobs.disabled = false;
+
   els.repoFilter.replaceChildren();
-
-  const allOpt = document.createElement("option");
-  allOpt.value = "all";
-  allOpt.textContent = "All repos";
-  els.repoFilter.appendChild(allOpt);
-
   for (const repo of repos) {
     const opt = document.createElement("option");
     opt.value = repo.repoId;
@@ -232,15 +295,91 @@ function renderRepoSelector() {
     els.repoFilter.appendChild(opt);
   }
 
-  // Restore previous selection if still valid.
-  const valid = repos.some((r) => r.repoId === prevValue) || prevValue === "all";
-  els.repoFilter.value = valid ? prevValue : "all";
-  state.selectedRepoId = els.repoFilter.value;
+  // Pick a valid selection: keep the current choice if it's still attached,
+  // else fall back to the first repo. This is also the first-load path.
+  if (!state.selectedRepoId || !repos.some((r) => r.repoId === state.selectedRepoId)) {
+    state.selectedRepoId = repos[0].repoId;
+    localStorage.setItem("sparkflow:selectedRepoId", state.selectedRepoId);
+  }
+  els.repoFilter.value = state.selectedRepoId;
+
+  const repo = currentRepo();
+  if (repo?.chatTool) syncChatToolSelect(repo.chatTool);
+  if (repo?.jobTool) syncJobToolSelect(repo.jobTool);
+
+  // Open the chat WS for the selected repo if we're not already on it.
+  if (state.selectedRepoId !== wsRepoId) switchChatToRepo(state.selectedRepoId);
 }
 
 els.repoFilter.addEventListener("change", () => {
-  state.selectedRepoId = els.repoFilter.value;
+  const next = els.repoFilter.value;
+  if (!next) return;
+  state.selectedRepoId = next;
+  localStorage.setItem("sparkflow:selectedRepoId", next);
+  switchChatToRepo(next);
+  const repo = currentRepo();
+  if (repo?.chatTool) syncChatToolSelect(repo.chatTool);
+  if (repo?.jobTool) syncJobToolSelect(repo.jobTool);
   renderJobs();
+});
+
+// --------------------------- tool pulldowns ---------------------------
+
+els.prefChat.addEventListener("change", () => {
+  const repo = currentRepo();
+  const nextTool = els.prefChat.value;
+  if (!repo) return;
+  if (repo.chatTool === nextTool) return;
+  // Destructive switch — confirm first. Revert the select while the modal is
+  // open so the dropdown doesn't lie about the current state.
+  const previousTool = repo.chatTool ?? "claude";
+  els.prefChat.value = previousTool;
+  openChatSwitchModal(() => {
+    sendSetChatTool(nextTool);
+    // Optimistically reflect the new value; the server will confirm via a
+    // chat_tool frame once the PTY restarts.
+    els.prefChat.value = nextTool;
+  });
+});
+
+els.prefJobs.addEventListener("change", () => {
+  const repo = currentRepo();
+  const nextTool = els.prefJobs.value;
+  if (!repo) return;
+  const url = `/repos/${encodeURIComponent(repo.repoId)}/job-tool`;
+  fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tool: nextTool }),
+  }).then((r) => {
+    if (!r.ok) {
+      // Revert on failure so the select doesn't lie.
+      els.prefJobs.value = repo.jobTool ?? "claude";
+    } else {
+      repo.jobTool = nextTool;
+    }
+  }).catch(() => {
+    els.prefJobs.value = repo.jobTool ?? "claude";
+  });
+});
+
+// --------------------------- chat-switch confirm modal ---------------------------
+
+let pendingChatSwitch = null;
+
+function openChatSwitchModal(onConfirm) {
+  pendingChatSwitch = onConfirm;
+  els.chatSwitchModal.hidden = false;
+}
+function closeChatSwitchModal() {
+  pendingChatSwitch = null;
+  els.chatSwitchModal.hidden = true;
+}
+els.chatSwitchCancel.addEventListener("click", closeChatSwitchModal);
+els.chatSwitchConfirm.addEventListener("click", () => {
+  const cb = pendingChatSwitch;
+  closeChatSwitchModal();
+  if (cb) cb();
 });
 
 // --------------------------- URL helpers ---------------------------
@@ -530,7 +669,7 @@ function monitorNeedsAttention(job) {
 
 function visibleJobs(jobs, showMonitors, selectedRepoId) {
   return jobs.filter((j) => {
-    if (selectedRepoId !== "all" && j.repoId !== selectedRepoId) return false;
+    if (!selectedRepoId || j.repoId !== selectedRepoId) return false;
     return !isMonitor(j) || showMonitors || monitorNeedsAttention(j);
   });
 }
@@ -601,9 +740,11 @@ function repoNameFor(repoId) {
 
 function renderJobs() {
   els.list.replaceChildren();
-  const jobs = state.jobs;
+  const jobs = state.selectedRepoId
+    ? state.jobs.filter((j) => j.repoId === state.selectedRepoId)
+    : [];
   const monitors = jobs.filter(isMonitor);
-  const visible = visibleJobs(jobs, state.showMonitors, state.selectedRepoId);
+  const visible = visibleJobs(state.jobs, state.showMonitors, state.selectedRepoId);
 
   if (monitors.length > 0) {
     els.monitorToggleLabel.removeAttribute("hidden");

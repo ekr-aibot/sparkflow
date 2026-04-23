@@ -15,6 +15,7 @@ import type {
   ResponseMessage,
   ErrorMessage,
   PongMessage,
+  ToolKind,
 } from "./ipc-protocol.js";
 
 type IncomingFrame =
@@ -31,6 +32,10 @@ export interface EngineIpcClientOptions {
   repoName: string;
   mcpSocket: string;
   ptyBridgePath?: string;
+  /** Current chat tool (only meaningful if ptyBridgePath is set). */
+  getChatTool?: () => ToolKind;
+  /** Current jobs tool. */
+  getJobTool?: () => ToolKind;
   /** Sparkflow package version (informational, shown in error messages). */
   version: string;
   /** Wire-format version — must match the frontend's SPARKFLOW_PROTOCOL_VERSION. */
@@ -81,6 +86,8 @@ export class EngineIpcClient extends EventEmitter {
           repoName: this.opts.repoName,
           mcpSocket: this.opts.mcpSocket,
           ...(this.opts.ptyBridgePath ? { ptyBridgePath: this.opts.ptyBridgePath } : {}),
+          ...(this.opts.getChatTool ? { chatTool: this.opts.getChatTool() } : {}),
+          ...(this.opts.getJobTool ? { jobTool: this.opts.getJobTool() } : {}),
           version: this.opts.version,
           protocolVersion: this.opts.protocolVersion,
         });

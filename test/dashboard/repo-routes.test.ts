@@ -64,7 +64,7 @@ describe("frontend-daemon HTTP routes", () => {
         client.sendPong(msg.id);
         return;
       }
-      if (msg.type === "killJob" || msg.type === "removeJob" || msg.type === "answerRecovery") {
+      if (msg.type === "killJob" || msg.type === "removeJob" || msg.type === "answerRecovery" || msg.type === "nudgeJob") {
         client.sendResponse(msg.id, { ok: true });
         return;
       }
@@ -166,6 +166,46 @@ describe("frontend-daemon HTTP routes", () => {
       headers: { Accept: "application/json" },
     });
     expect(res.status).toBe(401);
+  });
+
+  it("POST /repos/:repoId/jobs/:jobId/nudge forwards nudgeJob command over IPC", async () => {
+    const observed: Array<{ type: string; stepId?: string; message?: string }> = [];
+    client.removeAllListeners("command");
+    client.on("command", (msg: { type: string; id?: string; stepId?: string; message?: string }) => {
+      if (!msg.id) return;
+      observed.push({ type: msg.type, stepId: msg.stepId, message: msg.message });
+      client.sendResponse(msg.id, { ok: true });
+    });
+
+    const res = await fetch(`${baseUrl()}/repos/testrepo/jobs/job-001/nudge`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ stepId: "author", message: "please focus on edge cases" }),
+    });
+    expect(res.ok).toBe(true);
+    expect(observed).toEqual([{ type: "nudgeJob", stepId: "author", message: "please focus on edge cases" }]);
+  });
+
+  it("POST /repos/:repoId/jobs/:jobId/nudge returns 400 when message is missing", async () => {
+    const res = await fetch(`${baseUrl()}/repos/testrepo/jobs/job-001/nudge`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ stepId: "author" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("message is required");
+  });
+
+  it("POST /repos/:repoId/jobs/:jobId/nudge returns 400 when stepId is missing", async () => {
+    const res = await fetch(`${baseUrl()}/repos/testrepo/jobs/job-001/nudge`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ message: "please focus" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("stepId is required");
   });
 
   it("POST /repos/:repoId/start dispatches workflow", async () => {

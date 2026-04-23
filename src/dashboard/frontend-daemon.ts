@@ -421,15 +421,30 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
 
       if (action === "nudge" && req.method === "POST") {
         readJsonBody(req)
-          .then((body) => {
+          .then((body): Promise<Record<string, unknown> | null> | null => {
             const { stepId, message } = body as { stepId?: unknown; message?: unknown };
-            if (typeof message !== "string" || !message.trim())
-              return sendJson(res, 400, { error: "message is required" });
-            if (typeof stepId !== "string" || !stepId)
-              return sendJson(res, 400, { error: "stepId is required" });
-            return sendJson(res, 400, { error: "nudge not supported over multi-repo IPC in v1" });
+            if (typeof message !== "string" || !message.trim()) {
+              sendJson(res, 400, { error: "message is required" });
+              return null;
+            }
+            if (typeof stepId !== "string" || !stepId) {
+              sendJson(res, 400, { error: "stepId is required" });
+              return null;
+            }
+            return registry.sendCommand(repoId, {
+              type: "nudgeJob",
+              id: randomBytes(8).toString("hex"),
+              jobId,
+              stepId,
+              message,
+            });
           })
-          .catch(() => sendJson(res, 400, { error: "invalid request body" }));
+          .then((r) => {
+            if (!r) return;
+            if (typeof r === "object" && "error" in r) sendJson(res, 400, { error: (r as { error?: string }).error });
+            else sendJson(res, 200, { ok: true });
+          })
+          .catch(() => sendJson(res, 500, { error: "engine request failed" }));
         return;
       }
 

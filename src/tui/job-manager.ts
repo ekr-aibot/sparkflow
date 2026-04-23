@@ -66,16 +66,26 @@ export class JobManager {
     const persisted = this.store.loadJobs();
     for (const p of persisted) {
       const alive = isAlive(p.pid);
-      // Monitor jobs are ephemeral to a daemon lifetime: if the process is gone
-      // or already terminal, drop the persisted state entirely rather than
-      // leaving a ghost in the dashboard. autoStartMonitors() runs right after
-      // and will spin up a fresh replacement from config. A pid can look alive
-      // after recycling, so state check matters independently of the pid probe.
+      // Monitor jobs are ephemeral to a daemon lifetime.
       if (p.info.kind === "monitor") {
-        const terminal = p.info.state === "failed" || p.info.state === "succeeded";
-        if (!alive || terminal) {
+        if (!alive) {
+          // Process is dead — drop and let autoStartMonitors() re-launch.
           this.store.removeJob(p.info.id);
           continue;
+        }
+        if (p.info.state === "failed") {
+          // Process appears alive but state is "failed": the pid was likely
+          // recycled by another process after the monitor exited. Drop the
+          // stale record and let autoStartMonitors() re-launch a fresh one.
+          this.store.removeJob(p.info.id);
+          continue;
+        }
+        // Process is alive. If state was incorrectly set to "succeeded" by a
+        // child-workflow completion event (e.g. fixer-one completing while
+        // fixer is still looping), reset it so the monitor stays active.
+        if (p.info.state === "succeeded") {
+          p.info.state = "running";
+          p.info.endTime = undefined;
         }
       }
       const info: JobInfo = { ...p.info };
@@ -131,13 +141,27 @@ export class JobManager {
     }
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor" }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor"; deduplicateByPath?: boolean }): string {
     const id = randomBytes(6).toString("hex");
     const jobCwd = opts?.cwd ?? this.cwd;
 
     if (!isAbsolute(workflowPath)) {
       const projectConfig = loadProjectConfig(jobCwd);
       workflowPath = resolveWorkflowPath(workflowPath, jobCwd, projectConfig);
+    }
+
+    // If deduplicateByPath is set, return the existing job ID rather than
+    // spawning a duplicate when the same workflow is already alive.
+    if (opts?.deduplicateByPath) {
+      for (const [existingId, job] of this.jobs) {
+        if (
+          job.info.workflowPath === workflowPath &&
+          (job.info.state === "running" || job.info.state === "blocked") &&
+          isAlive(job.pid)
+        ) {
+          return existingId;
+        }
+      }
     }
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
@@ -334,24 +358,12 @@ export class JobManager {
       changed = true;
     }
 
-    const startMatch = line.match(/^\[sparkflow\] Starting workflow "(.+)"/);
-    if (startMatch) {
-      job.info.workflowName = startMatch[1];
-      changed = true;
-    }
-
-    if (line.match(/^\[sparkflow\] Workflow .+ completed successfully/)) {
-      job.info.state = "succeeded";
-      job.info.summary = "completed";
-      job.info.endTime = Date.now();
-      changed = true;
-    }
-    if (line.match(/^\[sparkflow\] Workflow .+ (failed|aborted)/)) {
-      job.info.state = "failed";
-      job.info.summary = "failed";
-      job.info.endTime = Date.now();
-      changed = true;
-    }
+    // Workflow-lifecycle state (workflowName, job state, endTime) is driven
+    // exclusively by the JSON events in handleStatusLine. Matching on verbose
+    // text here caused false transitions when child workflows (run via the
+    // workflow runtime) completed — their "[sparkflow] Workflow X completed"
+    // lines appeared in the parent job's log and incorrectly marked the parent
+    // job as "succeeded" while it was still looping.
 
     if (changed) {
       this.schedulePersist(jobId);
@@ -448,7 +460,15 @@ export class JobManager {
 
     const activeWorkflowPaths = new Set(
       Array.from(this.jobs.values())
-        .filter((j) => j.info.state === "running" || j.info.state === "blocked")
+        .filter(
+          (j) =>
+            j.info.state === "running" ||
+            j.info.state === "blocked" ||
+            // Belt-and-suspenders: a monitor whose state drifted to a terminal
+            // value (e.g. "succeeded" set by a child-workflow event before the
+            // rehydrate fix lands) is still alive — trust the pid over the state.
+            (j.info.kind === "monitor" && isAlive(j.pid)),
+        )
         .map((j) => j.info.workflowPath),
     );
 

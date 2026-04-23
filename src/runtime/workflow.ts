@@ -4,6 +4,7 @@ import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { SparkflowWorkflow, WorkflowRuntime } from "../schema/types.js";
 import { validate } from "../schema/validate.js";
 import { resolveTemplate } from "../engine/template.js";
+import { ConsoleLogger } from "../engine/types.js";
 
 // ── Process-wide pool semaphore ─────────────────────────────────────
 
@@ -185,7 +186,11 @@ async function runChild(
     const engine = new WorkflowEngine(workflow, {
       cwd: parentCtx.cwd,
       workflowDir: dirname(workflowPath),
-      logger: parentCtx.logger,
+      // Use ConsoleLogger for child engines so they don't emit JSON events
+      // (workflow_start, workflow_complete) that would corrupt the parent
+      // job's dashboard state (e.g. marking fixer.json "succeeded" when
+      // fixer-one.json finishes).
+      logger: new ConsoleLogger(),
       verbose: parentCtx.verbose,
     });
     await engine.run();

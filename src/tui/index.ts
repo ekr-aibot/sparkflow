@@ -483,12 +483,39 @@ try {
       SPARKFLOW_WEB_TOKEN: dashInfo.token,
       ...(args.dev ? { SPARKFLOW_WEB_DEV: "1" } : {}),
     };
-    const result = spawnSync(
-      process.execPath,
-      [ENGINE_DAEMON_PATH, dashInfo.socketPath, args.cwd, socketPath, ptyBridgePath],
-      { cwd: args.cwd, stdio: "inherit", env: webEnv },
-    );
-    process.exitCode = result.status ?? 0;
+    await new Promise<void>((resolveEngine) => {
+      const engineProc = spawn(
+        process.execPath,
+        [ENGINE_DAEMON_PATH, dashInfo.socketPath, args.cwd, socketPath, ptyBridgePath],
+        { cwd: args.cwd, stdio: "inherit", env: webEnv },
+      );
+      // Write PID so the test fixture can kill it directly as a fallback
+      // (handles the case where proc is SIGKILL'd without signal forwarding
+      // firing, e.g. after a 3s timeout in the test teardown path).
+      try {
+        writeFileSync(
+          join(dirname(dashInfo.socketPath), "engine-daemon.pid"),
+          String(engineProc.pid ?? -1),
+        );
+      } catch { /* ignore */ }
+      engineProc.once("error", (err) => {
+        console.error(`[sparkflow] failed to spawn engine daemon: ${err.message}`);
+        process.exitCode = 1;
+        resolveEngine();
+      });
+      engineProc.once("exit", (code) => {
+        process.exitCode = code ?? 0;
+        resolveEngine();
+      });
+      // Forward shutdown signals to the engine daemon so it can flush state
+      // and exit cleanly, rather than being orphaned when this process exits.
+      const forward = (sig: NodeJS.Signals): void => {
+        try { engineProc.kill(sig); } catch { /* already exited */ }
+      };
+      process.on("SIGINT", () => forward("SIGTERM"));
+      process.on("SIGTERM", () => forward("SIGTERM"));
+      process.on("SIGHUP", () => forward("SIGHUP"));
+    });
   } else {
     // Tmux mode (existing flow).
     execFileSync("tmux", [

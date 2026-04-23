@@ -13,6 +13,7 @@ export interface WebServerHandle {
   port: number;
   proc: ChildProcess;
   cwd: string;
+  sparkflowHome: string;
   stop: () => Promise<void>;
 }
 
@@ -121,6 +122,18 @@ export async function startWebServer(
         }, 3000)),
       ]);
     }
+    // Kill the engine daemon directly (defense-in-depth: tui/index.ts forwards
+    // SIGTERM to it via a signal handler, so under normal shutdown the engine
+    // is already dead before proc exits — this handles the edge case where proc
+    // was SIGKILL'd and signal forwarding never fired).
+    try {
+      const enginePid = parseInt(
+        readFileSync(join(sparkflowHome, "engine-daemon.pid"), "utf-8").trim(), 10,
+      );
+      if (enginePid > 0) {
+        try { process.kill(enginePid, "SIGTERM"); } catch { /* already dead */ }
+      }
+    } catch { /* no engine-daemon.pid — nothing to kill */ }
     // Kill the detached frontend daemon so it doesn't linger past the test.
     // dashboard.json's pid field is written on startup.
     try {
@@ -133,5 +146,5 @@ export async function startWebServer(
     try { rmSync(cwd, { recursive: true, force: true }); } catch { /* ignore */ }
   };
 
-  return { url: ready.url, token: ready.token, port: ready.port, proc, cwd, stop };
+  return { url: ready.url, token: ready.token, port: ready.port, proc, cwd, sparkflowHome, stop };
 }

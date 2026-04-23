@@ -227,6 +227,13 @@ async function main(): Promise<void> {
         ipcClient.sendResponse(msg.id, { jobTool: msg.tool });
         break;
       }
+
+      case "nudgeJob": {
+        const result = jobManager.nudgeJob(msg.jobId, msg.stepId, msg.message);
+        if (result.ok) ipcClient.sendResponse(msg.id, { ok: true });
+        else ipcClient.sendError(msg.id, result.error ?? "nudge failed");
+        break;
+      }
     }
   });
 

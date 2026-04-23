@@ -123,6 +123,15 @@ export interface SetJobToolCommand {
   tool: ToolKind;
 }
 
+/** Send a mid-run nudge message to a specific step of a running job. */
+export interface NudgeJobCommand {
+  type: "nudgeJob";
+  id: string;
+  jobId: string;
+  stepId: string;
+  message: string;
+}
+
 /**
  * Commands the frontend can issue to an engine. `AttachAckMessage` is a
  * protocol-level frame (handshake) the engine client filters internally,
@@ -136,6 +145,7 @@ export type FrontendToEngine =
   | AnswerRecoveryCommand
   | GetJobDetailCommand
   | SetJobToolCommand
+  | NudgeJobCommand
   | PingMessage;
 
 // ---------------------------------------------------------------------------

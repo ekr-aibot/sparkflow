@@ -427,6 +427,10 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
               sendJson(res, 400, { error: "message is required" });
               return null;
             }
+            if (message.length > 32 * 1024) {
+              sendJson(res, 400, { error: "message too large (max 32KB)" });
+              return null;
+            }
             if (typeof stepId !== "string" || !stepId) {
               sendJson(res, 400, { error: "stepId is required" });
               return null;

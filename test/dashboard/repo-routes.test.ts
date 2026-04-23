@@ -208,6 +208,17 @@ describe("frontend-daemon HTTP routes", () => {
     expect(body.error).toBe("stepId is required");
   });
 
+  it("POST /repos/:repoId/jobs/:jobId/nudge returns 400 when message exceeds 32KB", async () => {
+    const res = await fetch(`${baseUrl()}/repos/testrepo/jobs/job-001/nudge`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ stepId: "author", message: "x".repeat(32 * 1024 + 1) }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("message too large (max 32KB)");
+  });
+
   it("POST /repos/:repoId/start dispatches workflow", async () => {
     // Override command handler to handle startWorkflow.
     client.removeAllListeners("command");

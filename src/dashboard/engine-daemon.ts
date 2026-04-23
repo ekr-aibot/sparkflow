@@ -34,7 +34,7 @@ import { EngineIpcClient } from "./engine-ipc-client.js";
 import { repoIdFor, SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "./discovery.js";
 import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
 import { buildChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpec } from "../tui/chat-tool.js";
-import type { ErrorMessage, FrontendToEngine } from "./ipc-protocol.js";
+import type { ErrorMessage, FrontendToEngine, ToolKind } from "./ipc-protocol.js";
 
 // ---------------------------------------------------------------------------
 // Args / env
@@ -139,6 +139,13 @@ async function main(): Promise<void> {
   const repoName =
     process.env.SPARKFLOW_ENGINE_NAME ?? (cwd.split("/").at(-1) ?? cwd);
 
+  // --- Chat/jobs tool state (mutable: switched at runtime via IPC or bridge). ---
+  const initialJobToolRaw = process.env.SPARKFLOW_LLM;
+  let currentJobTool: ToolKind = initialJobToolRaw === "gemini" ? "gemini" : "claude";
+  // currentChatTool is assigned once ingredients are read (below). Exposed
+  // through the ipcClient so the frontend sees it in AttachMessage.
+  let currentChatTool: ToolKind | null = null;
+
   // --- Frontend IPC client ---
   const ipcClient = new EngineIpcClient({
     frontendSocketPath,
@@ -147,6 +154,8 @@ async function main(): Promise<void> {
     repoName,
     mcpSocket: mcpSocketPath,
     ptyBridgePath: ptyBridgePath || undefined,
+    getChatTool: () => currentChatTool ?? "claude",
+    getJobTool: () => currentJobTool,
     version: SPARKFLOW_VERSION,
     protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
   });
@@ -202,6 +211,21 @@ async function main(): Promise<void> {
         else ipcClient.sendResponse(msg.id, detail as unknown as Record<string, unknown>);
         break;
       }
+
+      case "setJobTool": {
+        if (msg.tool !== "claude" && msg.tool !== "gemini") {
+          ipcClient.sendError(msg.id, `invalid tool: ${String(msg.tool)}`);
+          break;
+        }
+        currentJobTool = msg.tool;
+        // Mutate the engine's env so subsequent sparkflow-run children inherit
+        // the new preference. Claude is the hardcoded default in engine.ts, so
+        // we actively unset the env var rather than writing "claude".
+        if (msg.tool === "gemini") process.env.SPARKFLOW_LLM = "gemini";
+        else delete process.env.SPARKFLOW_LLM;
+        ipcClient.sendResponse(msg.id, { jobTool: msg.tool });
+        break;
+      }
     }
   });
 
@@ -252,38 +276,67 @@ async function main(): Promise<void> {
   }
 
   if (ingredients && ptyBridgePath) {
-    const chatSpawn = buildChatSpawn({
-      tool: ingredients.chatTool,
-      command: defaultCommandFor(ingredients.chatTool, ingredients.commandOverride),
-      chatArgs: ingredients.chatArgs,
-      mcpServerSpec: ingredients.mcpServerSpec,
-      mcpServerName: ingredients.mcpServerName,
-      mcpConfigPath: ingredients.mcpConfigPath,
-      systemPromptText: ingredients.systemPromptText,
-      systemPromptPath: ingredients.systemPromptPath,
-      cwd,
-      slashCommands: ingredients.slashCommands,
-    });
+    currentChatTool = ingredients.chatTool;
+    let switchingTool = false;
 
-    pty = ptySpawn(chatSpawn.cmd, chatSpawn.args, {
-      name: "xterm-256color",
-      cols: 100,
-      rows: 30,
-      cwd,
-      env: process.env as Record<string, string>,
-    });
-    currentCleanup = chatSpawn.cleanup;
+    function spawnChatPty(tool: ChatTool): void {
+      const chatSpawn = buildChatSpawn({
+        tool,
+        command: defaultCommandFor(tool, ingredients!.commandOverride),
+        chatArgs: ingredients!.chatArgs,
+        mcpServerSpec: ingredients!.mcpServerSpec,
+        mcpServerName: ingredients!.mcpServerName,
+        mcpConfigPath: ingredients!.mcpConfigPath,
+        systemPromptText: ingredients!.systemPromptText,
+        systemPromptPath: ingredients!.systemPromptPath,
+        cwd,
+        slashCommands: ingredients!.slashCommands,
+      });
 
-    pty.onData((data) => {
-      const chunk = Buffer.from(data, "utf-8");
-      ring = appendRing(ring, chunk, RING_BUFFER_BYTES);
-      broadcastPtyFrame(JSON.stringify({ type: "pty_data", bytes: chunk.toString("base64") }) + "\n");
-    });
+      const nextPty = ptySpawn(chatSpawn.cmd, chatSpawn.args, {
+        name: "xterm-256color",
+        cols: 100,
+        rows: 30,
+        cwd,
+        env: process.env as Record<string, string>,
+      });
+      pty = nextPty;
+      currentCleanup = chatSpawn.cleanup;
+      currentChatTool = tool;
 
-    pty.onExit(({ exitCode }) => {
-      console.error(`[sparkflow engine] chat process exited (code=${exitCode}); shutting down`);
-      shutdown(0);
-    });
+      nextPty.onData((data) => {
+        const chunk = Buffer.from(data, "utf-8");
+        ring = appendRing(ring, chunk, RING_BUFFER_BYTES);
+        broadcastPtyFrame(JSON.stringify({ type: "pty_data", bytes: chunk.toString("base64") }) + "\n");
+      });
+
+      nextPty.onExit(({ exitCode }) => {
+        if (switchingTool || pty !== nextPty) return;
+        console.error(`[sparkflow engine] chat process exited (code=${exitCode}); shutting down`);
+        shutdown(0);
+      });
+    }
+
+    function switchChatTool(nextTool: ToolKind): void {
+      if (nextTool === currentChatTool) return;
+      broadcastPtyFrame(JSON.stringify({
+        type: "pty_data",
+        bytes: Buffer.from(`\r\n[sparkflow] switching chat to ${nextTool}…\r\n`, "utf-8").toString("base64"),
+      }) + "\n");
+      switchingTool = true;
+      const oldPty = pty;
+      const oldCleanup = currentCleanup;
+      pty = null;
+      currentCleanup = null;
+      ring = Buffer.alloc(0);
+      try { oldPty?.kill(); } catch { /* ignore */ }
+      try { oldCleanup?.(); } catch { /* ignore */ }
+      spawnChatPty(nextTool);
+      switchingTool = false;
+      broadcastPtyFrame(JSON.stringify({ type: "chat_tool", tool: nextTool }) + "\n");
+    }
+
+    spawnChatPty(ingredients.chatTool);
 
     // PTY bridge server
     try { unlinkSync(ptyBridgePath); } catch { /* not present */ }
@@ -293,6 +346,9 @@ async function main(): Promise<void> {
       if (ring.length > 0) {
         sock.write(JSON.stringify({ type: "snapshot", bytes: ring.toString("base64") }) + "\n");
       }
+      // Announce the current tool on every new client so the UI can initialise
+      // its pulldown from the engine's live state.
+      sock.write(JSON.stringify({ type: "chat_tool", tool: currentChatTool ?? "claude" }) + "\n");
       let buf = "";
       sock.on("data", (chunk) => {
         buf += chunk as unknown as string;
@@ -302,11 +358,13 @@ async function main(): Promise<void> {
           buf = buf.slice(nl + 1);
           if (!line) continue;
           try {
-            const msg = JSON.parse(line) as { type?: string; bytes?: string; cols?: number; rows?: number };
+            const msg = JSON.parse(line) as { type?: string; bytes?: string; cols?: number; rows?: number; tool?: string };
             if (msg.type === "pty_write" && typeof msg.bytes === "string") {
               pty?.write(Buffer.from(msg.bytes, "base64").toString("utf-8"));
             } else if (msg.type === "pty_resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
               pty?.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
+            } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+              switchChatTool(msg.tool);
             }
           } catch { /* ignore */ }
         }

@@ -14,6 +14,9 @@ import type { JobInfo } from "../tui/types.js";
 // Engine → Frontend messages
 // ---------------------------------------------------------------------------
 
+/** LLM backend in use for chat and for claude-code job steps. */
+export type ToolKind = "claude" | "gemini";
+
 /** First message from the engine. Binds the repoId for this connection. */
 export interface AttachMessage {
   type: "attach";
@@ -23,6 +26,10 @@ export interface AttachMessage {
   mcpSocket: string;
   /** Path to the PTY bridge socket, if this engine exposes a chat terminal. */
   ptyBridgePath?: string;
+  /** Initial chat-tool for this engine's PTY. Absent when the engine has no chat. */
+  chatTool?: ToolKind;
+  /** Initial jobs-tool for this engine (SPARKFLOW_LLM). */
+  jobTool?: ToolKind;
   /** Informational sparkflow package version (for display in error messages). */
   version: string;
   /** Wire-format version — must match the frontend's SPARKFLOW_PROTOCOL_VERSION. */
@@ -106,6 +113,17 @@ export interface PingMessage {
 }
 
 /**
+ * Switch the LLM backend used for subsequent claude-code job steps on this
+ * engine. The chat PTY's tool is switched over the PTY bridge (via
+ * `set_chat_tool`) — not through this IPC command.
+ */
+export interface SetJobToolCommand {
+  type: "setJobTool";
+  id: string;
+  tool: ToolKind;
+}
+
+/**
  * Commands the frontend can issue to an engine. `AttachAckMessage` is a
  * protocol-level frame (handshake) the engine client filters internally,
  * so it is NOT part of this command union — engine-daemon's command
@@ -117,6 +135,7 @@ export type FrontendToEngine =
   | RemoveJobCommand
   | AnswerRecoveryCommand
   | GetJobDetailCommand
+  | SetJobToolCommand
   | PingMessage;
 
 // ---------------------------------------------------------------------------
@@ -163,4 +182,8 @@ export interface RepoInfo {
   mcpSocket: string;
   ptyBridgePath?: string;
   version: string;
+  /** Current chat tool for this engine (if it owns a chat PTY). */
+  chatTool?: ToolKind;
+  /** Current jobs tool for this engine. */
+  jobTool?: ToolKind;
 }

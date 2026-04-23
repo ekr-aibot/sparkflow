@@ -24,8 +24,9 @@ import { extname, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
-import { FrontendIpcServer } from "./frontend-ipc-server.js";
+import { FrontendIpcServer, type EngineConnection } from "./frontend-ipc-server.js";
 import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
+import type { ToolKind } from "./ipc-protocol.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -147,15 +148,20 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 
 interface PtyBridge {
   onData(cb: (chunk: Buffer) => void): void;
+  onChatTool(cb: (tool: ToolKind) => void): void;
   write(bytes: Buffer): void;
   resize(cols: number, rows: number): void;
+  setChatTool(tool: ToolKind): void;
+  close(): void;
 }
 
 function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
   return new Promise((resolve, reject) => {
     const sock: Socket = createConnection(socketPath);
     const dataCbs: Array<(b: Buffer) => void> = [];
+    const toolCbs: Array<(t: ToolKind) => void> = [];
     const pendingData: Buffer[] = [];
+    let pendingTool: ToolKind | null = null;
     let buf = "";
 
     const bridge: PtyBridge = {
@@ -166,11 +172,21 @@ function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
           for (const b of queued) cb(b);
         }
       },
+      onChatTool: (cb) => {
+        toolCbs.push(cb);
+        if (pendingTool) cb(pendingTool);
+      },
       write: (bytes) => {
         sock.write(JSON.stringify({ type: "pty_write", bytes: bytes.toString("base64") }) + "\n");
       },
       resize: (cols, rows) => {
         sock.write(JSON.stringify({ type: "pty_resize", cols, rows }) + "\n");
+      },
+      setChatTool: (tool) => {
+        sock.write(JSON.stringify({ type: "set_chat_tool", tool }) + "\n");
+      },
+      close: () => {
+        try { sock.destroy(); } catch { /* ignore */ }
       },
     };
 
@@ -186,11 +202,15 @@ function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         try {
-          const msg = JSON.parse(line) as { type?: string; bytes?: string };
+          const msg = JSON.parse(line) as { type?: string; bytes?: string; tool?: string };
           if ((msg.type === "snapshot" || msg.type === "pty_data") && typeof msg.bytes === "string") {
             const b = Buffer.from(msg.bytes, "base64");
             if (dataCbs.length === 0) pendingData.push(b);
             else for (const cb of dataCbs) cb(b);
+          } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+            const t = msg.tool;
+            if (toolCbs.length === 0) pendingTool = t;
+            else for (const cb of toolCbs) cb(t);
           }
         } catch { /* ignore */ }
       }
@@ -222,27 +242,55 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   const registry = new FrontendIpcServer(ipcSocketPath);
   await registry.listen();
 
-  // PTY bridge — lazily connect to the first engine that provides one
-  let ring: Buffer = Buffer.alloc(0);
-  let ptyBridge: PtyBridge | null = null;
+  // Per-repo PTY bridge state. Each attached engine that exposes a bridge
+  // gets its own entry: separate connection, separate ring, separate WS
+  // fan-out. Lets the UI present a fully-independent chat per repo.
+  interface RepoBridge {
+    bridge: PtyBridge;
+    ring: Buffer;
+  }
+  const bridges = new Map<string, RepoBridge>();
+  // WebSocket clients, grouped by the repoId they're bound to. A client binds
+  // to a repo on connect (via ?repoId=...); it stays bound for its lifetime.
+  const wsToRepo = new WeakMap<WebSocket, string>();
   const wssRef: { wss: WebSocketServer | null } = { wss: null };
 
-  registry.on("engineAttached", (conn) => {
-    // If this engine has a PTY bridge and we don't have one yet, connect to it
-    if (!ptyBridge && conn.ptyBridgePath) {
-      connectPtyBridge(conn.ptyBridgePath).then((bridge) => {
-        ptyBridge = bridge;
-        bridge.onData((chunk) => {
-          ring = appendRing(ring, chunk, RING_BUFFER_BYTES);
-          const payload = JSON.stringify({ type: "data", bytes: chunk.toString("base64") });
-          if (wssRef.wss) {
-            for (const ws of wssRef.wss.clients) {
-              if (ws.readyState === ws.OPEN) ws.send(payload);
-            }
-          }
-        });
-      }).catch(() => { /* PTY bridge unavailable */ });
+  function broadcastToRepo(repoId: string, payload: string): void {
+    if (!wssRef.wss) return;
+    for (const ws of wssRef.wss.clients) {
+      if (ws.readyState !== ws.OPEN) continue;
+      if (wsToRepo.get(ws) !== repoId) continue;
+      ws.send(payload);
     }
+  }
+
+  function onEngineAttached(conn: EngineConnection): void {
+    if (!conn.ptyBridgePath || bridges.has(conn.repoId)) return;
+    connectPtyBridge(conn.ptyBridgePath).then((bridge) => {
+      const entry: RepoBridge = { bridge, ring: Buffer.alloc(0) };
+      bridges.set(conn.repoId, entry);
+
+      bridge.onData((chunk) => {
+        entry.ring = appendRing(entry.ring, chunk, RING_BUFFER_BYTES);
+        const payload = JSON.stringify({ type: "data", bytes: chunk.toString("base64") });
+        broadcastToRepo(conn.repoId, payload);
+      });
+      bridge.onChatTool((tool) => {
+        registry.updateChatTool(conn.repoId, tool);
+        // On tool switch the engine clears its ring; do the same here so
+        // reconnecting clients don't replay stale bytes from the old session.
+        entry.ring = Buffer.alloc(0);
+        broadcastToRepo(conn.repoId, JSON.stringify({ type: "chat_tool", tool }));
+      });
+    }).catch(() => { /* PTY bridge unavailable — engine without chat */ });
+  }
+
+  registry.on("engineAttached", onEngineAttached);
+  registry.on("engineDetached", (repoId: string) => {
+    const entry = bridges.get(repoId);
+    if (!entry) return;
+    try { entry.bridge.close(); } catch { /* ignore */ }
+    bridges.delete(repoId);
   });
 
   // HTTP server
@@ -411,6 +459,42 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       }
     }
 
+    // Switch the jobs tool for a specific repo's engine.
+    const jobToolMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/job-tool$/);
+    if (jobToolMatch && req.method === "POST") {
+      const [, repoId] = jobToolMatch;
+      const engine = registry.getEngine(repoId);
+      if (!engine) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+
+      readJsonBody(req)
+        .then((body): Promise<Record<string, unknown> | null> | null => {
+          const { tool } = body as { tool?: string };
+          if (tool !== "claude" && tool !== "gemini") {
+            sendJson(res, 400, { error: "tool must be 'claude' or 'gemini'" });
+            return null;
+          }
+          return registry.sendCommand(repoId, {
+            type: "setJobTool",
+            id: randomBytes(8).toString("hex"),
+            tool,
+          });
+        })
+        .then((r) => {
+          if (!r) return;
+          if (typeof r === "object" && "error" in r) {
+            sendJson(res, 400, { error: (r as { error?: string }).error });
+          } else {
+            const tool = (r as { jobTool?: string }).jobTool;
+            if (tool === "claude" || tool === "gemini") {
+              registry.updateJobTool(repoId, tool);
+            }
+            sendJson(res, 200, { ok: true });
+          }
+        })
+        .catch(() => sendJson(res, 500, { error: "engine request failed" }));
+      return;
+    }
+
     // Workflow start for a specific repo
     const startWorkflowMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/start$/);
     if (startWorkflowMatch && req.method === "POST") {
@@ -460,27 +544,62 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   const wss = new WebSocketServer({ noServer: true });
   wssRef.wss = wss;
 
+  function pickRepoIdFromUrl(url: string): string | null {
+    const idx = url.indexOf("?");
+    if (idx === -1) return null;
+    const params = new URLSearchParams(url.slice(idx + 1));
+    const requested = params.get("repoId");
+    if (requested && bridges.has(requested)) return requested;
+    // Fall back to the first attached engine with a bridge — lets old clients
+    // (and the sole-repo default) keep working without an explicit repoId.
+    for (const rid of bridges.keys()) return rid;
+    return null;
+  }
+
   server.on("upgrade", (req, socket, head) => {
     if ((req.url ?? "").split("?")[0] !== "/chat" || !authorized(req, token)) {
       (socket as Socket).write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       (socket as Socket).destroy();
       return;
     }
-    wss.handleUpgrade(req, socket as Socket, head, (ws) => wss.emit("connection", ws, req));
+    const repoId = pickRepoIdFromUrl(req.url ?? "");
+    if (!repoId) {
+      (socket as Socket).write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+      (socket as Socket).destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket as Socket, head, (ws) => {
+      wsToRepo.set(ws, repoId);
+      wss.emit("connection", ws, req);
+    });
   });
 
   wss.on("connection", (ws: WebSocket) => {
-    if (ring.length > 0) {
-      ws.send(JSON.stringify({ type: "data", bytes: ring.toString("base64") }));
+    const repoId = wsToRepo.get(ws);
+    if (!repoId) {
+      try { ws.close(1011, "no repo"); } catch { /* ignore */ }
+      return;
     }
+    const entry = bridges.get(repoId);
+    if (entry && entry.ring.length > 0) {
+      ws.send(JSON.stringify({ type: "data", bytes: entry.ring.toString("base64") }));
+    }
+    // Announce current chatTool on connect so the UI can initialise its select.
+    const tool = registry.getEngine(repoId)?.chatTool;
+    if (tool) ws.send(JSON.stringify({ type: "chat_tool", tool }));
+
     ws.on("message", (raw) => {
       let parsed: unknown;
       try { parsed = JSON.parse(raw.toString("utf-8")); } catch { return; }
-      const msg = parsed as { type?: string; bytes?: string; cols?: number; rows?: number };
-      if (msg.type === "data" && typeof msg.bytes === "string" && ptyBridge) {
-        try { ptyBridge.write(Buffer.from(msg.bytes, "base64")); } catch { /* ignore */ }
-      } else if (msg.type === "resize" && Number.isFinite(msg.cols) && Number.isFinite(msg.rows) && ptyBridge) {
-        try { ptyBridge.resize(Math.max(1, msg.cols!), Math.max(1, msg.rows!)); } catch { /* ignore */ }
+      const msg = parsed as { type?: string; bytes?: string; cols?: number; rows?: number; tool?: string };
+      const current = bridges.get(repoId);
+      if (!current) return;
+      if (msg.type === "data" && typeof msg.bytes === "string") {
+        try { current.bridge.write(Buffer.from(msg.bytes, "base64")); } catch { /* ignore */ }
+      } else if (msg.type === "resize" && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {
+        try { current.bridge.resize(Math.max(1, msg.cols!), Math.max(1, msg.rows!)); } catch { /* ignore */ }
+      } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+        try { current.bridge.setChatTool(msg.tool); } catch { /* ignore */ }
       }
     });
   });

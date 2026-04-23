@@ -20,6 +20,7 @@ import type {
   ResponseMessage,
   ErrorMessage,
   PongMessage,
+  ToolKind,
 } from "./ipc-protocol.js";
 import { SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "./discovery.js";
 
@@ -34,6 +35,9 @@ export interface EngineConnection {
   readonly version: string;
   /** Current live job state for this engine. */
   readonly jobs: Map<string, JobInfo>;
+  /** Current LLM tools for this engine. Updated as the engine switches. */
+  chatTool: ToolKind | undefined;
+  jobTool: ToolKind | undefined;
   /** Send a fire-and-forget message to this engine. */
   send(msg: FrontendToEngine): void;
   /** Send a command and await a correlated response. Rejects on socket close. */
@@ -177,6 +181,8 @@ export class FrontendIpcServer extends EventEmitter {
       ctx.boundRepoId = repoId;
 
       const jobs = new Map<string, JobInfo>();
+      const readTool = (v: unknown): ToolKind | undefined =>
+        v === "claude" || v === "gemini" ? v : undefined;
 
       const conn: EngineConnection = {
         repoId,
@@ -186,6 +192,8 @@ export class FrontendIpcServer extends EventEmitter {
         ptyBridgePath: typeof raw.ptyBridgePath === "string" ? raw.ptyBridgePath : undefined,
         version: String(raw.version ?? ""),
         jobs,
+        chatTool: readTool(raw.chatTool),
+        jobTool: readTool(raw.jobTool),
         send: (msg) => {
           if (socket.writable) socket.write(JSON.stringify(msg) + "\n");
         },
@@ -313,8 +321,24 @@ export class FrontendIpcServer extends EventEmitter {
         mcpSocket: e.mcpSocket,
         ptyBridgePath: e.ptyBridgePath,
         version: e.version,
+        ...(e.chatTool ? { chatTool: e.chatTool } : {}),
+        ...(e.jobTool ? { jobTool: e.jobTool } : {}),
       };
     });
+  }
+
+  updateChatTool(repoId: string, tool: ToolKind): void {
+    const conn = this.engines.get(repoId);
+    if (!conn || conn.chatTool === tool) return;
+    conn.chatTool = tool;
+    this.fireUpdate();
+  }
+
+  updateJobTool(repoId: string, tool: ToolKind): void {
+    const conn = this.engines.get(repoId);
+    if (!conn || conn.jobTool === tool) return;
+    conn.jobTool = tool;
+    this.fireUpdate();
   }
 
   getEngine(repoId: string): EngineConnection | null {
@@ -344,14 +368,6 @@ export class FrontendIpcServer extends EventEmitter {
     if (!conn) return null;
     const full = { ...msg, id: msg.id ?? randomBytes(8).toString("hex") } as FrontendToEngine;
     return conn.request(full);
-  }
-
-  /** Get the first attached engine's PTY bridge path, if any. */
-  getPrimaryPtyBridgePath(): string | undefined {
-    for (const conn of this.engines.values()) {
-      if (conn.ptyBridgePath) return conn.ptyBridgePath;
-    }
-    return undefined;
   }
 
   /** Subscribe to registry updates. Returns an unsubscribe function. */

@@ -336,6 +336,106 @@ describe("PrWatcherAdapter", () => {
     expect(result.outputs.feedback as string).toContain("ci/test");
   });
 
+  it("detects CI failure when gh pr checks exits non-zero (real-world behavior)", async () => {
+    // gh pr checks exits with code 1 when any check fails, but still writes valid
+    // JSON to stdout. execFileSync throws in that case, so getChecks must parse
+    // err.stdout rather than silently returning [].
+    let pollCount = 0;
+
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
+      if (cmd === "git" && argsArr?.[0] === "remote") {
+        return Buffer.from("https://github.com/test-owner/test-repo.git\n");
+      }
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+
+      if (key.includes("pr view") && key.includes("number,url,state,mergedAt")) {
+        return Buffer.from(JSON.stringify({ number: 10, url: "https://github.com/o/r/pull/10", state: "OPEN", mergedAt: null }) + "\n");
+      }
+      if (key.includes("pr view") && key.includes("state,mergedAt,url")) {
+        return Buffer.from(JSON.stringify({ state: "OPEN", mergedAt: null, url: "https://github.com/o/r/pull/10" }) + "\n");
+      }
+
+      if (key.includes("pr checks")) {
+        pollCount++;
+        if (pollCount <= 1) {
+          // First call: no checks yet, exits 0.
+          return Buffer.from(JSON.stringify([]) + "\n");
+        }
+        // Second call: CI failed. gh exits 1 and puts JSON in stdout.
+        const failureJson = Buffer.from(JSON.stringify([
+          { name: "ci/build", state: "fail", conclusion: "failure" },
+        ]) + "\n");
+        const err: any = new Error("Command failed: gh pr checks");
+        err.status = 1;
+        err.stdout = failureJson;
+        err.stderr = Buffer.from("");
+        throw err;
+      }
+
+      if (key.includes("/reviews") || key.includes("/comments")) {
+        return Buffer.from(JSON.stringify([]) + "\n");
+      }
+
+      throw new Error(`Unexpected gh command: ${key}`);
+    });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.outputs.feedback as string).toContain("CI Failure");
+    expect(result.outputs.feedback as string).toContain("ci/build");
+    expect(result.outputs.pr_url).toBe("https://github.com/o/r/pull/10");
+  });
+
+  it("detects pre-existing CI failure when initial gh pr checks exits non-zero", async () => {
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
+      if (cmd === "git" && argsArr?.[0] === "remote") {
+        return Buffer.from("https://github.com/test-owner/test-repo.git\n");
+      }
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+
+      if (key.includes("pr view") && key.includes("number,url,state,mergedAt")) {
+        return Buffer.from(JSON.stringify({ number: 10, url: "https://github.com/o/r/pull/10", state: "OPEN", mergedAt: null }) + "\n");
+      }
+
+      if (key.includes("pr checks")) {
+        const failureJson = Buffer.from(JSON.stringify([
+          { name: "ci/test", state: "fail", conclusion: "failure" },
+        ]) + "\n");
+        const err: any = new Error("Command failed: gh pr checks");
+        err.status = 1;
+        err.stdout = failureJson;
+        err.stderr = Buffer.from("");
+        throw err;
+      }
+
+      if (key.includes("/reviews") || key.includes("/comments")) {
+        return Buffer.from(JSON.stringify([]) + "\n");
+      }
+
+      throw new Error(`Unexpected gh command: ${key}`);
+    });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Pre-existing");
+    expect(result.outputs.feedback as string).toContain("CI Failure");
+    expect(result.outputs.feedback as string).toContain("ci/test");
+  });
+
   it("bails immediately when PR is already in merge-conflict state", async () => {
     mockGh(new Map([
       ["pr view", {

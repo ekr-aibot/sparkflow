@@ -121,7 +121,24 @@ function getChecks(num: number, cwd: string, repoArgs: string[]): CheckResult[] 
       ["pr", "checks", String(num), ...repoArgs, "--json", "name,state,conclusion"],
       cwd,
     );
-  } catch {
+  } catch (err: unknown) {
+    // `gh pr checks` exits non-zero when any check has failed, but still writes
+    // valid JSON to stdout. Parse it so we surface failures instead of silently
+    // returning an empty list.
+    const raw = (err as any)?.stdout;
+    const text = raw instanceof Buffer
+      ? raw.toString().trim()
+      : typeof raw === "string"
+        ? raw.trim()
+        : "";
+    if (text) {
+      try {
+        const parsed: unknown = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed as CheckResult[];
+      } catch {
+        // stdout is not JSON — fall through
+      }
+    }
     return [];
   }
 }

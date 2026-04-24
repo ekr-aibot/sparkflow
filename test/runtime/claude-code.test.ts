@@ -132,6 +132,66 @@ describe("ClaudeCodeAdapter", () => {
       const result = adapter.extractJsonFromResult('  {"approved": false}  ');
       expect(result).toEqual({ approved: false });
     });
+
+    it("extracts JSON after a prose preamble", () => {
+      const result = adapter.extractJsonFromResult(
+        'Here is my decision:\n{"action":"file-issue","title":"x"}'
+      );
+      expect(result).toEqual({ action: "file-issue", title: "x" });
+    });
+
+    it("extracts JSON before a prose suffix", () => {
+      const result = adapter.extractJsonFromResult(
+        '{"approved":true,"review":"LGTM"}\n\nLet me know if you need adjustments.'
+      );
+      expect(result).toEqual({ approved: true, review: "LGTM" });
+    });
+
+    it("ignores `{` and `}` that appear inside quoted string values", () => {
+      const result = adapter.extractJsonFromResult(
+        '{"msg":"contains } and { chars","ok":true}'
+      );
+      expect(result).toEqual({ msg: "contains } and { chars", ok: true });
+    });
+
+    it("honors backslash-escaped quotes inside strings", () => {
+      const result = adapter.extractJsonFromResult(
+        '{"msg":"with \\"escaped\\" quote"}'
+      );
+      expect(result).toEqual({ msg: 'with "escaped" quote' });
+    });
+
+    it("handles nested objects when embedded in prose", () => {
+      const result = adapter.extractJsonFromResult(
+        'decision follows:\n{"action":"redispatch","meta":{"retry":1}}\ndone.'
+      );
+      expect(result).toEqual({ action: "redispatch", meta: { retry: 1 } });
+    });
+
+    it("strips a ```json code fence wrapper", () => {
+      const result = adapter.extractJsonFromResult(
+        '```json\n{"approved":true}\n```'
+      );
+      expect(result).toEqual({ approved: true });
+    });
+
+    it("returns the first JSON object when multiple are present", () => {
+      const result = adapter.extractJsonFromResult(
+        '{"a":1}\n\nsecond thought: {"a":2}'
+      );
+      expect(result).toEqual({ a: 1 });
+    });
+
+    it("returns null when the text contains no complete JSON object", () => {
+      expect(
+        adapter.extractJsonFromResult('prose only { with an opening brace')
+      ).toBeNull();
+    });
+
+    it("returns null for empty input", () => {
+      expect(adapter.extractJsonFromResult("")).toBeNull();
+      expect(adapter.extractJsonFromResult("   ")).toBeNull();
+    });
   });
 
   describe("applySuccessGate", () => {

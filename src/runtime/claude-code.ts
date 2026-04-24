@@ -19,6 +19,40 @@ function streamJsonUserMessage(text: string): string {
   return JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
 }
 
+/**
+ * Given a string and the index of an opening `{`, return the index of the
+ * matching closing `}`, honoring JSON string literals (`"..."` with `\"` and
+ * `\\` escapes) so braces inside strings don't change depth. Returns -1 if
+ * unmatched.
+ */
+function findMatchingBrace(s: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (c === "\\") {
+        escaped = true;
+      } else if (c === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === "\"") {
+      inString = true;
+    } else if (c === "{") {
+      depth++;
+    } else if (c === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 export class ClaudeCodeAdapter implements RuntimeAdapter {
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
     const runtime = ctx.runtime as ClaudeCodeRuntime;
@@ -302,18 +336,36 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
   /**
    * Parses a result text string as a flat JSON object.
-   * Returns the parsed object, or null if the text is not valid JSON or not an object.
+   * Returns the parsed object, or null if no JSON object can be found.
+   *
+   * Fast path: the whole trimmed text parses as a JSON object.
+   * Fallback: scan for `{...}` blocks embedded in prose and parse the first
+   * one that yields a plain object. This tolerates preambles ("Here's my
+   * decision: {...}") and trailing prose ("{...}\n\nLet me know if..."),
+   * which models emit despite instructions to the contrary.
    */
   extractJsonFromResult(resultText: string): Record<string, unknown> | null {
+    const trimmed = resultText.trim();
     try {
-      const val = JSON.parse(resultText.trim());
+      const val = JSON.parse(trimmed);
       if (typeof val === "object" && val !== null && !Array.isArray(val)) {
         return val as Record<string, unknown>;
       }
-      return null;
-    } catch {
-      return null;
+    } catch { /* fall through */ }
+
+    for (let i = 0; i < trimmed.length; i++) {
+      if (trimmed[i] !== "{") continue;
+      const end = findMatchingBrace(trimmed, i);
+      if (end === -1) continue;
+      const slice = trimmed.slice(i, end + 1);
+      try {
+        const val = JSON.parse(slice);
+        if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+          return val as Record<string, unknown>;
+        }
+      } catch { /* try next candidate */ }
     }
+    return null;
   }
 
   /**

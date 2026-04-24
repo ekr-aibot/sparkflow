@@ -40,13 +40,13 @@ describe("resolveTemplate", () => {
   it("returns placeholder when referencing a step with no outputs", () => {
     const outputs = new Map<string, Record<string, unknown>>();
     const result = resolveTemplate("${steps.missing.output.x}", outputs);
-    expect(result).toBe('[no output from step "missing"]');
+    expect(result).toBe('<sparkflow:missing-step step="missing">');
   });
 
   it("returns placeholder when referencing a non-existent output field", () => {
     const outputs = new Map([["author", { summary: "ok" }]]);
     const result = resolveTemplate("${steps.author.output.missing}", outputs);
-    expect(result).toBe('[no output "missing" from step "author"]');
+    expect(result).toBe('<sparkflow:missing-output step="author" field="missing">');
   });
 
   it("returns text unchanged when no templates present", () => {

@@ -956,7 +956,7 @@ function connectEvents() {
         renderRepoSelector();
       }
       if (Array.isArray(data.jobs)) {
-        state.jobs = data.jobs;
+        state.jobs = data.jobs.slice().sort((a, b) => a.startTime - b.startTime);
         renderJobs();
         updateJobTabLabels();
         updateNudgeBars();

@@ -40,6 +40,17 @@ export interface EngineOptions {
   verbose?: boolean;
   /** Emit structured JSON status events on stderr for dashboard integration. */
   statusJson?: boolean;
+  /**
+   * Resume the workflow from this step instead of the entry step.
+   * All steps that are ancestors of this step (via on_success edges) are
+   * pre-seeded as "succeeded" so the engine skips them.
+   */
+  resumeFromStep?: string;
+  /**
+   * Reuse an existing worktree directory instead of creating a new one.
+   * Used by resume mode to preserve committed work from a prior run.
+   */
+  existingWorktreePath?: string;
 }
 
 export interface RunResult {

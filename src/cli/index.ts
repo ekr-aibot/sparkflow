@@ -155,6 +155,18 @@ async function main(): Promise<void> {
     const verbose = args.includes("--verbose");
     const statusJson = args.includes("--status-json");
 
+    let resumeFromStep: string | undefined;
+    const resumeFromIndex = args.indexOf("--resume-from");
+    if (resumeFromIndex !== -1 && args[resumeFromIndex + 1]) {
+      resumeFromStep = args[resumeFromIndex + 1];
+    }
+
+    let existingWorktreePath: string | undefined;
+    const existingWorktreeIndex = args.indexOf("--existing-worktree");
+    if (existingWorktreeIndex !== -1 && args[existingWorktreeIndex + 1]) {
+      existingWorktreePath = resolve(args[existingWorktreeIndex + 1]);
+    }
+
     const workflowDir = dirname(resolvedWorkflowPath);
 
     // When --status-json is active, use a logger that emits JSON events on stderr
@@ -173,6 +185,8 @@ async function main(): Promise<void> {
       logger,
       statusJson,
       config: projectConfig,
+      resumeFromStep,
+      existingWorktreePath,
     });
 
     if (statusJson) {

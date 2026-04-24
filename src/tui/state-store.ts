@@ -52,6 +52,15 @@ export class StateStore {
     return jobs;
   }
 
+  loadJob(id: string): PersistedJob | null {
+    try {
+      const raw = readFileSync(join(this.dir, `${id}.json`), "utf-8");
+      return JSON.parse(raw) as PersistedJob;
+    } catch {
+      return null;
+    }
+  }
+
   removeJob(id: string): void {
     try {
       unlinkSync(join(this.dir, `${id}.json`));

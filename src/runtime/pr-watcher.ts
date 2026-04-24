@@ -16,7 +16,7 @@ interface PrInfo {
 interface CheckResult {
   name: string;
   state: string;
-  conclusion: string;
+  bucket: string;
 }
 
 interface Review {
@@ -118,7 +118,7 @@ function findUpstreamPrUrl(ctx: RuntimeContext): string | null {
 function getChecks(num: number, cwd: string, repoArgs: string[]): CheckResult[] {
   try {
     return ghJson<CheckResult[]>(
-      ["pr", "checks", String(num), ...repoArgs, "--json", "name,state,conclusion"],
+      ["pr", "checks", String(num), ...repoArgs, "--json", "name,state,bucket"],
       cwd,
     );
   } catch (err: unknown) {
@@ -184,15 +184,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const FAILED_CONCLUSIONS = new Set([
-  "failure", "FAILURE",
-  "cancelled", "CANCELLED",
-  "timed_out", "TIMED_OUT",
-  "action_required", "ACTION_REQUIRED",
-]);
-
-function isFailedConclusion(conclusion: string): boolean {
-  return FAILED_CONCLUSIONS.has(conclusion);
+// `gh pr checks --json` bucket values: pass, fail, pending, skipping, cancel
+function isFailedBucket(bucket: string): boolean {
+  return bucket === "fail" || bucket === "cancel";
 }
 
 export class PrWatcherAdapter implements RuntimeAdapter {
@@ -276,9 +270,9 @@ export class PrWatcherAdapter implements RuntimeAdapter {
       : getOwnerRepo(ctx.cwd);
 
     const initialChecks = getChecks(pr.number, ctx.cwd, repoArgs);
-    const initialFailed = initialChecks.filter((c) => isFailedConclusion(c.conclusion));
+    const initialFailed = initialChecks.filter((c) => isFailedBucket(c.bucket));
     if (initialFailed.length > 0) {
-      const details = initialFailed.map((c) => `- ${c.name}: ${c.conclusion}`).join("\n");
+      const details = initialFailed.map((c) => `- ${c.name}: ${c.bucket}`).join("\n");
       ctx.logger?.info(`[${ctx.stepId}] pre-existing CI failures detected`);
       return {
         success: false,
@@ -362,11 +356,11 @@ export class PrWatcherAdapter implements RuntimeAdapter {
 
       // Check for CI failures
       const checks = getChecks(pr.number, ctx.cwd, repoArgs);
-      const failures = checks.filter((c) => isFailedConclusion(c.conclusion));
+      const failures = checks.filter((c) => isFailedBucket(c.bucket));
 
       if (failures.length > 0) {
         const details = failures
-          .map((c) => `- ${c.name}: ${c.conclusion}`)
+          .map((c) => `- ${c.name}: ${c.bucket}`)
           .join("\n");
         ctx.logger?.info(`[${ctx.stepId}] CI failures detected`);
         return {
@@ -441,10 +435,8 @@ export class PrWatcherAdapter implements RuntimeAdapter {
 
       // All checks passed and no blocking reviews → success
       if (checks.length > 0) {
-        const allCompleted = checks.every(
-          (c) => c.state === "completed" || c.state === "COMPLETED",
-        );
-        const noneFailed = checks.every((c) => !isFailedConclusion(c.conclusion));
+        const allCompleted = checks.every((c) => c.bucket !== "pending");
+        const noneFailed = checks.every((c) => !isFailedBucket(c.bucket));
         if (allCompleted && noneFailed) {
           ctx.logger?.info(`[${ctx.stepId}] all checks passed`);
           return {

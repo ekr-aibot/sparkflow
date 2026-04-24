@@ -168,7 +168,7 @@ describe("PrWatcherAdapter", () => {
       // Initial checks call — returns a pre-existing failure
       if (key.includes("pr checks")) {
         return Buffer.from(JSON.stringify([
-          { name: "ci/build", state: "completed", conclusion: "failure" },
+          { name: "ci/build", state: "completed", bucket: "fail" },
         ]) + "\n");
       }
 
@@ -220,7 +220,7 @@ describe("PrWatcherAdapter", () => {
           return Buffer.from(JSON.stringify([]) + "\n");
         }
         return Buffer.from(JSON.stringify([
-          { name: "build", state: "completed", conclusion: "failure" },
+          { name: "build", state: "completed", bucket: "fail" },
         ]) + "\n");
       }
 
@@ -319,7 +319,7 @@ describe("PrWatcherAdapter", () => {
           return Buffer.from(JSON.stringify([]) + "\n");
         }
         return Buffer.from(JSON.stringify([
-          { name: "ci/test", state: "completed", conclusion: "timed_out" },
+          { name: "ci/test", state: "completed", bucket: "cancel" },
         ]) + "\n");
       }
 
@@ -370,7 +370,7 @@ describe("PrWatcherAdapter", () => {
         }
         // Second call: CI failed. gh exits 1 and puts JSON in stdout.
         const failureJson = Buffer.from(JSON.stringify([
-          { name: "ci/build", state: "fail", conclusion: "failure" },
+          { name: "ci/build", state: "fail", bucket: "fail" },
         ]) + "\n");
         const err: any = new Error("Command failed: gh pr checks");
         err.status = 1;
@@ -413,7 +413,7 @@ describe("PrWatcherAdapter", () => {
 
       if (key.includes("pr checks")) {
         const failureJson = Buffer.from(JSON.stringify([
-          { name: "ci/test", state: "fail", conclusion: "failure" },
+          { name: "ci/test", state: "fail", bucket: "fail" },
         ]) + "\n");
         const err: any = new Error("Command failed: gh pr checks");
         err.status = 1;

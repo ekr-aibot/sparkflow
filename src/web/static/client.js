@@ -956,6 +956,9 @@ function connectEvents() {
         renderRepoSelector();
       }
       if (Array.isArray(data.jobs)) {
+        // Sort by startTime so the list order is stable across status updates.
+        // Without this, Map iteration order on the backend can shift when jobs
+        // are added/removed, causing cards to jump position in the UI.
         state.jobs = data.jobs.slice().sort((a, b) => a.startTime - b.startTime);
         renderJobs();
         updateJobTabLabels();

@@ -90,7 +90,16 @@ export class GeminiAdapter implements RuntimeAdapter {
       wroteSettings = true;
     }
 
-    const orientation = `[sparkflow] Your working directory is ${ctx.cwd}. All tool calls must operate inside that directory. Do not use paths under ~/.gemini/tmp/ or outside the working directory.`;
+    const orientationLines = [
+      `[sparkflow] Your working directory is ${ctx.cwd}. All tool calls must operate inside that directory. Do not use paths under ~/.gemini/tmp/ or outside the working directory.`,
+    ];
+    if (ctx.git?.pr_repo) orientationLines.push(`GitHub repository: ${ctx.git.pr_repo}`);
+    if (ctx.git?.base) orientationLines.push(`Base branch: ${ctx.git.base}`);
+    const issuesRepo = ctx.git?.issues_repo ?? ctx.git?.pr_repo;
+    if (issuesRepo && issuesRepo !== ctx.git?.pr_repo) {
+      orientationLines.push(`Issues repository: ${issuesRepo}`);
+    }
+    const orientation = orientationLines.join("\n");
     const parts: string[] = [orientation];
     if (ctx.prompt) parts.push(ctx.prompt);
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);

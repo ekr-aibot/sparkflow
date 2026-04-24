@@ -156,6 +156,57 @@ describe("GeminiAdapter", () => {
     expect(result.outputs._response).toContain("actual prompt");
   });
 
+  it("includes GitHub targets from ctx.git in the orientation preamble", async () => {
+    const ctx = makeCtx({
+      prompt: "do the thing",
+      git: {
+        pr_repo: "owner/myrepo",
+        base: "main",
+      },
+    });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs._response).toContain("GitHub repository: owner/myrepo");
+    expect(result.outputs._response).toContain("Base branch: main");
+  });
+
+  it("includes issues_repo in orientation when it differs from pr_repo", async () => {
+    const ctx = makeCtx({
+      prompt: "check issues",
+      git: {
+        pr_repo: "owner/myrepo",
+        issues_repo: "owner/issues-tracker",
+        base: "main",
+      },
+    });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs._response).toContain("GitHub repository: owner/myrepo");
+    expect(result.outputs._response).toContain("Issues repository: owner/issues-tracker");
+  });
+
+  it("omits issues_repo from orientation when it matches pr_repo", async () => {
+    const ctx = makeCtx({
+      prompt: "check issues",
+      git: {
+        pr_repo: "owner/myrepo",
+        issues_repo: "owner/myrepo",
+        base: "main",
+      },
+    });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs._response).not.toContain("Issues repository:");
+  });
+
+  it("omits GitHub lines from orientation when ctx.git is absent", async () => {
+    const ctx = makeCtx({ prompt: "no git config" });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs._response).not.toContain("GitHub repository:");
+    expect(result.outputs._response).not.toContain("Base branch:");
+  });
+
   it("fails if the cwd does not exist", async () => {
     const ctx = makeCtx({ cwd: "/tmp/this-path-should-not-exist-hopefully" });
     const result = await adapter.run(ctx);

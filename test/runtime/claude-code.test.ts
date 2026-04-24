@@ -66,6 +66,69 @@ describe("ClaudeCodeAdapter", () => {
     expect(result.error).toMatch(/cwd does not exist/);
   });
 
+  describe("isQuotaError", () => {
+    it("detects rate limit in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "Error: rate limit exceeded" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(true);
+    });
+
+    it("detects usage limit in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "You have exceeded your usage limit" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(true);
+    });
+
+    it("detects quota in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "quota exhausted" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(true);
+    });
+
+    it("detects overloaded in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "The API is currently overloaded" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(true);
+    });
+
+    it("detects 529 in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "HTTP 529: service overloaded" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(true);
+    });
+
+    it("detects rate_limit subtype", () => {
+      const parsed = { is_error: true, subtype: "rate_limit", result: "" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(true);
+    });
+
+    it("detects rate limit in stderr", () => {
+      expect(adapter.isQuotaError(null, "Error: rate limit exceeded, please retry")).toBe(true);
+    });
+
+    it("detects overloaded in stderr", () => {
+      expect(adapter.isQuotaError(null, "API overloaded, try again later")).toBe(true);
+    });
+
+    it("detects too many requests in stderr", () => {
+      expect(adapter.isQuotaError(null, "429 Too Many Requests")).toBe(true);
+    });
+
+    it("returns false for non-error result events", () => {
+      const parsed = { is_error: false, subtype: "success", result: "done" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(false);
+    });
+
+    it("returns false for token limit errors", () => {
+      const parsed = { is_error: true, subtype: "error_max_turns", result: "context length exceeded" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(false);
+    });
+
+    it("returns false for generic errors", () => {
+      const parsed = { is_error: true, subtype: "other_error", result: "something went wrong" };
+      expect(adapter.isQuotaError(parsed, "network timeout")).toBe(false);
+    });
+
+    it("returns false when parsed is null and stderr has no quota keywords", () => {
+      expect(adapter.isQuotaError(null, "exit code 1")).toBe(false);
+    });
+  });
+
   describe("isTokenLimitError", () => {
     it("detects error_max_turns subtype", () => {
       const parsed = { is_error: true, subtype: "error_max_turns", result: "" };

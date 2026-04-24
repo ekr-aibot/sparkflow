@@ -109,6 +109,7 @@ export class WorkflowEngine {
   private runWorktree?: string;
   private resumeFromStep?: string;
   private existingWorktreePath?: string;
+  private sleep: (ms: number) => Promise<void>;
 
   constructor(
     workflow: SparkflowWorkflow,
@@ -128,6 +129,7 @@ export class WorkflowEngine {
     this.interactionManager = new UserInteractionManager(this.logger);
     this.resumeFromStep = options.resumeFromStep;
     this.existingWorktreePath = options.existingWorktreePath;
+    this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
 
     this.adapters = adapters ?? new Map<string, RuntimeAdapter>([
       ["shell", new ShellAdapter()],
@@ -146,6 +148,7 @@ export class WorkflowEngine {
         retryCount: 0,
         inPlaceAttempt: 0,
         tokenLimitResumes: 0,
+        quotaWaitAttempts: 0,
         outputs: {},
         completedJoins: new Set(),
         pendingMessages: [],
@@ -616,6 +619,12 @@ export class WorkflowEngine {
             return;
           }
         }
+        if (result.quotaHit) {
+          await this.waitForQuotaReset(stepId);
+          status.state = "running";
+          await this.executeStep(stepId, message);
+          return;
+        }
         const errSuffix = result.error ? `: ${result.error}` : "";
         if (await this.shouldInPlaceRetry(stepId, errSuffix)) {
           // Re-enter execute without traversing on_failure or counting as upstream retry.
@@ -770,6 +779,27 @@ export class WorkflowEngine {
       const message = status.pendingMessages.shift();
       this.triggerStep(stepId, message);
     }
+  }
+
+  private static readonly QUOTA_BACKOFF_SECONDS = [60, 120, 300, 600, 1800, 3600];
+
+  private async waitForQuotaReset(stepId: string): Promise<void> {
+    const status = this.stepStatuses.get(stepId)!;
+    status.quotaWaitAttempts++;
+    const backoffIdx = Math.min(
+      status.quotaWaitAttempts - 1,
+      WorkflowEngine.QUOTA_BACKOFF_SECONDS.length - 1
+    );
+    const backoff = WorkflowEngine.QUOTA_BACKOFF_SECONDS[backoffIdx];
+    this.logger.info(
+      `[${stepId}] quota limit hit — waiting ${backoff}s before retry (attempt ${status.quotaWaitAttempts})`
+    );
+    if (this.statusJson) {
+      process.stderr.write(
+        JSON.stringify({ type: "quota_wait", step: stepId, wait_seconds: backoff, attempt: status.quotaWaitAttempts }) + "\n"
+      );
+    }
+    await this.sleep(backoff * 1000);
   }
 
   private static readonly MAX_TOKEN_LIMIT_RESUMES = 10;

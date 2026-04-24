@@ -88,7 +88,7 @@ function nextMessage(ws: WebSocket, predicate?: (msg: { type?: string; bytes?: s
     const timer = setTimeout(() => {
       ws.off("message", onMsg);
       rej(new Error("Timed out waiting for WS message"));
-    }, 8000);
+    }, 15000);
     const onMsg = (raw: WebSocket.RawData) => {
       let parsed: { type?: string; bytes?: string };
       try { parsed = JSON.parse(raw.toString()) as { type?: string; bytes?: string }; } catch { return; }

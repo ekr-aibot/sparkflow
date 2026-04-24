@@ -195,11 +195,106 @@ describe("PrCreatorAdapter", () => {
     expect(checkoutCall).toBeUndefined();
   });
 
-  it("fails immediately on push failure", async () => {
+  it("fails immediately on non-rebase push failure", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];
       if (cmd === "git" && argsArr?.[0] === "push") {
         throw new Error("remote: Permission denied");
+      }
+      if (cmd === "gh" && argsArr?.join(" ").includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      throw new Error(`Unexpected: ${cmd}`);
+    });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Failed to push");
+  });
+
+  it("force-pushes with --force-with-lease when branch was rebased", async () => {
+    const pushCalls: string[][] = [];
+    let capturedTitle = "";
+
+    // Mimic execFileSync's thrown-error shape for the non-fast-forward rejection.
+    const rebaseError = Object.assign(
+      new Error("Command failed: git push"),
+      {
+        stderr: Buffer.from(
+          " ! [rejected]        sparkflow/_run-71 -> sparkflow/_run-71 (non-fast-forward)\n" +
+          "error: failed to push some refs\n" +
+          "hint: Updates were rejected because the tip of your current branch is behind\n",
+        ),
+        stdout: Buffer.from(""),
+        status: 1,
+      },
+    );
+
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "push") {
+        pushCalls.push(argsArr);
+        // First push (no --force-with-lease) throws; second succeeds.
+        if (!argsArr.includes("--force-with-lease")) throw rebaseError;
+        return Buffer.from("");
+      }
+
+      if (cmd === "git" && argsArr?.[0] === "fetch") return Buffer.from("");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse" && argsArr?.[1] === "--verify") throw new Error("unknown ref");
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") return Buffer.from("sparkflow/_run-71\n");
+      if (cmd === "git" && argsArr?.[0] === "log") return Buffer.from("abc1234 Fix thing\n");
+      if (cmd === "git" && argsArr?.[0] === "diff") return Buffer.from(" src/foo.ts | 2 +-\n");
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd} ${argsArr?.join(" ")}`);
+      const key = argsArr.join(" ");
+      if (key.includes("repo view")) {
+        return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");
+      }
+      if (key.includes("pr create")) {
+        const titleIdx = argsArr.indexOf("--title");
+        if (titleIdx !== -1) capturedTitle = argsArr[titleIdx + 1];
+        return Buffer.from("https://github.com/o/r/pull/71\n");
+      }
+      throw new Error(`Unexpected gh: ${key}`);
+    });
+
+    mockSpawnClaude({ title: "Fix thing", summary: "- Fixed thing" });
+
+    const result = await adapter.run(makeCtx());
+    expect(result.success).toBe(true);
+    expect(result.outputs.pr_url).toBe("https://github.com/o/r/pull/71");
+
+    // Should have tried a normal push first, then a force-with-lease push.
+    expect(pushCalls.length).toBe(2);
+    expect(pushCalls[0]).not.toContain("--force-with-lease");
+    expect(pushCalls[1]).toContain("--force-with-lease");
+    expect(capturedTitle).toBe("Fix thing");
+  });
+
+  it("fails when --force-with-lease push also fails", async () => {
+    const forceError = Object.assign(
+      new Error("Command failed: git push --force-with-lease"),
+      {
+        stderr: Buffer.from("error: cannot lock ref: stale info\n"),
+        stdout: Buffer.from(""),
+        status: 1,
+      },
+    );
+    const rebaseError = Object.assign(
+      new Error("Command failed: git push"),
+      {
+        stderr: Buffer.from("! [rejected] branch (non-fast-forward)\n"),
+        stdout: Buffer.from(""),
+        status: 1,
+      },
+    );
+
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+      if (cmd === "git" && argsArr?.[0] === "push") {
+        if (argsArr.includes("--force-with-lease")) throw forceError;
+        throw rebaseError;
       }
       if (cmd === "gh" && argsArr?.join(" ").includes("repo view")) {
         return Buffer.from(JSON.stringify({ defaultBranchRef: { name: "main" } }) + "\n");

@@ -164,7 +164,8 @@ export class PrCreatorAdapter implements RuntimeAdapter {
     // Step 2: Push current branch to the configured remote.
     // Each workflow run uses an isolated worktree with its own branch,
     // so the branch is already unique — just push it.
-    // If the developer already pushed, warn but continue.
+    // If the branch was rebased the push will be rejected as non-fast-forward;
+    // retry with --force-with-lease in that case.
     try {
       execFileSync("git", ["push", "-u", pushRemote, "HEAD"], {
         cwd: ctx.cwd,
@@ -173,33 +174,53 @@ export class PrCreatorAdapter implements RuntimeAdapter {
       });
       ctx.logger?.info(`[${ctx.stepId}] pushed branch to ${pushRemote}`);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      // If the remote already has this branch with the same commits, that's fine
+      const errObj = err as { stderr?: Buffer; stdout?: Buffer; message?: string };
+      const combined = [
+        errObj.stderr?.toString() ?? "",
+        errObj.stdout?.toString() ?? "",
+        errObj.message ?? "",
+      ].join("\n");
+
       const alreadyUpToDate =
-        errMsg.includes("Everything up-to-date") ||
-        errMsg.includes("everything up-to-date");
+        combined.includes("Everything up-to-date") ||
+        combined.includes("everything up-to-date");
+
       if (alreadyUpToDate) {
         ctx.logger?.info(`[${ctx.stepId}] branch already pushed, continuing`);
-      } else {
-        // Try force-free push — maybe the developer pushed earlier commits
-        // and we just need to update. Attempt a regular push (non-force)
-        // one more time to surface the real error if it persists.
-        ctx.logger?.info(`[${ctx.stepId}] push failed (${errMsg}), retrying...`);
+      } else if (
+        combined.includes("non-fast-forward") ||
+        combined.includes("[rejected]") ||
+        combined.includes("fetch first") ||
+        combined.includes("Updates were rejected")
+      ) {
+        // Branch was rebased; force-push with lease so we don't silently
+        // overwrite any concurrent push to the same ref.
+        ctx.logger?.info(`[${ctx.stepId}] push rejected (rebased branch), retrying with --force-with-lease`);
         try {
-          execFileSync("git", ["push", "-u", pushRemote, "HEAD"], {
+          execFileSync("git", ["push", "-u", "--force-with-lease", pushRemote, "HEAD"], {
             cwd: ctx.cwd,
             stdio: "pipe",
             timeout: 60_000,
           });
-          ctx.logger?.info(`[${ctx.stepId}] pushed branch to remote on retry`);
-        } catch (retryErr) {
-          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          ctx.logger?.info(`[${ctx.stepId}] force-pushed branch to ${pushRemote}`);
+        } catch (forceErr) {
+          const forceObj = forceErr as { stderr?: Buffer; stdout?: Buffer; message?: string };
+          const forceMsg = [
+            forceObj.stderr?.toString() ?? "",
+            forceObj.message ?? "",
+          ].filter(Boolean).join(": ");
           return {
             success: false,
             outputs: {},
-            error: `Failed to push: ${retryMsg}`,
+            error: `Failed to push: ${forceMsg}`,
           };
         }
+      } else {
+        return {
+          success: false,
+          outputs: {},
+          error: `Failed to push: ${errObj.message ?? combined}`,
+        };
       }
     }
 

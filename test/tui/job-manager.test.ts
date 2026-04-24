@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { JobManager } from "../../src/tui/job-manager.js";
+import { StateStore } from "../../src/tui/state-store.js";
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -389,5 +390,81 @@ describe("JobManager startJob path canonicalization", () => {
 
   it("throws when a bare name cannot be resolved", () => {
     expect(() => manager.startJob("no-such-workflow")).toThrow();
+  });
+});
+
+describe("JobManager run_info and resume state", () => {
+  let manager: JobManager;
+  let tmpDir: string;
+  type InternalJobs = Map<string, { info: { state: string; failedStep?: string; pendingQuestion?: string; worktreePath?: string }; pid: number; child: { stdin: { write: (s: string) => void } } | null; pendingRequestId?: string }>;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-test-resume-"));
+    manager = new JobManager(tmpDir);
+  });
+
+  afterEach(() => {
+    manager.killAll();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("captures worktreePath from run_info event", () => {
+    const id = manager.startJob("/tmp/wf.json");
+    const handleStatusLine = (manager as unknown as { handleStatusLine: (id: string, line: string) => void }).handleStatusLine.bind(manager);
+
+    handleStatusLine(id, JSON.stringify({ type: "run_info", worktreePath: "/repo/.sparkflow-worktrees/abc123/_run" }));
+
+    const jobs = manager.getJobs();
+    expect(jobs[0].worktreePath).toBe("/repo/.sparkflow-worktrees/abc123/_run");
+  });
+
+  it("persists worktreePath when run_info is received", () => {
+    const id = manager.startJob("/tmp/wf.json");
+    const handleStatusLine = (manager as unknown as { handleStatusLine: (id: string, line: string) => void }).handleStatusLine.bind(manager);
+    const persistNow = (manager as unknown as { persistNow: (id: string) => void }).persistNow.bind(manager);
+
+    handleStatusLine(id, JSON.stringify({ type: "run_info", worktreePath: "/repo/.sparkflow-worktrees/deadbeef/_run" }));
+    persistNow(id);  // flush debounce immediately
+
+    const store = new StateStore(tmpDir);
+    const disk = store.loadJob(id);
+    expect(disk?.info.worktreePath).toBe("/repo/.sparkflow-worktrees/deadbeef/_run");
+  });
+
+  it("answerRecovery returns false when engine process has died", () => {
+    const id = manager.startJob("/tmp/wf.json");
+    const jobs = (manager as unknown as { jobs: InternalJobs }).jobs;
+    const job = jobs.get(id)!;
+
+    // Simulate the job being in failed_waiting state with a live child but dead pid
+    job.info.state = "failed_waiting";
+    job.info.failedStep = "developer";
+    job.info.pendingQuestion = "recover: developer";
+    job.pendingRequestId = "req-abc";
+    // Use a pid that almost certainly doesn't exist
+    job.pid = 2147483647;
+
+    const result = manager.answerRecovery(id, "retry");
+    expect(result).toBe(false);
+  });
+
+  it("job_failed event persists failed_waiting state to disk", () => {
+    const id = manager.startJob("/tmp/wf.json");
+    const handleStatusLine = (manager as unknown as { handleStatusLine: (id: string, line: string) => void }).handleStatusLine.bind(manager);
+    const persistNow = (manager as unknown as { persistNow: (id: string) => void }).persistNow.bind(manager);
+
+    handleStatusLine(id, JSON.stringify({
+      type: "job_failed",
+      step: "reviewer",
+      error: "hit rate limit",
+      request_id: "req-123",
+    }));
+    // Flush the scheduled persist immediately
+    persistNow(id);
+
+    const store = new StateStore(tmpDir);
+    const disk = store.loadJob(id)!;
+    expect(disk.info.state).toBe("failed_waiting");
+    expect(disk.info.failedStep).toBe("reviewer");
   });
 });

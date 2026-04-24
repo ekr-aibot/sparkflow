@@ -1176,3 +1176,131 @@ describe("WorkflowEngine.pushNudge", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("WorkflowEngine resume mode (resumeFromStep)", () => {
+  it("skips ancestors and starts from the resume step in a linear workflow", async () => {
+    const executed: string[] = [];
+    const workflow = makeWorkflow({
+      steps: {
+        a: { name: "A", interactive: false, on_success: [{ step: "b" }] },
+        b: { name: "B", interactive: false, on_success: [{ step: "c" }] },
+        c: { name: "C", interactive: false },
+      },
+      entry: "a",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executed.push(ctx.stepId);
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger, resumeFromStep: "b" }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    // "a" is a success-edge ancestor of "b" — it must be skipped
+    expect(executed).not.toContain("a");
+    // "b" and "c" must both run
+    expect(executed).toContain("b");
+    expect(executed).toContain("c");
+    // "a" was pre-seeded as succeeded
+    expect(result.stepResults.get("a")?.state).toBe("succeeded");
+    expect(result.stepResults.get("b")?.state).toBe("succeeded");
+    expect(result.stepResults.get("c")?.state).toBe("succeeded");
+  });
+
+  it("resumes from the entry step when there are no ancestors", async () => {
+    const executed: string[] = [];
+    const workflow = makeWorkflow({
+      steps: {
+        a: { name: "A", interactive: false, on_success: [{ step: "b" }] },
+        b: { name: "B", interactive: false },
+      },
+      entry: "a",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executed.push(ctx.stepId);
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger, resumeFromStep: "a" }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    expect(executed).toContain("a");
+    expect(executed).toContain("b");
+  });
+
+  it("resumes from a step with a join, satisfying both join deps via ancestor seeding", async () => {
+    const executed: string[] = [];
+    // Workflow: entry=a, a→[b,c], b→d, c→d (join b+c required for d), d→e
+    const workflow = makeWorkflow({
+      steps: {
+        a: { name: "A", interactive: false, on_success: [{ step: "b" }, { step: "c" }] },
+        b: { name: "B", interactive: false, on_success: [{ step: "d" }] },
+        c: { name: "C", interactive: false, on_success: [{ step: "d" }] },
+        d: { name: "D", interactive: false, join: ["b", "c"], on_success: [{ step: "e" }] },
+        e: { name: "E", interactive: false },
+      },
+      entry: "a",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executed.push(ctx.stepId);
+      return { success: true, outputs: {} };
+    });
+
+    // Resume from d: ancestors (a,b,c) are pre-seeded; d's join deps are satisfied.
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger, resumeFromStep: "d" }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    expect(executed).not.toContain("a");
+    expect(executed).not.toContain("b");
+    expect(executed).not.toContain("c");
+    expect(executed).toContain("d");
+    expect(executed).toContain("e");
+  });
+
+  it("does not treat on_failure targets as ancestors", async () => {
+    // Workflow: developer→reviewer, reviewer on_failure→developer (retry loop).
+    // If we resume from developer, reviewer should NOT be pre-seeded as succeeded
+    // (it was not on the success path to developer).
+    const executed: string[] = [];
+    const workflow = makeWorkflow({
+      steps: {
+        developer: {
+          name: "Developer",
+          interactive: false,
+          on_success: [{ step: "reviewer" }],
+        },
+        reviewer: {
+          name: "Reviewer",
+          interactive: false,
+          on_failure: [{ step: "developer" }],
+        },
+      },
+      entry: "developer",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executed.push(ctx.stepId);
+      return { success: true, outputs: {} };
+    });
+
+    // Resume from developer — no success-edge ancestors, so nothing is pre-seeded.
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger, resumeFromStep: "developer" }, adapters);
+    const result = await engine.run();
+
+    expect(result.success).toBe(true);
+    // developer runs (it's the resume step), then reviewer runs after it succeeds
+    expect(executed).toContain("developer");
+    expect(executed).toContain("reviewer");
+    // reviewer was NOT pre-seeded (on_failure edge is ignored in ancestor calc)
+    const reviewerEntry = result.stepResults.get("reviewer");
+    expect(reviewerEntry?.state).toBe("succeeded");
+    // "reviewer" was reached by running normally, not by being pre-seeded
+    expect(executed.indexOf("reviewer")).toBeGreaterThan(executed.indexOf("developer"));
+  });
+});

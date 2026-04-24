@@ -826,6 +826,10 @@ export class WorkflowEngine {
  * Find all steps that are ancestors of targetStep via on_success edges only
  * (not on_failure). These are the steps that must have succeeded for execution
  * to reach targetStep via the happy path.
+ *
+ * Assumes the on_success subgraph is a DAG (no cycles). Workflow validation
+ * enforces this — on_failure cycles are the only legal back-edges and are
+ * excluded here intentionally.
  */
 function findSuccessAncestors(workflow: SparkflowWorkflow, targetStep: string): Set<string> {
   // Build reverse graph: step → set of steps that have an on_success transition to it
@@ -836,7 +840,7 @@ function findSuccessAncestors(workflow: SparkflowWorkflow, targetStep: string): 
       reverse.get(t.step)!.add(id);
     }
   }
-  // BFS backwards from targetStep
+  // BFS backwards from targetStep (targetStep itself is not added to ancestors)
   const ancestors = new Set<string>();
   const queue = [targetStep];
   while (queue.length > 0) {

@@ -703,10 +703,19 @@ export class JobManager {
         const diskJob = this.store.loadJob(jobId);
         worktreePath = diskJob?.info.worktreePath ?? extractWorktreePathFromLog(job.logPath);
       }
+      if (!worktreePath) {
+        return {
+          ok: false,
+          error: "cannot resume: worktree path is unknown — use mode=fresh to restart from scratch",
+        };
+      }
 
-      // Kill the old process if it is still alive.
+      // Kill the old process if it is still alive. Guard with isAlive before
+      // calling killJobAndWait: if the engine already died while the TUI daemon
+      // was still running, the child.close event has already fired and will not
+      // replay — awaiting a fresh "close" listener would deadlock forever.
       if (job.info.state !== "succeeded" && job.info.state !== "failed") {
-        if (job.child) {
+        if (job.child && isAlive(job.pid)) {
           await this.killJobAndWait(jobId);
         } else if (job.pid > 0 && isAlive(job.pid)) {
           try { process.kill(job.pid, "SIGTERM"); } catch { /* already gone */ }
@@ -828,18 +837,19 @@ export class JobManager {
 function extractWorktreePathFromLog(logPath: string): string | undefined {
   try {
     const content = readFileSync(logPath, "utf-8");
-    // Try structured run_info JSON events first (new format)
     for (const line of content.split("\n")) {
+      // Structured run_info JSON event (new format — both stdout and stderr go to logFd).
       try {
         const event = JSON.parse(line) as Record<string, unknown>;
         if (event.type === "run_info" && typeof event.worktreePath === "string") {
           return event.worktreePath;
         }
       } catch {
-        // not JSON — try human-readable format
-        const match = line.match(/\[sparkflow\] (?:Using (?:isolated|fork) worktree|Resuming with existing worktree): (.+)/);
-        if (match) return match[1].trim();
+        // not a JSON object — fall through to human-readable match below
       }
+      // Human-readable log line (legacy format emitted by the verbose logger).
+      const match = line.match(/\[sparkflow\] (?:Using (?:isolated|fork) worktree|Resuming with existing worktree): (.+)/);
+      if (match) return match[1].trim();
     }
   } catch {
     // log file missing or unreadable

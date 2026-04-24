@@ -731,6 +731,7 @@ export class JobManager {
         planText: job.originalPlanText,
         slug: job.info.slug,
         description: job.info.description,
+        kind: job.info.kind,
         resumeFrom: failedStep,
         existingWorktree: worktreePath,
       });
@@ -759,6 +760,7 @@ export class JobManager {
       planText: job.originalPlanText,
       slug: job.info.slug,
       description: job.info.description,
+      kind: job.info.kind,
     });
 
     // Remove the old entry from the dashboard so the restarted job replaces it.

@@ -934,6 +934,174 @@ describe("WorkflowEngine", () => {
     });
   });
 
+  describe("quota wait", () => {
+    const noSleep = async (_ms: number) => {};
+
+    it("retries a step that returns quotaHit without counting against retry limits", async () => {
+      let callCount = 0;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "quota-test",
+        entry: "worker",
+        defaults: { runtime: { type: "shell", command: "echo" }, max_retries: 1 },
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+          },
+        },
+      };
+
+      const adapters = makeAdapters(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return { success: false, outputs: {}, error: "quota exceeded", quotaHit: true };
+        }
+        return { success: true, outputs: {} };
+      });
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger, sleep: noSleep }, adapters);
+      const result = await engine.run();
+
+      expect(result.success).toBe(true);
+      expect(callCount).toBe(2);
+    });
+
+    it("retries multiple quota hits before eventual success", async () => {
+      let callCount = 0;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "quota-multi-test",
+        entry: "worker",
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+          },
+        },
+      };
+
+      const adapters = makeAdapters(async () => {
+        callCount++;
+        if (callCount < 4) {
+          return { success: false, outputs: {}, error: "overloaded", quotaHit: true };
+        }
+        return { success: true, outputs: {} };
+      });
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger, sleep: noSleep }, adapters);
+      const result = await engine.run();
+
+      expect(result.success).toBe(true);
+      expect(callCount).toBe(4);
+    });
+
+    it("increments quotaWaitAttempts on each quota hit", async () => {
+      let callCount = 0;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "quota-attempts-test",
+        entry: "worker",
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+          },
+        },
+      };
+
+      const adapters = makeAdapters(async () => {
+        callCount++;
+        if (callCount <= 3) {
+          return { success: false, outputs: {}, error: "quota", quotaHit: true };
+        }
+        return { success: true, outputs: {} };
+      });
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger, sleep: noSleep }, adapters);
+      const result = await engine.run();
+
+      expect(result.success).toBe(true);
+      expect(result.stepResults.get("worker")?.quotaWaitAttempts).toBe(3);
+    });
+
+    it("does not fire on_failure when quota is hit", async () => {
+      let callCount = 0;
+      let fallbackRan = false;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "quota-no-failure",
+        entry: "worker",
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            on_failure: [{ step: "fallback" }],
+          },
+          fallback: {
+            name: "Fallback",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+          },
+        },
+      };
+
+      const adapters = makeAdapters(async (ctx) => {
+        if (ctx.stepId === "fallback") {
+          fallbackRan = true;
+          return { success: true, outputs: {} };
+        }
+        callCount++;
+        if (callCount === 1) {
+          return { success: false, outputs: {}, error: "rate limit", quotaHit: true };
+        }
+        return { success: true, outputs: {} };
+      });
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger, sleep: noSleep }, adapters);
+      const result = await engine.run();
+
+      expect(result.success).toBe(true);
+      expect(fallbackRan).toBe(false);
+    });
+
+    it("uses increasing backoff delays", async () => {
+      const delays: number[] = [];
+      const mockSleep = async (ms: number) => { delays.push(ms); };
+      let callCount = 0;
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "quota-backoff-test",
+        entry: "worker",
+        steps: {
+          worker: {
+            name: "Worker",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+          },
+        },
+      };
+
+      const adapters = makeAdapters(async () => {
+        callCount++;
+        if (callCount <= 3) {
+          return { success: false, outputs: {}, error: "quota", quotaHit: true };
+        }
+        return { success: true, outputs: {} };
+      });
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger, sleep: mockSleep }, adapters);
+      await engine.run();
+
+      // Backoff should increase: 60s, 120s, 300s
+      expect(delays).toEqual([60_000, 120_000, 300_000]);
+    });
+  });
+
   describe("nudge queue", () => {
     it("provides a NudgeQueue to claude-code steps", async () => {
       let capturedQueue: unknown;

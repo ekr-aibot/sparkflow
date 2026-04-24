@@ -249,11 +249,15 @@ export class GeminiAdapter implements RuntimeAdapter {
           }
         }
 
+        const QUOTA_RE = /quota|resource.{0,10}exhausted|usage.{0,10}limit|rate.{0,5}limit|too many requests|overloaded|429/i;
+        const quotaHit = !success && QUOTA_RE.test(stderr);
+
         resolveP({
           success,
           outputs,
           exitCode,
           error: success ? undefined : stderr.trim() || `Exit code ${exitCode}`,
+          quotaHit,
         });
       });
 

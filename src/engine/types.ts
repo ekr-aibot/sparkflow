@@ -9,6 +9,8 @@ export interface StepStatus {
   inPlaceAttempt: number;
   /** Number of times the step has been auto-resumed after hitting a token/context limit. */
   tokenLimitResumes: number;
+  /** Number of times the step has waited for a quota/rate-limit reset. */
+  quotaWaitAttempts: number;
   outputs: Record<string, unknown>;
   completedJoins: Set<string>;
   pendingMessages: string[];
@@ -51,6 +53,8 @@ export interface EngineOptions {
    * Used by resume mode to preserve committed work from a prior run.
    */
   existingWorktreePath?: string;
+  /** Override the sleep implementation. Defaults to setTimeout-based. Used in tests to avoid real delays. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface RunResult {

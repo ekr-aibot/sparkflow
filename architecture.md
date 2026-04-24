@@ -51,6 +51,14 @@ When a `sparkflow-run` engine process dies while a job is in `failed_waiting` st
 
 **`answerRecovery` liveness check**: `answerRecovery` now verifies the engine process is alive before writing to its stdin, preventing in-memory state from drifting to `"running"` when the process is already dead.
 
+### Quota / Rate-Limit Handling
+
+When a runtime adapter returns `quotaHit: true`, the engine waits with exponential backoff (60 s → 120 s → 300 s → 600 s → 1800 s → 3600 s) and retries the step without counting the wait against `max_retries` or `retry.attempts`. This avoids treating a temporary API quota exhaustion as a permanent job failure. `StepStatus.quotaWaitAttempts` tracks how many times the step has waited. The dashboard receives a `{"type":"quota_wait", "step": …, "wait_seconds": …, "attempt": …}` event on stderr.
+
+Detection patterns (both `ClaudeCodeAdapter.isQuotaError` and `GeminiAdapter`):
+- Claude: `is_error` result events or stderr containing "rate limit", "quota", "overloaded", "too many requests", "529"
+- Gemini: stderr containing any of the above plus "RESOURCE_EXHAUSTED"
+
 ### Worktree Manager (`src/engine/worktree.ts`)
 Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout.
 

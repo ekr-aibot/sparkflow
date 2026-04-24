@@ -64,6 +64,8 @@ export interface RuntimeResult {
   sessionId?: string;
   /** True when the run failed due to hitting the context/token limit, signalling the engine to auto-resume. */
   tokenLimitHit?: boolean;
+  /** True when the run failed due to hitting a quota/rate limit, signalling the engine to wait and retry. */
+  quotaHit?: boolean;
 }
 
 export interface RuntimeAdapter {

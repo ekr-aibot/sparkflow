@@ -231,6 +231,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         const outputs: Record<string, unknown> = {};
         const parsed = resultEvent;
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
+        const quotaHit = !success && !tokenLimitHit && this.isQuotaError(parsed, stderr);
 
         if (success && parsed) {
           // For json-typed outputs, parse the result text as JSON and extract
@@ -281,6 +282,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           error: success ? undefined : (gateError ?? (stderr.trim() || `Exit code ${exitCode}`)),
           sessionId,
           tokenLimitHit,
+          quotaHit,
         });
       });
 
@@ -382,6 +384,26 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       success: false,
       error: `step gated on output \`${gateName}\` which was ${JSON.stringify(gateValue)}`,
     };
+  }
+
+  /**
+   * Returns true when the failure is caused by a quota or rate-limit error.
+   * Detects API-level rate limits (429), usage quota exhaustion, and overloaded (529) errors.
+   * These are transient: the engine should wait and retry rather than failing the step.
+   */
+  isQuotaError(
+    parsed: Record<string, unknown> | null,
+    stderr: string
+  ): boolean {
+    const QUOTA_RE = /quota|usage.{0,10}limit|rate.{0,5}limit|too many requests|overloaded|529/i;
+    if (parsed?.is_error === true) {
+      const resultText = String(parsed.result ?? "");
+      if (QUOTA_RE.test(resultText)) return true;
+      const subtype = String(parsed.subtype ?? "");
+      if (/rate.{0,5}limit|overloaded/i.test(subtype)) return true;
+    }
+    if (QUOTA_RE.test(stderr)) return true;
+    return false;
   }
 
   /**

@@ -72,10 +72,15 @@ function usage(): never {
   console.log(`Usage:
   sparkflow-run validate [<workflow>]
   sparkflow-run run [<workflow>] [--dry-run] [--cwd <dir>] [--plan <plan.md>] [--verbose] [--status-json]
+  sparkflow-run kill-all [--cwd <dir>] [--force]
 
 <workflow> may be a path to a JSON file, or a bare name resolved as
 .sparkflow/workflows/<name>.json. If omitted, uses "defaultWorkflow" from
-.sparkflow/config.json.`);
+.sparkflow/config.json.
+
+kill-all terminates every non-terminal job recorded in
+<cwd>/.sparkflow/state/jobs/. Sends SIGTERM and waits up to 5s; with
+--force, SIGKILLs any jobs still alive after the grace period.`);
   process.exit(1);
 }
 
@@ -89,7 +94,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args[0];
 
-  if (!command || !["validate", "run"].includes(command)) {
+  if (!command || !["validate", "run", "kill-all"].includes(command)) {
     usage();
   }
 
@@ -100,6 +105,18 @@ async function main(): Promise<void> {
     cwd = resolve(args[cwdIndex + 1]);
   }
   const effectiveCwd = cwd ?? process.cwd();
+
+  if (command === "kill-all") {
+    const { runKillAll, formatSummary } = await import("./kill-all.js");
+    const force = args.includes("--force");
+    const result = await runKillAll({ cwd: effectiveCwd, force });
+    console.log(formatSummary(result, force));
+    for (const e of result.errors) {
+      console.error(`  ${e.jobId} (pid ${e.pid}): ${e.error}`);
+    }
+    const failed = result.stillAlive > 0 || result.errors.length > 0;
+    process.exit(failed ? 1 : 0);
+  }
 
   // Treat the second positional arg as the workflow name/path if it's not a flag.
   const positional = args[1] && !args[1].startsWith("--") ? args[1] : undefined;

@@ -93,6 +93,13 @@ export interface RemoveJobCommand {
   jobId: string;
 }
 
+export interface RestartJobCommand {
+  type: "restartJob";
+  id: string;
+  jobId: string;
+  mode?: "fresh" | "resume";
+}
+
 export interface AnswerRecoveryCommand {
   type: "answerRecovery";
   id: string;
@@ -142,6 +149,7 @@ export type FrontendToEngine =
   | StartWorkflowCommand
   | KillJobCommand
   | RemoveJobCommand
+  | RestartJobCommand
   | AnswerRecoveryCommand
   | GetJobDetailCommand
   | SetJobToolCommand

@@ -400,10 +400,13 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       }
 
       if (action === "restart" && req.method === "POST") {
-        // restart is handled on the engine via IPC
         registry
-          .sendCommand(repoId, { type: "killJob", jobId, id: randomBytes(8).toString("hex") })
-          .then(() => sendJson(res, 200, { ok: true, message: "job killed; re-dispatch to restart" }))
+          .sendCommand(repoId, { type: "restartJob", jobId, id: randomBytes(8).toString("hex") })
+          .then((r) => {
+            if (!r || "error" in r) return sendJson(res, 400, { error: (r as { error?: string } | null)?.error ?? "restart failed" });
+            const payload = r as { newJobId?: string; ok?: boolean };
+            sendJson(res, 200, { ok: true, newJobId: payload.newJobId });
+          })
           .catch(() => sendJson(res, 500, { error: "engine request failed" }));
         return;
       }

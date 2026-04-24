@@ -199,6 +199,16 @@ async function main(): Promise<void> {
         break;
       }
 
+      case "restartJob": {
+        jobManager.restartJob(msg.jobId, msg.mode ?? "fresh").then((result) => {
+          if (result.ok) ipcClient.sendResponse(msg.id, { ok: true, newJobId: result.newJobId });
+          else ipcClient.sendError(msg.id, result.error ?? "restart failed");
+        }).catch((err: unknown) => {
+          ipcClient.sendError(msg.id, err instanceof Error ? err.message : String(err));
+        });
+        break;
+      }
+
       case "answerRecovery": {
         const ok = jobManager.answerRecovery(msg.jobId, msg.action, msg.message);
         if (ok) ipcClient.sendResponse(msg.id, { ok: true });

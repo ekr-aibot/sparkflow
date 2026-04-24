@@ -126,6 +126,46 @@ describe("frontend-daemon HTTP routes", () => {
     expect(body.ok).toBe(true);
   });
 
+  it("POST /repos/:repoId/jobs/:jobId/restart sends restartJob and returns newJobId", async () => {
+    const observed: string[] = [];
+    client.removeAllListeners("command");
+    client.on("command", (msg: { type: string; id?: string; jobId?: string }) => {
+      if (!msg.id) return;
+      observed.push(msg.type);
+      if (msg.type === "restartJob") {
+        client.sendResponse(msg.id, { ok: true, newJobId: "newjob-1" });
+      } else {
+        client.sendResponse(msg.id, { ok: true });
+      }
+    });
+
+    const res = await fetch(`${baseUrl()}/repos/testrepo/jobs/job-001/restart`, {
+      method: "POST",
+      headers,
+    });
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { ok: boolean; newJobId?: string };
+    expect(observed).toEqual(["restartJob"]);
+    expect(body.ok).toBe(true);
+    expect(body.newJobId).toBe("newjob-1");
+  });
+
+  it("POST /repos/:repoId/jobs/:jobId/restart surfaces engine errors as 400", async () => {
+    client.removeAllListeners("command");
+    client.on("command", (msg: { type: string; id?: string }) => {
+      if (!msg.id) return;
+      client.sendError(msg.id, "cannot restart a rehydrated job — original launch args were not persisted");
+    });
+
+    const res = await fetch(`${baseUrl()}/repos/testrepo/jobs/job-001/restart`, {
+      method: "POST",
+      headers,
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toMatch(/rehydrated/);
+  });
+
   it("POST /repos/:repoId/jobs/:jobId/remove sends removeJob (not killJob)", async () => {
     // Override the default command handler to distinguish remove vs kill.
     const observed: string[] = [];

@@ -303,7 +303,7 @@ describe("JobManager.nudgeJob", () => {
   });
 });
 
-describe("JobManager startJob deduplicateByPath", () => {
+describe("JobManager startJob deduplicate", () => {
   let manager: JobManager;
   let tmpDir: string;
 
@@ -324,20 +324,19 @@ describe("JobManager startJob deduplicateByPath", () => {
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it("returns the existing job ID instead of spawning a duplicate when deduplicateByPath is true", () => {
+  it("returns the existing job ID when slugs both missing", () => {
     const wfPath = join(tmpDir, "wf.json");
     writeFileSync(wfPath, minimalWorkflow);
 
     const id1 = manager.startJob(wfPath);
     expect(manager.getJobs()).toHaveLength(1);
 
-    // Second call with deduplicateByPath: should return id1, not create a new job.
-    const id2 = manager.startJob(wfPath, { deduplicateByPath: true });
+    const id2 = manager.startJob(wfPath, { deduplicate: true });
     expect(id2).toBe(id1);
     expect(manager.getJobs()).toHaveLength(1);
   });
 
-  it("spawns a new job when deduplicateByPath is false (default)", () => {
+  it("spawns a new job when deduplicate is false (default)", () => {
     const wfPath = join(tmpDir, "wf2.json");
     writeFileSync(wfPath, minimalWorkflow);
 
@@ -345,6 +344,36 @@ describe("JobManager startJob deduplicateByPath", () => {
     const id2 = manager.startJob(wfPath);
     expect(id1).not.toBe(id2);
     expect(manager.getJobs()).toHaveLength(2);
+  });
+
+  it("spawns a new job when slug differs even with deduplicate true", () => {
+    const wfPath = join(tmpDir, "wf-slug.json");
+    writeFileSync(wfPath, minimalWorkflow);
+
+    const id1 = manager.startJob(wfPath, { slug: "issue 63", deduplicate: true });
+    const id2 = manager.startJob(wfPath, { slug: "issue 71", deduplicate: true });
+    expect(id1).not.toBe(id2);
+    expect(manager.getJobs()).toHaveLength(2);
+  });
+
+  it("returns the existing job ID when slug matches", () => {
+    const wfPath = join(tmpDir, "wf-same-slug.json");
+    writeFileSync(wfPath, minimalWorkflow);
+
+    const id1 = manager.startJob(wfPath, { slug: "issue 63", deduplicate: true });
+    const id2 = manager.startJob(wfPath, { slug: "issue 63", deduplicate: true });
+    expect(id2).toBe(id1);
+    expect(manager.getJobs()).toHaveLength(1);
+  });
+
+  it("treats missing slug and empty-string slug as equivalent for dedup", () => {
+    const wfPath = join(tmpDir, "wf-empty-slug.json");
+    writeFileSync(wfPath, minimalWorkflow);
+
+    const id1 = manager.startJob(wfPath, { deduplicate: true });
+    const id2 = manager.startJob(wfPath, { slug: "", deduplicate: true });
+    expect(id2).toBe(id1);
+    expect(manager.getJobs()).toHaveLength(1);
   });
 });
 

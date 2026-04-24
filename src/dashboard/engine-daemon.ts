@@ -179,7 +179,7 @@ async function main(): Promise<void> {
           planText: msg.planText,
           slug: msg.slug,
           description: msg.description,
-          deduplicateByPath: true,
+          deduplicate: true,
         });
         ipcClient.sendResponse(msg.id, { jobId });
         break;

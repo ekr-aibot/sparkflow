@@ -141,7 +141,7 @@ export class JobManager {
     }
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor"; deduplicateByPath?: boolean; resumeFrom?: string; existingWorktree?: string }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor"; deduplicate?: boolean; resumeFrom?: string; existingWorktree?: string }): string {
     const id = randomBytes(6).toString("hex");
     const jobCwd = opts?.cwd ?? this.cwd;
 
@@ -150,12 +150,15 @@ export class JobManager {
       workflowPath = resolveWorkflowPath(workflowPath, jobCwd, projectConfig);
     }
 
-    // If deduplicateByPath is set, return the existing job ID rather than
-    // spawning a duplicate when the same workflow is already alive.
-    if (opts?.deduplicateByPath) {
+    // If deduplicate is set, match on (workflowPath, slug) so that parallel
+    // feature-development dispatches for different issues each get their own
+    // job. Empty/missing slug matches empty/missing (so monitors stay deduped).
+    if (opts?.deduplicate) {
+      const reqSlug = opts.slug ?? "";
       for (const [existingId, job] of this.jobs) {
         if (
           job.info.workflowPath === workflowPath &&
+          (job.info.slug ?? "") === reqSlug &&
           (job.info.state === "running" || job.info.state === "blocked") &&
           isAlive(job.pid)
         ) {

@@ -39,7 +39,7 @@ export async function handleIpcRequest(
         planText,
         slug,
         description,
-        deduplicateByPath: true,
+        deduplicate: true,
       });
       return response({ jobId });
     }

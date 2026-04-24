@@ -298,8 +298,10 @@ function renderRepoSelector() {
   // Pick a valid selection: keep the current choice if it's still attached,
   // else fall back to the first repo. This is also the first-load path.
   if (!state.selectedRepoId || !repos.some((r) => r.repoId === state.selectedRepoId)) {
+    const prev = state.selectedRepoId;
     state.selectedRepoId = repos[0].repoId;
     localStorage.setItem("sparkflow:selectedRepoId", state.selectedRepoId);
+    if (prev !== state.selectedRepoId) closeForeignJobTabs(state.selectedRepoId);
   }
   els.repoFilter.value = state.selectedRepoId;
 
@@ -316,6 +318,7 @@ els.repoFilter.addEventListener("change", () => {
   if (!next) return;
   state.selectedRepoId = next;
   localStorage.setItem("sparkflow:selectedRepoId", next);
+  closeForeignJobTabs(next);
   switchChatToRepo(next);
   const repo = currentRepo();
   if (repo?.chatTool) syncChatToolSelect(repo.chatTool);
@@ -597,6 +600,14 @@ function closeJobTab(jobId) {
   state.tabs = state.tabs.filter((t) => t.id !== jobId);
   if (state.activeTabId === jobId) activateTab("chat");
   else { renderTabs(); renderJobs(); }
+}
+
+function closeForeignJobTabs(keepRepoId) {
+  const toClose = [...state.jobViews.keys()].filter((jobId) => {
+    const view = state.jobViews.get(jobId);
+    return view && view.repoId && view.repoId !== keepRepoId;
+  });
+  for (const jobId of toClose) closeJobTab(jobId);
 }
 
 function jobTabLabel(job, jobId) {

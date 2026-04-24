@@ -497,3 +497,49 @@ describe("JobManager run_info and resume state", () => {
     expect(disk.info.failedStep).toBe("reviewer");
   });
 });
+
+describe("JobManager restartJob kind preservation", () => {
+  let manager: JobManager;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-test-restart-kind-"));
+    manager = new JobManager(tmpDir);
+  });
+
+  afterEach(() => {
+    manager.killAll();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("preserves kind=monitor on fresh restart", async () => {
+    const id = manager.startJob("/nonexistent/workflow.json", { kind: "monitor" });
+
+    // Verify kind is set on the original job
+    expect(manager.getJobs()[0].kind).toBe("monitor");
+
+    // Wait for it to fail so we can restart it
+    await waitFor(() => manager.getJobs()[0]?.state === "failed");
+
+    const result = await manager.restartJob(id, "fresh");
+    expect(result.ok).toBe(true);
+    expect(result.newJobId).toBeDefined();
+
+    const newJob = manager.getJobs().find((j) => j.id === result.newJobId);
+    expect(newJob).toBeDefined();
+    expect(newJob!.kind).toBe("monitor");
+  });
+
+  it("does not set kind on fresh restart of a non-monitor job", async () => {
+    const id = manager.startJob("/nonexistent/workflow.json");
+
+    await waitFor(() => manager.getJobs()[0]?.state === "failed");
+
+    const result = await manager.restartJob(id, "fresh");
+    expect(result.ok).toBe(true);
+
+    const newJob = manager.getJobs().find((j) => j.id === result.newJobId);
+    expect(newJob).toBeDefined();
+    expect(newJob!.kind).toBeUndefined();
+  });
+});

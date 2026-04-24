@@ -591,6 +591,7 @@ export class JobManager {
     }
 
     job.killedByUser = true;
+    job.info.killedByUser = true;
     job.info.summary = "killed by user";
     this.fireUpdate();
     try {
@@ -622,6 +623,7 @@ export class JobManager {
       job.child!.once("close", onClose);
 
       job.killedByUser = true;
+      job.info.killedByUser = true;
       job.info.summary = "killed by user";
       this.fireUpdate();
       try {

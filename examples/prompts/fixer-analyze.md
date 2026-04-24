@@ -26,21 +26,21 @@ Re-queue the workflow to run again. Use this ONLY when the failure has a clear, 
 - An obvious agent mistake that a fresh run would avoid
 
 ```json
-{"action": "redispatch", "workflow_path": "<absolute path to workflow JSON>", "plan_text": "<optional corrected plan as markdown, or empty string>", "reason": "<one-line explanation>"}
+{"decision": {"action": "redispatch", "workflow_path": "<absolute path to workflow JSON>", "plan_text": "<optional corrected plan as markdown, or empty string>", "reason": "<one-line explanation>"}}
 ```
 
 ### file-issue
 Open a GitHub issue against ekr-aibot/sparkflow. Use this when the stack trace points at sparkflow internals (`src/engine`, `src/runtime`, `src/tui`, `src/mcp`, etc.) or the process crashed in engine code rather than user workflow code.
 
 ```json
-{"action": "file-issue", "issue_title": "<short title>", "issue_body": "<markdown body with log excerpt and reproduction steps>", "reason": "<one-line explanation>"}
+{"decision": {"action": "file-issue", "issue_title": "<short title>", "issue_body": "<markdown body with log excerpt and reproduction steps>", "reason": "<one-line explanation>"}}
 ```
 
 ### alert-user
 Pause and wait for human input. Use this as the **default** when you are uncertain, when the failure requires a human judgment call, or when neither `redispatch` nor `file-issue` clearly applies. Err on the side of not auto-acting.
 
 ```json
-{"action": "alert-user", "user_message": "<clear description of what went wrong and what the user should decide or do next>"}
+{"decision": {"action": "alert-user", "user_message": "<clear description of what went wrong and what the user should decide or do next>"}}
 ```
 
 ## Decision heuristics
@@ -52,4 +52,8 @@ Pause and wait for human input. Use this as the **default** when you are uncerta
 
 ## Output format
 
-Emit **exactly one JSON object** on stdout. Do not emit any other text. The JSON must be valid and must have an `action` field with one of the three values above. Missing fields for the chosen action will cause the downstream step to fail.
+Emit **exactly one JSON object** on stdout wrapping the decision under a `decision` key:
+```json
+{"decision": { ... }}
+```
+Do not emit any other text. The JSON must be valid and the `decision` object must have an `action` field with one of the three values above. Missing fields for the chosen action will cause the downstream step to fail.

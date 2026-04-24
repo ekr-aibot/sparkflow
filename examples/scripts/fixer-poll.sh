@@ -16,6 +16,7 @@ items=$(
   find "$state_dir" -maxdepth 1 -name '*.json' 2>/dev/null \
   | xargs -r -I{} jq -c --argjson excluded "$excluded" '
       select(.info.state == "failed")
+      | select(.info.killedByUser != true)
       | select((.info.workflowName // "") as $n | ($excluded | index($n)) | not)
       | {
           job_id:        .info.id,

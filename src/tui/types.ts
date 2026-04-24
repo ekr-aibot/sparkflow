@@ -26,6 +26,8 @@ export interface JobInfo {
   canNudge?: boolean;
   /** True when the job was explicitly killed by the user via killJob(). */
   killedByUser?: boolean;
+  /** Path to the run-level worktree, captured from the run_info engine event. Used by resume mode. */
+  worktreePath?: string;
 }
 
 export type DashboardRequest =

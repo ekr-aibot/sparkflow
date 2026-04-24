@@ -141,7 +141,7 @@ export class JobManager {
     }
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor"; deduplicateByPath?: boolean }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor"; deduplicateByPath?: boolean; resumeFrom?: string; existingWorktree?: string }): string {
     const id = randomBytes(6).toString("hex");
     const jobCwd = opts?.cwd ?? this.cwd;
 
@@ -166,6 +166,8 @@ export class JobManager {
 
     const args = ["run", workflowPath, "--verbose", "--status-json"];
     if (opts?.cwd) args.push("--cwd", opts.cwd);
+    if (opts?.resumeFrom) args.push("--resume-from", opts.resumeFrom);
+    if (opts?.existingWorktree) args.push("--existing-worktree", opts.existingWorktree);
 
     let planPath = opts?.plan;
     if (!planPath && opts?.planText) {
@@ -322,6 +324,9 @@ export class JobManager {
       job.info.summary = event.success ? "completed" : "failed";
       job.info.endTime = Date.now();
       changed = true;
+    } else if (type === "run_info") {
+      job.info.worktreePath = event.worktreePath as string;
+      changed = true;
     }
 
     if (changed) {
@@ -338,6 +343,8 @@ export class JobManager {
       job.info.summary = `${step} failed — awaiting recovery: ${error.slice(0, 80)}`;
       job.info.pendingQuestion = `recover: ${step}`;
       job.pendingRequestId = event.request_id as string;
+      // Persist immediately so the failed_waiting state survives a daemon restart.
+      this.schedulePersist(jobId);
       this.fireUpdate();
     }
   }
@@ -400,6 +407,12 @@ export class JobManager {
 
     if (!job.child || !job.child.stdin) {
       // Rehydrated job — stdin pipe was lost across reload.
+      return false;
+    }
+
+    if (!isAlive(job.pid)) {
+      // Engine process died while job was in failed_waiting — cannot answer.
+      // Caller should use restart_job(mode="resume") instead.
       return false;
     }
     const payload = JSON.stringify({ action, message });
@@ -647,10 +660,6 @@ export class JobManager {
     jobId: string,
     mode: "fresh" | "resume" = "fresh",
   ): Promise<{ ok: boolean; newJobId?: string; error?: string }> {
-    if (mode === "resume") {
-      return { ok: false, error: "resume mode not yet implemented — use mode=fresh" };
-    }
-
     const job = this.jobs.get(jobId);
     if (!job) return { ok: false, error: `Job not found: ${jobId}` };
 
@@ -668,6 +677,59 @@ export class JobManager {
         ok: false,
         error: "cannot restart a rehydrated job — original launch args were not persisted; re-dispatch manually",
       };
+    }
+
+    if (mode === "resume") {
+      // Determine the step to resume from. Prefer in-memory failedStep; fall
+      // back to the disk state (failedStep may have been cleared in-memory when
+      // the user attempted answer_job_recovery before the process died).
+      let failedStep = job.info.failedStep ?? job.info.currentStep;
+      if (!failedStep) {
+        const diskJob = this.store.loadJob(jobId);
+        failedStep = diskJob?.info.failedStep ?? diskJob?.info.currentStep;
+      }
+      if (!failedStep) {
+        return {
+          ok: false,
+          error: "cannot resume: failed step is unknown — use mode=fresh to restart from the beginning",
+        };
+      }
+
+      // Find the worktree path. Prefer in-memory (captured from run_info event);
+      // fall back to disk state (persisted there too). For jobs created before
+      // the run_info event was introduced, parse it from the log file.
+      let worktreePath = job.info.worktreePath;
+      if (!worktreePath) {
+        const diskJob = this.store.loadJob(jobId);
+        worktreePath = diskJob?.info.worktreePath ?? extractWorktreePathFromLog(job.logPath);
+      }
+
+      // Kill the old process if it is still alive.
+      if (job.info.state !== "succeeded" && job.info.state !== "failed") {
+        if (job.child) {
+          await this.killJobAndWait(jobId);
+        } else if (job.pid > 0 && isAlive(job.pid)) {
+          try { process.kill(job.pid, "SIGTERM"); } catch { /* already gone */ }
+        }
+      }
+
+      const newJobId = this.startJob(job.info.workflowPath, {
+        cwd: job.originalCwd,
+        plan: job.originalPlan,
+        planText: job.originalPlanText,
+        slug: job.info.slug,
+        description: job.info.description,
+        resumeFrom: failedStep,
+        existingWorktree: worktreePath,
+      });
+
+      job.tailer.stop();
+      const timer = this.persistTimers.get(jobId);
+      if (timer) { clearTimeout(timer); this.persistTimers.delete(jobId); }
+      this.jobs.delete(jobId);
+      this.fireUpdate();
+
+      return { ok: true, newJobId };
     }
 
     if (job.info.state !== "succeeded" && job.info.state !== "failed") {
@@ -757,6 +819,32 @@ export class JobManager {
       this.rehydratedPingTimer = null;
     }
   }
+}
+
+/**
+ * Parse the worktree path out of a job log file. Used as a fallback for jobs
+ * created before the run_info JSON event was introduced.
+ */
+function extractWorktreePathFromLog(logPath: string): string | undefined {
+  try {
+    const content = readFileSync(logPath, "utf-8");
+    // Try structured run_info JSON events first (new format)
+    for (const line of content.split("\n")) {
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        if (event.type === "run_info" && typeof event.worktreePath === "string") {
+          return event.worktreePath;
+        }
+      } catch {
+        // not JSON — try human-readable format
+        const match = line.match(/\[sparkflow\] (?:Using (?:isolated|fork) worktree|Resuming with existing worktree): (.+)/);
+        if (match) return match[1].trim();
+      }
+    }
+  } catch {
+    // log file missing or unreadable
+  }
+  return undefined;
 }
 
 function isAlive(pid: number): boolean {

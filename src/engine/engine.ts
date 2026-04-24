@@ -107,6 +107,8 @@ export class WorkflowEngine {
   private abortError?: string;
   /** When the workflow default is "isolated", all steps share this single worktree. */
   private runWorktree?: string;
+  private resumeFromStep?: string;
+  private existingWorktreePath?: string;
 
   constructor(
     workflow: SparkflowWorkflow,
@@ -124,6 +126,8 @@ export class WorkflowEngine {
     this.statusJson = options.statusJson ?? false;
     this.worktreeManager = new WorktreeManager(this.cwd, this.runId);
     this.interactionManager = new UserInteractionManager(this.logger);
+    this.resumeFromStep = options.resumeFromStep;
+    this.existingWorktreePath = options.existingWorktreePath;
 
     this.adapters = adapters ?? new Map<string, RuntimeAdapter>([
       ["shell", new ShellAdapter()],
@@ -182,12 +186,16 @@ export class WorkflowEngine {
       process.stderr.write(JSON.stringify({ type: "workflow_steps", steps }) + "\n");
     }
 
-    // If workflow default worktree is "fork" or "isolated", create a single
-    // worktree for the entire run. All steps share this directory.
+    // If an existing worktree is supplied (resume mode), reuse it directly
+    // without creating a new one. Otherwise create the run-level worktree as
+    // normal for fork/isolated workflows.
     //   fork     → new directory, detached HEAD (no new branch)
     //   isolated → new directory, new named branch (for PRs)
     const defaultMode = this.workflow.defaults?.worktree?.mode;
-    if ((defaultMode === "fork" || defaultMode === "isolated") && !this.dryRun) {
+    if (this.existingWorktreePath) {
+      this.runWorktree = this.existingWorktreePath;
+      this.logger.info(`[sparkflow] Resuming with existing worktree: ${this.runWorktree}`);
+    } else if ((defaultMode === "fork" || defaultMode === "isolated") && !this.dryRun) {
       try {
         const dummyStep: Step = {
           name: "_run",
@@ -206,7 +214,26 @@ export class WorkflowEngine {
       }
     }
 
-    this.triggerStep(this.workflow.entry);
+    // Emit run_info so the dashboard captures the worktree path for future resume.
+    if (this.statusJson && this.runWorktree) {
+      process.stderr.write(JSON.stringify({ type: "run_info", worktreePath: this.runWorktree }) + "\n");
+    }
+
+    // If resuming from a specific step, pre-seed its success-edge ancestors so
+    // the engine skips them. Then start from that step instead of the entry.
+    const startStep = this.resumeFromStep ?? this.workflow.entry;
+    if (this.resumeFromStep) {
+      const ancestors = findSuccessAncestors(this.workflow, this.resumeFromStep);
+      this.logger.info(`[sparkflow] Resuming from step "${this.resumeFromStep}"; marking ${ancestors.size} ancestor(s) as succeeded: ${[...ancestors].join(", ") || "(none)"}`);
+      for (const ancestorId of ancestors) {
+        const status = this.stepStatuses.get(ancestorId);
+        if (status) {
+          status.state = "succeeded";
+        }
+      }
+    }
+
+    this.triggerStep(startStep);
 
     // Drain active promises until nothing is running
     while (this.activePromises.size > 0 && !this.aborted) {
@@ -793,6 +820,35 @@ export class WorkflowEngine {
     }
     return applyLlmOverride(runtime);
   }
+}
+
+/**
+ * Find all steps that are ancestors of targetStep via on_success edges only
+ * (not on_failure). These are the steps that must have succeeded for execution
+ * to reach targetStep via the happy path.
+ */
+function findSuccessAncestors(workflow: SparkflowWorkflow, targetStep: string): Set<string> {
+  // Build reverse graph: step → set of steps that have an on_success transition to it
+  const reverse = new Map<string, Set<string>>();
+  for (const [id, step] of Object.entries(workflow.steps)) {
+    for (const t of step.on_success ?? []) {
+      if (!reverse.has(t.step)) reverse.set(t.step, new Set());
+      reverse.get(t.step)!.add(id);
+    }
+  }
+  // BFS backwards from targetStep
+  const ancestors = new Set<string>();
+  const queue = [targetStep];
+  while (queue.length > 0) {
+    const step = queue.shift()!;
+    for (const pred of reverse.get(step) ?? []) {
+      if (!ancestors.has(pred)) {
+        ancestors.add(pred);
+        queue.push(pred);
+      }
+    }
+  }
+  return ancestors;
 }
 
 /**

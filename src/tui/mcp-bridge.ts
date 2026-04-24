@@ -244,10 +244,10 @@ server.tool(
 
 server.tool(
   "restart_job",
-  "Restart a sparkflow-run job. mode='fresh' (default) re-runs the workflow from step one with the original plan and cwd; if the job is still running it is killed first. mode='resume' is reserved for future checkpoint-based resume and currently returns an error. The old job's log/worktree are preserved; a new job id is returned.",
+  "Restart a sparkflow-run job. mode='fresh' (default) re-runs the workflow from step one with the original plan and cwd; if the job is still running it is killed first. mode='resume' picks up from the failed step — it reuses the existing worktree (preserving committed work) and marks all predecessor steps as succeeded so only the failed step and its successors re-run. Resume requires the job to have a recorded failedStep; use fresh if that information is unavailable. The old job's log/worktree are preserved; a new job id is returned.",
   {
     job_id: z.string().describe("The job ID to restart"),
-    mode: z.enum(["fresh", "resume"]).optional().describe("fresh (default) re-runs from scratch; resume is not yet implemented"),
+    mode: z.enum(["fresh", "resume"]).optional().describe("fresh (default) re-runs from scratch; resume picks up from the failed step reusing the existing worktree"),
   },
   withReloadNotice(async ({ job_id, mode }) => {
     const msg: IpcMessage = {

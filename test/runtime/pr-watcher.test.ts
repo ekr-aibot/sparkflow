@@ -510,6 +510,46 @@ describe("PrWatcherAdapter", () => {
     expect(result.outputs.feedback as string).toContain("Merge Conflict");
   });
 
+  it("keeps polling when CI passes but PR is still open", async () => {
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const argsArr = args as string[];
+
+      if (cmd === "git" && argsArr?.[0] === "rev-parse") {
+        return Buffer.from("test-branch\n");
+      }
+      if (cmd === "git" && argsArr?.[0] === "remote") {
+        return Buffer.from("https://github.com/test-owner/test-repo.git\n");
+      }
+
+      if (cmd !== "gh") throw new Error(`Unexpected: ${cmd}`);
+      const key = argsArr.join(" ");
+
+      if (key.includes("pr view") && key.includes("number,url,state,mergedAt")) {
+        return Buffer.from(JSON.stringify({ number: 10, url: "https://github.com/o/r/pull/10", state: "OPEN", mergedAt: null }) + "\n");
+      }
+
+      if (key.includes("pr view")) {
+        return Buffer.from(JSON.stringify({ state: "OPEN", mergedAt: null, url: "https://github.com/o/r/pull/10" }) + "\n");
+      }
+
+      if (key.includes("pr checks")) {
+        return Buffer.from(JSON.stringify([
+          { name: "ci", state: "completed", bucket: "pass" },
+        ]) + "\n");
+      }
+
+      if (key.includes("/reviews") || key.includes("/comments")) {
+        return Buffer.from(JSON.stringify([]) + "\n");
+      }
+
+      throw new Error(`Unexpected gh command: ${key}`);
+    });
+
+    const result = await adapter.run(makeCtx({ timeout: 1 }));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Timed out");
+  }, 10000);
+
   it("times out when no activity occurs", async () => {
     mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
       const argsArr = args as string[];

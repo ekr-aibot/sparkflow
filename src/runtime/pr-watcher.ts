@@ -433,19 +433,6 @@ export class PrWatcherAdapter implements RuntimeAdapter {
         };
       }
 
-      // All checks passed and no blocking reviews → success
-      if (checks.length > 0) {
-        const allCompleted = checks.every((c) => c.bucket !== "pending");
-        const noneFailed = checks.every((c) => !isFailedBucket(c.bucket));
-        if (allCompleted && noneFailed) {
-          ctx.logger?.info(`[${ctx.stepId}] all checks passed`);
-          return {
-            success: true,
-            outputs: { pr_url: current.url },
-          };
-        }
-      }
-
       ctx.logger?.info(`[${ctx.stepId}] no changes, polling again in ${runtime.poll_interval ?? DEFAULT_POLL_INTERVAL}s...`);
     }
   }

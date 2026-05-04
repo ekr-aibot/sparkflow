@@ -19,7 +19,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { extname, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -27,6 +27,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { FrontendIpcServer, type EngineConnection } from "./frontend-ipc-server.js";
 import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
 import type { ToolKind } from "./ipc-protocol.js";
+import { pruneOldPastedImages, readBinaryBody } from "../web/paste-utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,6 +142,13 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
     req.on("error", (err) => reject(err));
   });
 }
+
+const IMAGE_MIME_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
 
 // ---------------------------------------------------------------------------
 // PTY bridge proxy (connects to the primary engine's PTY bridge socket)
@@ -309,6 +317,7 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   const wsToChat = new WeakMap<WebSocket, string>();
 
   function onEngineAttached(conn: EngineConnection): void {
+    if (conn.repoPath) pruneOldPastedImages(conn.repoPath);
     if (!conn.ptyBridgePath || bridges.has(conn.repoId)) return;
     connectPtyBridge(conn.ptyBridgePath).then((bridge) => {
       const chatMap = new Map<string, ChatEntry>();
@@ -702,6 +711,31 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
           }
         })
         .catch(() => sendJson(res, 500, { error: "engine request failed" }));
+      return;
+    }
+
+    // POST /repos/:repoId/paste-image — save a pasted image to disk, return relpath
+    const pasteImageMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/paste-image$/);
+    if (pasteImageMatch && req.method === "POST") {
+      const [, repoId] = pasteImageMatch;
+      const engine = registry.getEngine(repoId);
+      if (!engine) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+      const ct = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
+      const ext = IMAGE_MIME_EXT[ct];
+      if (!ext) return sendJson(res, 415, { error: `unsupported image type: ${ct}` });
+      readBinaryBody(req, 10 * 1024 * 1024).then((buf) => {
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        const rand = randomBytes(4).toString("hex");
+        const filename = `${ts}-${rand}.${ext}`;
+        const pastedDir = join(engine.repoPath, ".sparkflow", "pasted");
+        mkdirSync(pastedDir, { recursive: true });
+        writeFileSync(join(pastedDir, filename), buf);
+        sendJson(res, 200, { relpath: `.sparkflow/pasted/${filename}`, bytes: buf.byteLength });
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "request body too large") sendJson(res, 413, { error: "image too large (max 10 MiB)" });
+        else sendJson(res, 500, { error: msg });
+      });
       return;
     }
 

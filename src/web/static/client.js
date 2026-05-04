@@ -160,6 +160,47 @@ function hideTooltip() {
   });
 }
 
+// --------------------------- image paste ---------------------------
+
+function installPasteHandler(tabId, term) {
+  if (!term.textarea) return;
+  term.textarea.addEventListener("paste", (e) => {
+    const items = [...(e.clipboardData?.items ?? [])].filter(
+      (i) => i.kind === "file" && i.type.startsWith("image/")
+    );
+    if (items.length === 0) return;
+    e.preventDefault();
+    const files = items.map((i) => i.getAsFile()).filter(Boolean);
+    handlePastedImages(tabId, files);
+  });
+}
+
+async function handlePastedImages(tabId, files) {
+  if (!wsRepoId) return;
+  const relpaths = [];
+  for (const file of files) {
+    try {
+      const res = await fetch(`/repos/${encodeURIComponent(wsRepoId)}/paste-image`, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (res.ok) {
+        const body = await res.json();
+        relpaths.push(body.relpath);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        toast("error", `paste failed: ${body.error ?? res.status}`);
+      }
+    } catch (err) {
+      toast("error", `paste failed: ${String(err?.message ?? err)}`);
+    }
+  }
+  if (relpaths.length > 0) {
+    sendBytesForTab(tabId, relpaths.map((p) => `@${p}`).join(" ") + " ");
+  }
+}
+
 // --------------------------- chat terminals ---------------------------
 //
 // chatTerminals: Map<tabId, { term, fit, ws, retryDelay, suppress }>
@@ -189,6 +230,7 @@ mainTerm.open(els.chat);
 mainFit.fit();
 chatTerminals.set("chat", { term: mainTerm, fit: mainFit, ws: null, retryDelay: 250, suppress: false });
 mainTerm.onData((data) => sendBytesForTab("chat", data));
+installPasteHandler("chat", mainTerm);
 
 function sendBytesForTab(tabId, str) {
   const entry = chatTerminals.get(tabId);
@@ -311,6 +353,7 @@ function openSideChat(chatId) {
   const { term, fit } = makeChatTerminal(pane);
   chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
   term.onData((data) => sendBytesForTab(chatId, data));
+  installPasteHandler(chatId, term);
 
   connectChatWs(chatId, wsRepoId, chatId);
   activateTab(chatId);
@@ -358,6 +401,7 @@ async function restoreSideChats() {
       const { term, fit } = makeChatTerminal(pane);
       chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
       term.onData((data) => sendBytesForTab(chatId, data));
+      installPasteHandler(chatId, term);
       connectChatWs(chatId, wsRepoId, chatId);
       added = true;
     }

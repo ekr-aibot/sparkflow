@@ -19,8 +19,9 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { extname, resolve, dirname, join } from "node:path";
+import { pruneOldPastedImages } from "../web/prune-pasted.js";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -70,6 +71,37 @@ const MIME: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".map": "application/json; charset=utf-8",
 };
+
+const IMAGE_MIME_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+function readBinaryBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let rejected = false;
+    req.on("data", (chunk: Buffer) => {
+      if (rejected) return;
+      bytes += chunk.byteLength;
+      if (bytes > maxBytes) {
+        rejected = true;
+        reject(new Error("request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!rejected) resolve(Buffer.concat(chunks));
+    });
+    req.on("error", (err) => {
+      if (!rejected) { rejected = true; reject(err); }
+    });
+  });
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = Buffer.from(JSON.stringify(body), "utf-8");
@@ -265,6 +297,7 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   }
 
   function onEngineAttached(conn: EngineConnection): void {
+    pruneOldPastedImages(conn.repoPath);
     if (!conn.ptyBridgePath || bridges.has(conn.repoId)) return;
     connectPtyBridge(conn.ptyBridgePath).then((bridge) => {
       const entry: RepoBridge = { bridge, ring: Buffer.alloc(0) };
@@ -514,6 +547,40 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
           }
         })
         .catch(() => sendJson(res, 500, { error: "engine request failed" }));
+      return;
+    }
+
+    // Paste image upload for a specific repo
+    const pasteImageMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/paste-image$/);
+    if (pasteImageMatch && req.method === "POST") {
+      const [, repoId] = pasteImageMatch;
+      const engine = registry.getEngine(repoId);
+      if (!engine) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+
+      const mime = (req.headers["content-type"] ?? "").split(";")[0].trim();
+      const ext = IMAGE_MIME_EXT[mime];
+      if (!ext) {
+        sendJson(res, 415, { error: `unsupported media type: ${mime}` });
+        return;
+      }
+
+      readBinaryBody(req, 10 * 1024 * 1024).then((buf) => {
+        const ts = new Date().toISOString().replace(/:/g, "-");
+        const rand = randomBytes(4).toString("hex");
+        const filename = `${ts}-${rand}.${ext}`;
+        const pastedDir = join(engine.repoPath, ".sparkflow", "pasted");
+        mkdirSync(pastedDir, { recursive: true });
+        const relpath = `.sparkflow/pasted/${filename}`;
+        writeFileSync(join(engine.repoPath, relpath), buf);
+        sendJson(res, 200, { relpath, bytes: buf.byteLength });
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "request body too large") {
+          sendJson(res, 413, { error: "image too large (max 10 MiB)" });
+        } else {
+          sendJson(res, 500, { error: msg });
+        }
+      });
       return;
     }
 

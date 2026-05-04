@@ -72,6 +72,14 @@ CLI / Web UI → WorkflowEngine.run()
     → onStepComplete/Failure → triggerStep(next)
 ```
 
+## Image Paste in Chat
+
+Users can paste images (PNG/JPEG/GIF/WebP) into the dashboard chat via Ctrl/Cmd-V. The browser intercepts paste events on xterm.js's textarea, POSTs each image blob to `POST /repos/:repoId/paste-image` (max 10 MiB), and injects `@.sparkflow/pasted/<filename>` into the PTY so the chat tool sees an `@`-prefixed file attachment.
+
+**Storage:** `<repoPath>/.sparkflow/pasted/<ISO-ts>-<hex>.ext` — filenames are server-generated (no client path allowed). On each engine attach, files older than 7 days are pruned by `pruneOldPastedImages` (`src/web/prune-pasted.ts`).
+
+**Route:** `frontend-daemon.ts` owns `POST /repos/:repoId/paste-image`. The legacy single-repo mode (`web/server.ts`) has a corresponding `POST /api/paste-image` route; client.js sends to the per-repo URL when `state.selectedRepoId` is set, otherwise to `/api/paste-image`.
+
 ## Config Layering
 
 User config (`~/.sparkflow/config.json`) is the base; project config (`.sparkflow/config.json`) overlays it. Nested objects like `git` are replaced wholesale — a project `git` block drops all user `git` fields.

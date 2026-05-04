@@ -15,13 +15,15 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { extname, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { IpcServer } from "../mcp/ipc.js";
 import { JobManager } from "../tui/job-manager.js";
 import { handleIpcRequest } from "../tui/ipc-handler.js";
+import { pruneOldPastedImages } from "./prune-pasted.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -84,6 +86,13 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
+const IMAGE_MIME_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
 function enrichJobs(jobManager: JobManager): Array<Record<string, unknown>> {
   return jobManager.getJobs().map((info) => {
     const detail = jobManager.getJobDetail(info.id);
@@ -136,6 +145,35 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
       catch (err) { reject(err instanceof Error ? err : new Error(String(err))); }
     });
     req.on("error", (err) => reject(err));
+  });
+}
+
+/**
+ * Read the full request body as a Buffer. Rejects with "request body too large"
+ * if the body exceeds maxBytes; continues draining the request so the caller
+ * can still write a response on the same socket.
+ */
+function readBinaryBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let rejected = false;
+    req.on("data", (chunk: Buffer) => {
+      if (rejected) return; // drain without accumulating
+      bytes += chunk.byteLength;
+      if (bytes > maxBytes) {
+        rejected = true;
+        reject(new Error("request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!rejected) resolve(Buffer.concat(chunks));
+    });
+    req.on("error", (err) => {
+      if (!rejected) { rejected = true; reject(err); }
+    });
   });
 }
 
@@ -351,6 +389,7 @@ async function main(): Promise<void> {
   const jobManager = new JobManager(args.cwd);
   jobManager.rehydrate();
   jobManager.autoStartMonitors();
+  pruneOldPastedImages(args.cwd);
 
   try { unlinkSync(args.socketPath); } catch { /* not present */ }
   const ipcServer = new IpcServer(args.socketPath);
@@ -495,6 +534,33 @@ async function main(): Promise<void> {
     if (pathname === "/api/chat/summary" && req.method === "GET") {
       const text = stripAnsi(ring.toString("utf-8"));
       return sendJson(res, 200, { summary: text });
+    }
+
+    if (pathname === "/api/paste-image" && req.method === "POST") {
+      const mime = (req.headers["content-type"] ?? "").split(";")[0].trim();
+      const ext = IMAGE_MIME_EXT[mime];
+      if (!ext) {
+        sendJson(res, 415, { error: `unsupported media type: ${mime}` });
+        return;
+      }
+      readBinaryBody(req, 10 * 1024 * 1024).then((buf) => {
+        const ts = new Date().toISOString().replace(/:/g, "-");
+        const rand = randomBytes(4).toString("hex");
+        const filename = `${ts}-${rand}.${ext}`;
+        const pastedDir = join(args.cwd, ".sparkflow", "pasted");
+        mkdirSync(pastedDir, { recursive: true });
+        const relpath = `.sparkflow/pasted/${filename}`;
+        writeFileSync(join(args.cwd, relpath), buf);
+        sendJson(res, 200, { relpath, bytes: buf.byteLength });
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "request body too large") {
+          sendJson(res, 413, { error: "image too large (max 10 MiB)" });
+        } else {
+          sendJson(res, 500, { error: msg });
+        }
+      });
+      return;
     }
 
     res.writeHead(404, { "content-type": "text/plain" });

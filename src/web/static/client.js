@@ -175,6 +175,46 @@ chatTerm.loadAddon(chatFit);
 chatTerm.open(els.chat);
 chatFit.fit();
 
+// Image paste: intercept Ctrl/Cmd-V on the hidden textarea. Text pastes fall
+// through to xterm's default handler unchanged.
+chatTerm.textarea.addEventListener("paste", (e) => {
+  const items = [...(e.clipboardData?.items ?? [])].filter(
+    (i) => i.kind === "file" && i.type.startsWith("image/"),
+  );
+  if (items.length === 0) return;
+  e.preventDefault();
+  handlePastedImages(items.map((i) => i.getAsFile()).filter(Boolean));
+});
+
+async function handlePastedImages(files) {
+  const relpaths = [];
+  // NEW mode uses per-repo URLs; OLD single-repo mode falls back to /api/paste-image.
+  const pasteUrl = state.selectedRepoId
+    ? `/repos/${encodeURIComponent(state.selectedRepoId)}/paste-image`
+    : "/api/paste-image";
+  for (const file of files) {
+    try {
+      const res = await fetch(pasteUrl, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (res.ok) {
+        const { relpath } = await res.json();
+        relpaths.push(relpath);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        toast("error", `paste failed: ${body?.error ?? res.status}`);
+      }
+    } catch (err) {
+      toast("error", `paste failed: ${String(err?.message ?? err)}`);
+    }
+  }
+  if (relpaths.length > 0) {
+    sendBytes(relpaths.map((p) => `@${p}`).join(" ") + " ");
+  }
+}
+
 // --------------------------- websocket chat proxy ---------------------------
 //
 // The chat WS is bound to exactly one repoId at connect-time. When the user

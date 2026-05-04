@@ -109,6 +109,19 @@ describe("ClaudeCodeAdapter", () => {
       expect(adapter.isQuotaError(null, "429 Too Many Requests")).toBe(true);
     });
 
+    it("detects developer plan limit in result text", () => {
+      const parsed = { is_error: true, subtype: "other", result: "You've hit your limit · resets 11:30am (America/Los_Angeles)" };
+      expect(adapter.isQuotaError(parsed, "")).toBe(true);
+    });
+
+    it("detects developer plan limit in stderr", () => {
+      expect(adapter.isQuotaError(null, "[developer] You've hit your limit · resets 11:30am (America/Los_Angeles)")).toBe(true);
+    });
+
+    it("detects developer plan limit in stdout", () => {
+      expect(adapter.isQuotaError(null, "", "You've hit your limit · resets 11:30am")).toBe(true);
+    });
+
     it("returns false for non-error result events", () => {
       const parsed = { is_error: false, subtype: "success", result: "done" };
       expect(adapter.isQuotaError(parsed, "")).toBe(false);

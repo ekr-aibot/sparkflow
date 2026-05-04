@@ -160,9 +160,22 @@ function hideTooltip() {
   });
 }
 
-// --------------------------- chat terminal ---------------------------
+// --------------------------- chat terminals ---------------------------
+//
+// chatTerminals: Map<tabId, { term, fit, ws, retryDelay, suppress }>
+// The main chat uses tabId="chat"; side-chats use tabId === chatId.
+// The main terminal is mounted eagerly; side-chat terminals are created
+// when the side-chat is opened.
 
-const chatTerm = new Terminal({
+const WS_BASE = (location.protocol === "https:" ? "wss" : "ws") + `://${location.host}/chat`;
+
+function b64encode(str) { return btoa(unescape(encodeURIComponent(str))); }
+function b64decode(b64) { return decodeURIComponent(escape(atob(b64))); }
+
+const chatTerminals = new Map(); // tabId → { term, fit, ws, retryDelay, suppress }
+let wsRepoId = null;
+
+const mainTerm = new Terminal({
   fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
   fontSize: 13,
   cursorBlink: true,
@@ -170,86 +183,209 @@ const chatTerm = new Terminal({
   scrollback: 5000,
   theme: { background: "#000000", foreground: "#c0caf5", cursor: "#7aa2f7" },
 });
-const chatFit = new FitAddon();
-chatTerm.loadAddon(chatFit);
-chatTerm.open(els.chat);
-chatFit.fit();
+const mainFit = new FitAddon();
+mainTerm.loadAddon(mainFit);
+mainTerm.open(els.chat);
+mainFit.fit();
+chatTerminals.set("chat", { term: mainTerm, fit: mainFit, ws: null, retryDelay: 250, suppress: false });
+mainTerm.onData((data) => sendBytesForTab("chat", data));
 
-// --------------------------- websocket chat proxy ---------------------------
-//
-// The chat WS is bound to exactly one repoId at connect-time. When the user
-// switches the repo pulldown, we tear down the old WS and open a new one —
-// the engine on the far end is different, and its ring buffer / chat session
-// is independent.
+function sendBytesForTab(tabId, str) {
+  const entry = chatTerminals.get(tabId);
+  if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.OPEN) return;
+  entry.ws.send(JSON.stringify({ type: "data", bytes: b64encode(str) }));
+}
 
-const WS_BASE = (location.protocol === "https:" ? "wss" : "ws") + `://${location.host}/chat`;
-let ws = null;
-let wsRetryDelay = 250;
-let wsRepoId = null;
-let suppressReconnectMessage = false;
+function sendResizeForTab(tabId) {
+  const entry = chatTerminals.get(tabId);
+  if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.OPEN) return;
+  entry.ws.send(JSON.stringify({ type: "resize", cols: entry.term.cols, rows: entry.term.rows }));
+}
 
-function b64encode(str) { return btoa(unescape(encodeURIComponent(str))); }
-function b64decode(b64) { return decodeURIComponent(escape(atob(b64))); }
+function sendSetChatTool(tool) {
+  sendSetChatToolForTab("chat", tool);
+}
 
-function closeChatWs() {
-  if (!ws) return;
-  suppressReconnectMessage = true;
-  try { ws.onclose = null; ws.onerror = null; ws.close(); } catch { /* ignore */ }
-  ws = null;
+function sendSetChatToolForTab(tabId, tool) {
+  const entry = chatTerminals.get(tabId);
+  if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.OPEN) return;
+  entry.ws.send(JSON.stringify({ type: "set_chat_tool", tool }));
+}
+
+// Connect a chat tab's WebSocket. repoId identifies the engine; chatId is
+// the bridge-side chat identifier (e.g. "main", "sidechat-1").
+function connectChatWs(tabId, repoId, chatId) {
+  const entry = chatTerminals.get(tabId);
+  if (!entry || !repoId) return;
+  const qs = new URLSearchParams();
+  qs.set("repoId", repoId);
+  if (chatId !== "main") qs.set("chatId", chatId);
+  const url = `${WS_BASE}?${qs.toString()}`;
+  const ws = new WebSocket(url);
+  entry.ws = ws;
+  ws.onopen = () => { entry.retryDelay = 250; sendResizeForTab(tabId); };
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === "data" && typeof msg.bytes === "string") {
+      entry.term.write(b64decode(msg.bytes));
+    } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini") && tabId === "chat") {
+      syncChatToolSelect(msg.tool);
+    } else if (msg.type === "chat_ended") {
+      entry.suppress = true;
+      closeSideChatTab(tabId);
+      toast("success", `Side chat ended.`);
+    }
+  };
+  ws.onclose = () => {
+    if (!entry.suppress) {
+      entry.term.write("\r\n[chat disconnected — reconnecting…]\r\n");
+    }
+    entry.suppress = false;
+    const delay = entry.retryDelay;
+    entry.retryDelay = Math.min(delay * 2, 5000);
+    setTimeout(() => {
+      if (chatTerminals.has(tabId)) connectChatWs(tabId, repoId, chatId);
+    }, delay);
+  };
+  ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
 }
 
 function connectChat(repoId) {
   if (!repoId) return;
   wsRepoId = repoId;
-  const url = `${WS_BASE}?repoId=${encodeURIComponent(repoId)}`;
-  ws = new WebSocket(url);
-  ws.onopen = () => { wsRetryDelay = 250; sendResize(); };
-  ws.onmessage = (ev) => {
-    let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === "data" && typeof msg.bytes === "string") {
-      chatTerm.write(b64decode(msg.bytes));
-    } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
-      // The server announces the current tool on connect and on every switch
-      // so the pulldown can reflect the engine's live state without us having
-      // to piece it together from SSE timing.
-      syncChatToolSelect(msg.tool);
-    }
-  };
-  ws.onclose = () => {
-    if (!suppressReconnectMessage) {
-      chatTerm.write("\r\n[chat disconnected — reconnecting…]\r\n");
-    }
-    suppressReconnectMessage = false;
-    const rid = wsRepoId;
-    setTimeout(() => { if (rid === wsRepoId) connectChat(rid); }, wsRetryDelay);
-    wsRetryDelay = Math.min(wsRetryDelay * 2, 5000);
-  };
-  ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
+  connectChatWs("chat", repoId, "main");
+}
+
+function closeChatWs(tabId) {
+  const entry = chatTerminals.get(tabId);
+  if (!entry || !entry.ws) return;
+  entry.suppress = true;
+  try { entry.ws.onclose = null; entry.ws.onerror = null; entry.ws.close(); } catch { /* ignore */ }
+  entry.ws = null;
 }
 
 function switchChatToRepo(repoId) {
   if (!repoId || repoId === wsRepoId) return;
-  closeChatWs();
-  wsRetryDelay = 250;
-  chatTerm.reset();
+  closeChatWs("chat");
+  const entry = chatTerminals.get("chat");
+  if (entry) { entry.retryDelay = 250; entry.term.reset(); }
   connectChat(repoId);
 }
 
-function sendBytes(str) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "data", bytes: b64encode(str) }));
-}
-function sendResize() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "resize", cols: chatTerm.cols, rows: chatTerm.rows }));
-}
-function sendSetChatTool(tool) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "set_chat_tool", tool }));
+// --------------------------- side-chat management ---------------------------
+
+let sideChatsRestored = false;
+
+function sideChatLabel(chatId) {
+  const m = chatId.match(/^sidechat-(\d+)$/);
+  return m ? `Side ${m[1]}` : chatId;
 }
 
-chatTerm.onData((data) => sendBytes(data));
+function makeChatTerminal(paneEl) {
+  const term = new Terminal({
+    fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
+    fontSize: 13,
+    cursorBlink: true,
+    convertEol: false,
+    scrollback: 5000,
+    theme: { background: "#000000", foreground: "#c0caf5", cursor: "#7aa2f7" },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(paneEl);
+  return { term, fit };
+}
+
+function openSideChat(chatId) {
+  if (chatTerminals.has(chatId)) { activateTab(chatId); return; }
+  const label = sideChatLabel(chatId);
+  state.tabs.push({ id: chatId, kind: "sidechat", label });
+
+  const pane = document.createElement("div");
+  pane.className = "pane chat-pane";
+  pane.dataset.tabId = chatId;
+  pane.setAttribute("role", "tabpanel");
+  els.main.appendChild(pane);
+
+  const { term, fit } = makeChatTerminal(pane);
+  chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
+  term.onData((data) => sendBytesForTab(chatId, data));
+
+  connectChatWs(chatId, wsRepoId, chatId);
+  activateTab(chatId);
+}
+
+function closeSideChatTab(tabId) {
+  const entry = chatTerminals.get(tabId);
+  if (!entry) return;
+  closeChatWs(tabId);
+  try { entry.term.dispose(); } catch { /* ignore */ }
+  chatTerminals.delete(tabId);
+  const pane = els.main.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
+  if (pane) pane.remove();
+  state.tabs = state.tabs.filter((t) => t.id !== tabId);
+  if (state.activeTabId === tabId) activateTab("chat");
+  else { renderTabs(); renderJobs(); }
+}
+
+async function deleteSideChat(tabId) {
+  const repoId = wsRepoId;
+  closeSideChatTab(tabId);
+  if (repoId) {
+    fetch(`/repos/${encodeURIComponent(repoId)}/chats/${encodeURIComponent(tabId)}`, {
+      method: "DELETE",
+    }).catch(() => { /* ignore — chat PTY will be cleaned up on engine restart */ });
+  }
+}
+
+async function restoreSideChats() {
+  if (!wsRepoId) return;
+  try {
+    const res = await fetch(`/repos/${encodeURIComponent(wsRepoId)}/chats`);
+    if (!res.ok) return;
+    const list = await res.json();
+    let added = false;
+    for (const { chatId, kind } of list) {
+      if (kind !== "sidechat" || chatTerminals.has(chatId)) continue;
+      const label = sideChatLabel(chatId);
+      state.tabs.push({ id: chatId, kind: "sidechat", label });
+      const pane = document.createElement("div");
+      pane.className = "pane chat-pane";
+      pane.dataset.tabId = chatId;
+      pane.setAttribute("role", "tabpanel");
+      els.main.appendChild(pane);
+      const { term, fit } = makeChatTerminal(pane);
+      chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
+      term.onData((data) => sendBytesForTab(chatId, data));
+      connectChatWs(chatId, wsRepoId, chatId);
+      added = true;
+    }
+    if (added) renderTabs();
+  } catch { /* ignore — no side-chats to restore */ }
+}
+
+document.getElementById("new-chat").addEventListener("click", async () => {
+  if (!wsRepoId) return;
+  const tool = els.prefChat.value;
+  try {
+    const res = await fetch(`/repos/${encodeURIComponent(wsRepoId)}/chats`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool }),
+    });
+    if (res.status === 429) { toast("error", "Side chat limit reached (max 8)."); return; }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      toast("error", `Failed to create side chat: ${body.error ?? `HTTP ${res.status}`}`);
+      return;
+    }
+    const body = await res.json();
+    if (body.chatId) openSideChat(body.chatId);
+  } catch (err) {
+    toast("error", `Failed to create side chat: ${String(err?.message ?? err)}`);
+  }
+});
 
 // --------------------------- repo selector ---------------------------
 
@@ -310,7 +446,13 @@ function renderRepoSelector() {
   if (repo?.jobTool) syncJobToolSelect(repo.jobTool);
 
   // Open the chat WS for the selected repo if we're not already on it.
-  if (state.selectedRepoId !== wsRepoId) switchChatToRepo(state.selectedRepoId);
+  if (state.selectedRepoId !== wsRepoId) {
+    switchChatToRepo(state.selectedRepoId);
+    if (!sideChatsRestored) {
+      sideChatsRestored = true;
+      restoreSideChats();
+    }
+  }
 }
 
 els.repoFilter.addEventListener("change", () => {
@@ -419,14 +561,15 @@ function renderTabs() {
     label.textContent = tab.label;
     btn.appendChild(label);
 
-    if (tab.kind === "job") {
+    if (tab.kind === "job" || tab.kind === "sidechat") {
       const close = document.createElement("span");
       close.className = "tab-close";
       close.textContent = "×";
       close.setAttribute("aria-label", "close tab");
       close.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        closeJobTab(tab.id);
+        if (tab.kind === "sidechat") deleteSideChat(tab.id);
+        else closeJobTab(tab.id);
       });
       btn.appendChild(close);
     }
@@ -440,8 +583,9 @@ function activateTab(tabId) {
   for (const pane of els.main.querySelectorAll(".pane")) {
     pane.classList.toggle("active", pane.dataset.tabId === tabId || (tabId === "chat" && pane.id === "chat"));
   }
-  if (tabId === "chat") {
-    requestAnimationFrame(() => { chatFit.fit(); sendResize(); });
+  if (tabId === "chat" || chatTerminals.has(tabId)) {
+    const entry = chatTerminals.get(tabId);
+    if (entry) requestAnimationFrame(() => { entry.fit.fit(); sendResizeForTab(tabId); });
   } else {
     const view = state.jobViews.get(tabId);
     if (view) requestAnimationFrame(() => view.fit.fit());
@@ -987,7 +1131,12 @@ connectEvents();
 // --------------------------- layout ---------------------------
 
 function refitAllPanes() {
-  try { chatFit.fit(); sendResize(); } catch { /* ignore */ }
+  for (const [tabId, entry] of chatTerminals) {
+    try { entry.fit.fit(); } catch { /* ignore */ }
+    if (tabId === state.activeTabId || (state.activeTabId === "chat" && tabId === "chat")) {
+      sendResizeForTab(tabId);
+    }
+  }
   for (const view of state.jobViews.values()) {
     try { view.fit.fit(); } catch { /* ignore */ }
   }

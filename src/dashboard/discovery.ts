@@ -57,7 +57,7 @@ export const SPARKFLOW_VERSION = readPackageVersion();
  * it alone for patch-level sparkflow upgrades that don't touch the wire
  * format. The frontend rejects attaches that disagree on this value.
  */
-export const SPARKFLOW_PROTOCOL_VERSION = 2;
+export const SPARKFLOW_PROTOCOL_VERSION = 3;
 
 function sparkflowHome(): string {
   return process.env.SPARKFLOW_HOME ?? join(homedir(), ".sparkflow");

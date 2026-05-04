@@ -34,6 +34,18 @@ Executes workflow steps, resolves worktrees, injects env vars. Auto-injects `SPA
 - `pr-watcher` — polls GitHub for CI results and review activity
 - `workflow` — dispatches child workflows (supports `foreach`)
 
+### Side-Chat Pool (`src/dashboard/engine-daemon.ts`)
+
+The engine daemon owns a pool of PTY sessions keyed by `chatId`:
+- `"main"` — the MCP-wired sparkflow chat (launched via `buildChatSpawn`)
+- `"sidechat-N"` — stripped bare instances (no MCP, no system prompt) for parallel conversations
+
+Clients create side-chats via `POST /repos/:repoId/chats` and close them via `DELETE /repos/:repoId/chats/:chatId`. The frontend daemon proxies these requests to the engine over the PTY bridge unix socket using a request-id correlation protocol.
+
+WebSocket connections carry `?chatId=<id>` to bind to a specific chat session's ring buffer and PTY data stream. Max 8 concurrent side-chats per engine (returns 429 beyond).
+
+`buildBareChatSpawn` (`src/tui/chat-tool.ts`) builds the stripped argv — no `--mcp-config`, no `--append-system-prompt`, no file writes for gemini.
+
 ### Job Recovery & Resume
 
 When a `sparkflow-run` engine process dies while a job is in `failed_waiting` state, the dashboard can restart it from where it left off:

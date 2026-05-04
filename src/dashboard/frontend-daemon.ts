@@ -147,47 +147,71 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 interface PtyBridge {
-  onData(cb: (chunk: Buffer) => void): void;
-  onChatTool(cb: (tool: ToolKind) => void): void;
-  write(bytes: Buffer): void;
-  resize(cols: number, rows: number): void;
+  onChatData(cb: (chatId: string, chunk: Buffer) => void): void;
+  onChatList(cb: (chats: Array<{ chatId: string; kind: string; tool: ToolKind }>) => void): void;
+  onChatTool(cb: (chatId: string, tool: ToolKind) => void): void;
+  onChatCreated(cb: (clientReqId: string, chatId: string, tool: ToolKind) => void): void;
+  onChatCreateFailed(cb: (clientReqId: string, error: string) => void): void;
+  onChatClosed(cb: (chatId: string, clientReqId: string | undefined) => void): void;
+  onChatCloseFailed(cb: (clientReqId: string, error: string) => void): void;
+  writeTo(chatId: string, bytes: Buffer): void;
+  resizeTo(chatId: string, cols: number, rows: number): void;
   setChatTool(tool: ToolKind): void;
+  createChat(clientReqId: string, tool: ToolKind): void;
+  closeChat(chatId: string, clientReqId: string): void;
   close(): void;
 }
 
 function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
   return new Promise((resolve, reject) => {
     const sock: Socket = createConnection(socketPath);
-    const dataCbs: Array<(b: Buffer) => void> = [];
-    const toolCbs: Array<(t: ToolKind) => void> = [];
-    const pendingData: Buffer[] = [];
-    let pendingTool: ToolKind | null = null;
+    const chatDataCbs: Array<(chatId: string, b: Buffer) => void> = [];
+    const chatListCbs: Array<(chats: Array<{ chatId: string; kind: string; tool: ToolKind }>) => void> = [];
+    const chatToolCbs: Array<(chatId: string, tool: ToolKind) => void> = [];
+    const chatCreatedCbs: Array<(clientReqId: string, chatId: string, tool: ToolKind) => void> = [];
+    const chatCreateFailedCbs: Array<(clientReqId: string, error: string) => void> = [];
+    const chatClosedCbs: Array<(chatId: string, clientReqId: string | undefined) => void> = [];
+    const chatCloseFailedCbs: Array<(clientReqId: string, error: string) => void> = [];
+    const pendingChatData: Array<[string, Buffer]> = [];
+    const pendingChatList: Array<Array<{ chatId: string; kind: string; tool: ToolKind }>> = [];
     let buf = "";
 
     const bridge: PtyBridge = {
-      onData: (cb) => {
-        dataCbs.push(cb);
-        if (pendingData.length > 0) {
-          const queued = pendingData.splice(0, pendingData.length);
-          for (const b of queued) cb(b);
+      onChatData: (cb) => {
+        chatDataCbs.push(cb);
+        if (pendingChatData.length > 0) {
+          const queued = pendingChatData.splice(0);
+          for (const [chatId, b] of queued) cb(chatId, b);
         }
       },
-      onChatTool: (cb) => {
-        toolCbs.push(cb);
-        if (pendingTool) cb(pendingTool);
+      onChatList: (cb) => {
+        chatListCbs.push(cb);
+        if (pendingChatList.length > 0) {
+          const queued = pendingChatList.splice(0);
+          for (const list of queued) cb(list);
+        }
       },
-      write: (bytes) => {
-        sock.write(JSON.stringify({ type: "pty_write", bytes: bytes.toString("base64") }) + "\n");
+      onChatTool: (cb) => { chatToolCbs.push(cb); },
+      onChatCreated: (cb) => { chatCreatedCbs.push(cb); },
+      onChatCreateFailed: (cb) => { chatCreateFailedCbs.push(cb); },
+      onChatClosed: (cb) => { chatClosedCbs.push(cb); },
+      onChatCloseFailed: (cb) => { chatCloseFailedCbs.push(cb); },
+      writeTo: (chatId, bytes) => {
+        sock.write(JSON.stringify({ type: "pty_write", chatId, bytes: bytes.toString("base64") }) + "\n");
       },
-      resize: (cols, rows) => {
-        sock.write(JSON.stringify({ type: "pty_resize", cols, rows }) + "\n");
+      resizeTo: (chatId, cols, rows) => {
+        sock.write(JSON.stringify({ type: "pty_resize", chatId, cols, rows }) + "\n");
       },
       setChatTool: (tool) => {
         sock.write(JSON.stringify({ type: "set_chat_tool", tool }) + "\n");
       },
-      close: () => {
-        try { sock.destroy(); } catch { /* ignore */ }
+      createChat: (clientReqId, tool) => {
+        sock.write(JSON.stringify({ type: "chat_create", clientReqId, tool }) + "\n");
       },
+      closeChat: (chatId, clientReqId) => {
+        sock.write(JSON.stringify({ type: "chat_close", chatId, clientReqId }) + "\n");
+      },
+      close: () => { try { sock.destroy(); } catch { /* ignore */ } },
     };
 
     sock.setEncoding("utf-8");
@@ -202,15 +226,29 @@ function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         try {
-          const msg = JSON.parse(line) as { type?: string; bytes?: string; tool?: string };
-          if ((msg.type === "snapshot" || msg.type === "pty_data") && typeof msg.bytes === "string") {
+          const msg = JSON.parse(line) as {
+            type?: string; chatId?: string; bytes?: string; tool?: string;
+            chats?: Array<{ chatId: string; kind: string; tool: ToolKind }>;
+            clientReqId?: string; error?: string;
+          };
+          if (msg.type === "chat_list" && Array.isArray(msg.chats)) {
+            if (chatListCbs.length === 0) pendingChatList.push(msg.chats);
+            else for (const cb of chatListCbs) cb(msg.chats);
+          } else if ((msg.type === "snapshot" || msg.type === "pty_data") && typeof msg.chatId === "string" && typeof msg.bytes === "string") {
             const b = Buffer.from(msg.bytes, "base64");
-            if (dataCbs.length === 0) pendingData.push(b);
-            else for (const cb of dataCbs) cb(b);
-          } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
-            const t = msg.tool;
-            if (toolCbs.length === 0) pendingTool = t;
-            else for (const cb of toolCbs) cb(t);
+            if (chatDataCbs.length === 0) pendingChatData.push([msg.chatId, b]);
+            else for (const cb of chatDataCbs) cb(msg.chatId, b);
+          } else if (msg.type === "chat_tool" && typeof msg.chatId === "string" && (msg.tool === "claude" || msg.tool === "gemini")) {
+            for (const cb of chatToolCbs) cb(msg.chatId, msg.tool);
+          } else if (msg.type === "chat_created" && typeof msg.clientReqId === "string" && typeof msg.chatId === "string" && (msg.tool === "claude" || msg.tool === "gemini")) {
+            for (const cb of chatCreatedCbs) cb(msg.clientReqId, msg.chatId, msg.tool);
+          } else if (msg.type === "chat_create_failed" && typeof msg.clientReqId === "string" && typeof msg.error === "string") {
+            for (const cb of chatCreateFailedCbs) cb(msg.clientReqId, msg.error);
+          } else if (msg.type === "chat_closed" && typeof msg.chatId === "string") {
+            const clientReqId = typeof msg.clientReqId === "string" ? msg.clientReqId : undefined;
+            for (const cb of chatClosedCbs) cb(msg.chatId, clientReqId);
+          } else if (msg.type === "chat_close_failed" && typeof msg.clientReqId === "string" && typeof msg.error === "string") {
+            for (const cb of chatCloseFailedCbs) cb(msg.clientReqId, msg.error);
           }
         } catch { /* ignore */ }
       }
@@ -243,45 +281,132 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   await registry.listen();
 
   // Per-repo PTY bridge state. Each attached engine that exposes a bridge
-  // gets its own entry: separate connection, separate ring, separate WS
-  // fan-out. Lets the UI present a fully-independent chat per repo.
-  interface RepoBridge {
-    bridge: PtyBridge;
+  // gets its own entry with a pool of per-chat states.
+  interface ChatEntry {
     ring: Buffer;
+    tool: ToolKind;
+    kind: "main" | "sidechat";
+    clients: Set<WebSocket>;
   }
-  const bridges = new Map<string, RepoBridge>();
-  // WebSocket clients, grouped by the repoId they're bound to. A client binds
-  // to a repo on connect (via ?repoId=...); it stays bound for its lifetime.
+  interface PendingCreate {
+    resolve: (chatId: string, tool: ToolKind) => void;
+    reject: (error: string) => void;
+  }
+  interface PendingClose {
+    resolve: () => void;
+    reject: (error: string) => void;
+  }
+  interface RepoBridgeEntry {
+    bridge: PtyBridge;
+    chats: Map<string, ChatEntry>;
+    pendingCreates: Map<string, PendingCreate>;
+    pendingCloses: Map<string, PendingClose>;
+  }
+  const bridges = new Map<string, RepoBridgeEntry>();
+  // WebSocket clients are tracked in per-chat Sets inside RepoBridgeEntry.chats.
+  // wsToRepo/wsToChat let the upgrade handler route new connections.
   const wsToRepo = new WeakMap<WebSocket, string>();
-  const wssRef: { wss: WebSocketServer | null } = { wss: null };
-
-  function broadcastToRepo(repoId: string, payload: string): void {
-    if (!wssRef.wss) return;
-    for (const ws of wssRef.wss.clients) {
-      if (ws.readyState !== ws.OPEN) continue;
-      if (wsToRepo.get(ws) !== repoId) continue;
-      ws.send(payload);
-    }
-  }
+  const wsToChat = new WeakMap<WebSocket, string>();
 
   function onEngineAttached(conn: EngineConnection): void {
     if (!conn.ptyBridgePath || bridges.has(conn.repoId)) return;
     connectPtyBridge(conn.ptyBridgePath).then((bridge) => {
-      const entry: RepoBridge = { bridge, ring: Buffer.alloc(0) };
+      const chatMap = new Map<string, ChatEntry>();
+      const pendingCreates = new Map<string, PendingCreate>();
+      const pendingCloses = new Map<string, PendingClose>();
+      const entry: RepoBridgeEntry = { bridge, chats: chatMap, pendingCreates, pendingCloses };
       bridges.set(conn.repoId, entry);
 
-      bridge.onData((chunk) => {
-        entry.ring = appendRing(entry.ring, chunk, RING_BUFFER_BYTES);
+      bridge.onChatList((chatList) => {
+        // Sync per-chat state with the engine's authoritative list.
+        const newIds = new Set(chatList.map(c => c.chatId));
+        for (const cId of chatMap.keys()) {
+          if (!newIds.has(cId)) chatMap.delete(cId);
+        }
+        for (const { chatId, kind, tool } of chatList) {
+          if (!chatMap.has(chatId)) {
+            chatMap.set(chatId, { ring: Buffer.alloc(0), tool, kind: kind as "main" | "sidechat", clients: new Set() });
+          }
+        }
+        const mainChat = chatList.find(c => c.chatId === "main");
+        if (mainChat) registry.updateChatTool(conn.repoId, mainChat.tool as ToolKind);
+      });
+
+      bridge.onChatData((chatId, chunk) => {
+        const chat = chatMap.get(chatId);
+        if (!chat) return;
+        chat.ring = appendRing(chat.ring, chunk, RING_BUFFER_BYTES);
         const payload = JSON.stringify({ type: "data", bytes: chunk.toString("base64") });
-        broadcastToRepo(conn.repoId, payload);
+        for (const ws of chat.clients) {
+          if (ws.readyState === ws.OPEN) ws.send(payload);
+        }
       });
-      bridge.onChatTool((tool) => {
-        registry.updateChatTool(conn.repoId, tool);
-        // On tool switch the engine clears its ring; do the same here so
-        // reconnecting clients don't replay stale bytes from the old session.
-        entry.ring = Buffer.alloc(0);
-        broadcastToRepo(conn.repoId, JSON.stringify({ type: "chat_tool", tool }));
+
+      bridge.onChatTool((chatId, tool) => {
+        const chat = chatMap.get(chatId);
+        if (chat) {
+          // On tool switch the engine clears its ring; mirror that here.
+          chat.ring = Buffer.alloc(0);
+          chat.tool = tool;
+        }
+        if (chatId === "main") {
+          registry.updateChatTool(conn.repoId, tool);
+          const mainChat = chatMap.get("main");
+          if (mainChat) {
+            const payload = JSON.stringify({ type: "chat_tool", tool });
+            for (const ws of mainChat.clients) {
+              if (ws.readyState === ws.OPEN) ws.send(payload);
+            }
+          }
+        }
       });
+
+      bridge.onChatCreated((clientReqId, chatId, tool) => {
+        chatMap.set(chatId, { ring: Buffer.alloc(0), tool, kind: "sidechat", clients: new Set() });
+        const pending = pendingCreates.get(clientReqId);
+        if (pending) {
+          pendingCreates.delete(clientReqId);
+          pending.resolve(chatId, tool);
+        }
+      });
+
+      bridge.onChatCreateFailed((clientReqId, error) => {
+        const pending = pendingCreates.get(clientReqId);
+        if (pending) {
+          pendingCreates.delete(clientReqId);
+          pending.reject(error);
+        }
+      });
+
+      bridge.onChatClosed((chatId, clientReqId) => {
+        const chat = chatMap.get(chatId);
+        if (chat) {
+          const payload = JSON.stringify({ type: "chat_ended" });
+          for (const ws of chat.clients) {
+            if (ws.readyState === ws.OPEN) {
+              try { ws.send(payload); } catch { /* ignore */ }
+              try { ws.close(); } catch { /* ignore */ }
+            }
+          }
+          chatMap.delete(chatId);
+        }
+        if (clientReqId) {
+          const pending = pendingCloses.get(clientReqId);
+          if (pending) {
+            pendingCloses.delete(clientReqId);
+            pending.resolve();
+          }
+        }
+      });
+
+      bridge.onChatCloseFailed((clientReqId, error) => {
+        const pending = pendingCloses.get(clientReqId);
+        if (pending) {
+          pendingCloses.delete(clientReqId);
+          pending.reject(error);
+        }
+      });
+
     }).catch(() => { /* PTY bridge unavailable — engine without chat */ });
   }
 
@@ -481,6 +606,69 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       }
     }
 
+    // GET /repos/:repoId/chats — list all chats (main + side-chats)
+    const chatsGetMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/chats$/);
+    if (chatsGetMatch && req.method === "GET") {
+      const [, repoId] = chatsGetMatch;
+      const entry = bridges.get(repoId);
+      if (!entry) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+      const list = [...entry.chats.entries()].map(([chatId, c]) => ({ chatId, kind: c.kind, tool: c.tool }));
+      return sendJson(res, 200, list);
+    }
+
+    // POST /repos/:repoId/chats — create a new side-chat
+    if (chatsGetMatch && req.method === "POST") {
+      const [, repoId] = chatsGetMatch;
+      const entry = bridges.get(repoId);
+      if (!entry) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+      readJsonBody(req).then((body) => {
+        const { tool = "claude" } = body as { tool?: unknown };
+        if (tool !== "claude" && tool !== "gemini") {
+          return sendJson(res, 400, { error: "tool must be 'claude' or 'gemini'" });
+        }
+        const clientReqId = randomBytes(8).toString("hex");
+        const timeout = setTimeout(() => {
+          entry.pendingCreates.delete(clientReqId);
+          sendJson(res, 503, { error: "supervisor timeout" });
+        }, 10_000);
+        entry.pendingCreates.set(clientReqId, {
+          resolve: (chatId, chatTool) => {
+            clearTimeout(timeout);
+            sendJson(res, 200, { chatId, kind: "sidechat", tool: chatTool });
+          },
+          reject: (error) => {
+            clearTimeout(timeout);
+            sendJson(res, error.includes("limit") ? 429 : 400, { error });
+          },
+        });
+        entry.bridge.createChat(clientReqId, tool as ToolKind);
+      }).catch((err: unknown) => {
+        sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+      });
+      return;
+    }
+
+    // DELETE /repos/:repoId/chats/:chatId — close a side-chat
+    const chatDeleteMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/chats\/([^/]+)$/);
+    if (chatDeleteMatch && req.method === "DELETE") {
+      const [, repoId, chatId] = chatDeleteMatch;
+      if (chatId === "main") return sendJson(res, 400, { error: "cannot close main chat" });
+      const entry = bridges.get(repoId);
+      if (!entry) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+      if (!entry.chats.has(chatId)) return sendJson(res, 404, { error: "chat not found" });
+      const clientReqId = randomBytes(8).toString("hex");
+      const timeout = setTimeout(() => {
+        entry.pendingCloses.delete(clientReqId);
+        sendJson(res, 503, { error: "supervisor timeout" });
+      }, 10_000);
+      entry.pendingCloses.set(clientReqId, {
+        resolve: () => { clearTimeout(timeout); sendJson(res, 200, { ok: true }); },
+        reject: (error) => { clearTimeout(timeout); sendJson(res, 400, { error }); },
+      });
+      entry.bridge.closeChat(chatId, clientReqId);
+      return;
+    }
+
     // Switch the jobs tool for a specific repo's engine.
     const jobToolMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/job-tool$/);
     if (jobToolMatch && req.method === "POST") {
@@ -564,7 +752,6 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   });
 
   const wss = new WebSocketServer({ noServer: true });
-  wssRef.wss = wss;
 
   function pickRepoIdFromUrl(url: string): string | null {
     const idx = url.indexOf("?");
@@ -572,43 +759,58 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
     const params = new URLSearchParams(url.slice(idx + 1));
     const requested = params.get("repoId");
     if (requested && bridges.has(requested)) return requested;
-    // Fall back to the first attached engine with a bridge — lets old clients
-    // (and the sole-repo default) keep working without an explicit repoId.
+    // Fall back to the first attached engine with a bridge.
     for (const rid of bridges.keys()) return rid;
     return null;
   }
 
   server.on("upgrade", (req, socket, head) => {
-    if ((req.url ?? "").split("?")[0] !== "/chat" || !authorized(req, token)) {
+    const url = req.url ?? "";
+    if (url.split("?")[0] !== "/chat" || !authorized(req, token)) {
       (socket as Socket).write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       (socket as Socket).destroy();
       return;
     }
-    const repoId = pickRepoIdFromUrl(req.url ?? "");
+    const repoId = pickRepoIdFromUrl(url);
     if (!repoId) {
       (socket as Socket).write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
       (socket as Socket).destroy();
       return;
     }
+    const params = new URLSearchParams(url.includes("?") ? url.slice(url.indexOf("?") + 1) : "");
+    const chatId = params.get("chatId") ?? "main";
     wss.handleUpgrade(req, socket as Socket, head, (ws) => {
       wsToRepo.set(ws, repoId);
+      wsToChat.set(ws, chatId);
       wss.emit("connection", ws, req);
     });
   });
 
   wss.on("connection", (ws: WebSocket) => {
     const repoId = wsToRepo.get(ws);
+    const chatId = wsToChat.get(ws) ?? "main";
     if (!repoId) {
       try { ws.close(1011, "no repo"); } catch { /* ignore */ }
       return;
     }
     const entry = bridges.get(repoId);
-    if (entry && entry.ring.length > 0) {
-      ws.send(JSON.stringify({ type: "data", bytes: entry.ring.toString("base64") }));
+    if (!entry) {
+      try { ws.close(1011, "no bridge"); } catch { /* ignore */ }
+      return;
     }
-    // Announce current chatTool on connect so the UI can initialise its select.
-    const tool = registry.getEngine(repoId)?.chatTool;
-    if (tool) ws.send(JSON.stringify({ type: "chat_tool", tool }));
+    const chat = entry.chats.get(chatId);
+    if (!chat) {
+      try { ws.close(1008, "unknown chatId"); } catch { /* ignore */ }
+      return;
+    }
+    chat.clients.add(ws);
+    if (chat.ring.length > 0) {
+      ws.send(JSON.stringify({ type: "data", bytes: chat.ring.toString("base64") }));
+    }
+    if (chatId === "main") {
+      const tool = registry.getEngine(repoId)?.chatTool;
+      if (tool) ws.send(JSON.stringify({ type: "chat_tool", tool }));
+    }
 
     ws.on("message", (raw) => {
       let parsed: unknown;
@@ -617,12 +819,17 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       const current = bridges.get(repoId);
       if (!current) return;
       if (msg.type === "data" && typeof msg.bytes === "string") {
-        try { current.bridge.write(Buffer.from(msg.bytes, "base64")); } catch { /* ignore */ }
+        try { current.bridge.writeTo(chatId, Buffer.from(msg.bytes, "base64")); } catch { /* ignore */ }
       } else if (msg.type === "resize" && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {
-        try { current.bridge.resize(Math.max(1, msg.cols!), Math.max(1, msg.rows!)); } catch { /* ignore */ }
-      } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+        try { current.bridge.resizeTo(chatId, Math.max(1, msg.cols!), Math.max(1, msg.rows!)); } catch { /* ignore */ }
+      } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini") && chatId === "main") {
         try { current.bridge.setChatTool(msg.tool); } catch { /* ignore */ }
       }
+    });
+
+    ws.on("close", () => {
+      const e = bridges.get(repoId);
+      e?.chats.get(chatId)?.clients.delete(ws);
     });
   });
 

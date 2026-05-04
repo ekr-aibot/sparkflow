@@ -231,7 +231,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         const outputs: Record<string, unknown> = {};
         const parsed = resultEvent;
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
-        const quotaHit = !success && !tokenLimitHit && this.isQuotaError(parsed, stderr);
+        const quotaHit = !success && !tokenLimitHit && this.isQuotaError(parsed, stderr, stdout);
 
         if (success && parsed) {
           // For json-typed outputs, parse the result text as JSON and extract
@@ -388,14 +388,16 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
   /**
    * Returns true when the failure is caused by a quota or rate-limit error.
-   * Detects API-level rate limits (429), usage quota exhaustion, and overloaded (529) errors.
+   * Detects API-level rate limits (429), usage quota exhaustion, overloaded (529) errors,
+   * and the Claude developer plan "You've hit your limit" message.
    * These are transient: the engine should wait and retry rather than failing the step.
    */
   isQuotaError(
     parsed: Record<string, unknown> | null,
-    stderr: string
+    stderr: string,
+    stdout: string = ""
   ): boolean {
-    const QUOTA_RE = /quota|usage.{0,10}limit|rate.{0,5}limit|too many requests|overloaded|529/i;
+    const QUOTA_RE = /quota|usage.{0,10}limit|rate.{0,5}limit|too many requests|overloaded|529|hit.{0,10}your.{0,10}limit/i;
     if (parsed?.is_error === true) {
       const resultText = String(parsed.result ?? "");
       if (QUOTA_RE.test(resultText)) return true;
@@ -403,6 +405,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       if (/rate.{0,5}limit|overloaded/i.test(subtype)) return true;
     }
     if (QUOTA_RE.test(stderr)) return true;
+    if (QUOTA_RE.test(stdout)) return true;
     return false;
   }
 

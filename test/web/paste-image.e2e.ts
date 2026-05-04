@@ -12,9 +12,15 @@ const TINY_PNG = Buffer.from(
 );
 
 let server: WebServerHandle;
+let repoId: string;
 
 test.beforeAll(async () => {
   server = await startWebServer();
+  const res = await fetch(`http://127.0.0.1:${server.port}/repos`, {
+    headers: { Cookie: `sf_token=${server.token}` },
+  });
+  const body = await res.json() as { repos: Array<{ repoId: string }> };
+  repoId = body.repos[0].repoId;
 });
 
 test.afterAll(async () => {
@@ -23,9 +29,10 @@ test.afterAll(async () => {
 
 const cookieHeader = () => `sf_token=${server.token}`;
 const httpBase = () => `http://127.0.0.1:${server.port}`;
+const pasteUrl = () => `${httpBase()}/repos/${encodeURIComponent(repoId)}/paste-image`;
 
-test("POST /api/paste-image with image/png returns 200 with relpath and saves file", async () => {
-  const res = await fetch(`${httpBase()}/api/paste-image`, {
+test("POST /repos/:repoId/paste-image with image/png returns 200 with relpath and saves file", async () => {
+  const res = await fetch(pasteUrl(), {
     method: "POST",
     headers: { Cookie: cookieHeader(), "Content-Type": "image/png" },
     body: TINY_PNG,
@@ -39,8 +46,8 @@ test("POST /api/paste-image with image/png returns 200 with relpath and saves fi
   expect(existsSync(join(server.cwd, body.relpath))).toBe(true);
 });
 
-test("POST /api/paste-image with image/jpeg returns 200 with .jpg extension", async () => {
-  const res = await fetch(`${httpBase()}/api/paste-image`, {
+test("POST /repos/:repoId/paste-image with image/jpeg returns 200 with .jpg extension", async () => {
+  const res = await fetch(pasteUrl(), {
     method: "POST",
     headers: { Cookie: cookieHeader(), "Content-Type": "image/jpeg" },
     body: Buffer.from([0xff, 0xd8, 0xff]),
@@ -50,8 +57,8 @@ test("POST /api/paste-image with image/jpeg returns 200 with .jpg extension", as
   expect(body.relpath.endsWith(".jpg")).toBe(true);
 });
 
-test("POST /api/paste-image with text/plain returns 415", async () => {
-  const res = await fetch(`${httpBase()}/api/paste-image`, {
+test("POST /repos/:repoId/paste-image with text/plain returns 415", async () => {
+  const res = await fetch(pasteUrl(), {
     method: "POST",
     headers: { Cookie: cookieHeader(), "Content-Type": "text/plain" },
     body: Buffer.from("hello"),
@@ -61,8 +68,8 @@ test("POST /api/paste-image with text/plain returns 415", async () => {
   expect(body.error).toContain("unsupported image type");
 });
 
-test("POST /api/paste-image with image/svg+xml returns 415", async () => {
-  const res = await fetch(`${httpBase()}/api/paste-image`, {
+test("POST /repos/:repoId/paste-image with image/svg+xml returns 415", async () => {
+  const res = await fetch(pasteUrl(), {
     method: "POST",
     headers: { Cookie: cookieHeader(), "Content-Type": "image/svg+xml" },
     body: Buffer.from("<svg/>"),
@@ -70,9 +77,9 @@ test("POST /api/paste-image with image/svg+xml returns 415", async () => {
   expect(res.status).toBe(415);
 });
 
-test("POST /api/paste-image with body over 10 MiB returns 413", async () => {
+test("POST /repos/:repoId/paste-image with body over 10 MiB returns 413", async () => {
   const bigBody = Buffer.alloc(11 * 1024 * 1024, 0);
-  const res = await fetch(`${httpBase()}/api/paste-image`, {
+  const res = await fetch(pasteUrl(), {
     method: "POST",
     headers: { Cookie: cookieHeader(), "Content-Type": "image/png" },
     body: bigBody,
@@ -82,11 +89,20 @@ test("POST /api/paste-image with body over 10 MiB returns 413", async () => {
   expect(body.error).toContain("too large");
 });
 
-test("POST /api/paste-image without token returns 401", async () => {
-  const res = await fetch(`${httpBase()}/api/paste-image`, {
+test("POST /repos/:repoId/paste-image without token returns 401", async () => {
+  const res = await fetch(pasteUrl(), {
     method: "POST",
     headers: { "Content-Type": "image/png" },
     body: TINY_PNG,
   });
   expect(res.status).toBe(401);
+});
+
+test("POST /repos/:repoId/paste-image with unknown repoId returns 404", async () => {
+  const res = await fetch(`${httpBase()}/repos/unknownrepo/paste-image`, {
+    method: "POST",
+    headers: { Cookie: cookieHeader(), "Content-Type": "image/png" },
+    body: TINY_PNG,
+  });
+  expect(res.status).toBe(404);
 });

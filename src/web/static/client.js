@@ -176,10 +176,11 @@ function installPasteHandler(tabId, term) {
 }
 
 async function handlePastedImages(tabId, files) {
+  if (!wsRepoId) return;
   const relpaths = [];
   for (const file of files) {
     try {
-      const res = await fetch("/api/paste-image", {
+      const res = await fetch(`/repos/${encodeURIComponent(wsRepoId)}/paste-image`, {
         method: "POST",
         headers: { "Content-Type": file.type },
         body: file,

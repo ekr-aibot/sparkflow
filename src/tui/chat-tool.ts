@@ -66,6 +66,39 @@ function escapeTomlBasicString(s: string): string {
   return JSON.stringify(s);
 }
 
+export interface BuildBareChatSpawnOpts {
+  tool: ChatTool;
+  /** Resolved chat binary (defaults: claude → "claude", gemini → "npx"). */
+  command: string;
+  /** User-supplied extra args. */
+  chatArgs: string[];
+  /** Working directory. */
+  cwd: string;
+}
+
+/**
+ * Builds a stripped chat spawn with no MCP server, no system prompt, and no
+ * sparkflow slash commands. Used for side-chat instances.
+ *
+ * Note: side-chats launched from the same cwd will still see any
+ * .claude/commands/*.md files that buildChatSpawn wrote, but without the
+ * MCP backend those slash commands are inert (they paste prompt text only).
+ */
+export function buildBareChatSpawn(opts: BuildBareChatSpawnOpts): ChatSpawn {
+  if (opts.tool === "claude") {
+    const args = [...opts.chatArgs];
+    const shellCmd = [sq(opts.command), ...args.map(sq)].join(" ");
+    return { cmd: opts.command, args, shellCmd, cleanup: () => {} };
+  }
+  if (opts.tool === "gemini") {
+    const toolPrefix = opts.command === "npx" ? ["@google/gemini-cli@latest", "-y"] : [];
+    const args = [...toolPrefix, ...opts.chatArgs];
+    const shellCmd = [sq(opts.command), ...args.map(sq)].join(" ");
+    return { cmd: opts.command, args, shellCmd, cleanup: () => {} };
+  }
+  throw new Error(`Unknown chat tool: ${String(opts.tool)}`);
+}
+
 export function buildChatSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
   if (opts.tool === "claude") {
     return buildClaudeSpawn(opts);

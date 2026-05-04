@@ -142,6 +142,22 @@ button {
   50% { opacity: 0.4; }
 }
 
+.new-chat-btn {
+  padding: 0 14px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+  margin-left: auto;
+}
+.new-chat-btn:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 /* ---- main pane ---- */
 
 #main {

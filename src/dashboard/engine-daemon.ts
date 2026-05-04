@@ -33,7 +33,7 @@ import { handleIpcRequest } from "../tui/ipc-handler.js";
 import { EngineIpcClient } from "./engine-ipc-client.js";
 import { repoIdFor, SPARKFLOW_VERSION, SPARKFLOW_PROTOCOL_VERSION } from "./discovery.js";
 import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
-import { buildChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpec } from "../tui/chat-tool.js";
+import { buildChatSpawn, buildBareChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpec } from "../tui/chat-tool.js";
 import type { ErrorMessage, FrontendToEngine, ToolKind } from "./ipc-protocol.js";
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
     repoName,
     mcpSocket: mcpSocketPath,
     ptyBridgePath: ptyBridgePath || undefined,
-    getChatTool: () => currentChatTool ?? "claude",
+    getChatTool: () => chats.get("main")?.tool ?? currentChatTool ?? "claude",
     getJobTool: () => currentJobTool,
     version: SPARKFLOW_VERSION,
     protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
@@ -281,11 +281,19 @@ async function main(): Promise<void> {
   // through — WS /chat then serves no data. Order: spawn pty → listen on
   // bridge → attach to frontend.
   const ingredients = readChatIngredients();
-  let pty: IPty | null = null;
-  let currentCleanup: (() => void) | null = null;
-  let ring: Buffer = Buffer.alloc(0);
   const ptyClients = new Set<Socket>();
   let bridgeServer: NetServer | null = null;
+
+  interface ChatSession {
+    pty: IPty | null;
+    ring: Buffer;
+    cleanup: (() => void) | null;
+    tool: ChatTool;
+    kind: "main" | "sidechat";
+    switchingTool: boolean;
+  }
+  // Populated inside the if-block below; used by cleanup() outside it.
+  const chats = new Map<string, ChatSession>();
 
   function broadcastPtyFrame(frame: string): void {
     for (const c of ptyClients) {
@@ -294,13 +302,96 @@ async function main(): Promise<void> {
   }
 
   if (ingredients && ptyBridgePath) {
-    currentChatTool = ingredients.chatTool;
-    let switchingTool = false;
+    let sideCounter = 0;
+    const MAX_SIDE_CHATS = 8;
 
-    function spawnChatPty(tool: ChatTool): void {
-      const chatSpawn = buildChatSpawn({
+    currentChatTool = ingredients.chatTool;
+
+    function wireChatPty(chatId: string, nextPty: IPty): void {
+      nextPty.onData((data) => {
+        const session = chats.get(chatId);
+        if (!session) return;
+        const chunk = Buffer.from(data, "utf-8");
+        session.ring = appendRing(session.ring, chunk, RING_BUFFER_BYTES);
+        broadcastPtyFrame(JSON.stringify({ type: "pty_data", chatId, bytes: chunk.toString("base64") }) + "\n");
+      });
+      nextPty.onExit(({ exitCode }) => {
+        const session = chats.get(chatId);
+        if (!session || session.switchingTool || session.pty !== nextPty) return;
+        if (chatId === "main") {
+          console.error(`[sparkflow engine] chat process exited (code=${exitCode}); shutting down`);
+          shutdown(0);
+        } else {
+          console.error(`[sparkflow engine] side-chat ${chatId} exited (code=${exitCode})`);
+          const oldCleanup = session.cleanup;
+          chats.delete(chatId);
+          try { oldCleanup?.(); } catch { /* ignore */ }
+          broadcastPtyFrame(JSON.stringify({ type: "chat_closed", chatId }) + "\n");
+        }
+      });
+    }
+
+    function spawnChatPty(chatId: string, tool: ChatTool, kind: "main" | "sidechat"): void {
+      const chatSpawnObj = kind === "main"
+        ? buildChatSpawn({
+            tool,
+            command: defaultCommandFor(tool, ingredients!.commandOverride),
+            chatArgs: ingredients!.chatArgs,
+            mcpServerSpec: ingredients!.mcpServerSpec,
+            mcpServerName: ingredients!.mcpServerName,
+            mcpConfigPath: ingredients!.mcpConfigPath,
+            systemPromptText: ingredients!.systemPromptText,
+            systemPromptPath: ingredients!.systemPromptPath,
+            cwd,
+            slashCommands: ingredients!.slashCommands,
+          })
+        : buildBareChatSpawn({
+            tool,
+            command: defaultCommandFor(tool, ingredients!.commandOverride),
+            chatArgs: ingredients!.chatArgs,
+            cwd,
+          });
+
+      const nextPty = ptySpawn(chatSpawnObj.cmd, chatSpawnObj.args, {
+        name: "xterm-256color",
+        cols: 100,
+        rows: 30,
+        cwd,
+        env: process.env as Record<string, string>,
+      });
+
+      const session: ChatSession = {
+        pty: nextPty,
+        ring: Buffer.alloc(0),
+        cleanup: chatSpawnObj.cleanup,
         tool,
-        command: defaultCommandFor(tool, ingredients!.commandOverride),
+        kind,
+        switchingTool: false,
+      };
+      chats.set(chatId, session);
+      if (chatId === "main") currentChatTool = tool;
+      wireChatPty(chatId, nextPty);
+    }
+
+    function switchChatTool(nextTool: ToolKind): void {
+      const session = chats.get("main");
+      if (!session || nextTool === session.tool) return;
+      broadcastPtyFrame(JSON.stringify({
+        type: "pty_data",
+        chatId: "main",
+        bytes: Buffer.from(`\r\n[sparkflow] switching chat to ${nextTool}…\r\n`, "utf-8").toString("base64"),
+      }) + "\n");
+      session.switchingTool = true;
+      const oldPty = session.pty;
+      const oldCleanup = session.cleanup;
+      session.pty = null;
+      session.cleanup = null;
+      session.ring = Buffer.alloc(0);
+      try { oldPty?.kill(); } catch { /* ignore */ }
+      try { oldCleanup?.(); } catch { /* ignore */ }
+      const chatSpawnObj = buildChatSpawn({
+        tool: nextTool,
+        command: defaultCommandFor(nextTool, ingredients!.commandOverride),
         chatArgs: ingredients!.chatArgs,
         mcpServerSpec: ingredients!.mcpServerSpec,
         mcpServerName: ingredients!.mcpServerName,
@@ -310,63 +401,67 @@ async function main(): Promise<void> {
         cwd,
         slashCommands: ingredients!.slashCommands,
       });
-
-      const nextPty = ptySpawn(chatSpawn.cmd, chatSpawn.args, {
+      const nextPty = ptySpawn(chatSpawnObj.cmd, chatSpawnObj.args, {
         name: "xterm-256color",
         cols: 100,
         rows: 30,
         cwd,
         env: process.env as Record<string, string>,
       });
-      pty = nextPty;
-      currentCleanup = chatSpawn.cleanup;
-      currentChatTool = tool;
-
-      nextPty.onData((data) => {
-        const chunk = Buffer.from(data, "utf-8");
-        ring = appendRing(ring, chunk, RING_BUFFER_BYTES);
-        broadcastPtyFrame(JSON.stringify({ type: "pty_data", bytes: chunk.toString("base64") }) + "\n");
-      });
-
-      nextPty.onExit(({ exitCode }) => {
-        if (switchingTool || pty !== nextPty) return;
-        console.error(`[sparkflow engine] chat process exited (code=${exitCode}); shutting down`);
-        shutdown(0);
-      });
+      session.pty = nextPty;
+      session.cleanup = chatSpawnObj.cleanup;
+      session.tool = nextTool;
+      session.switchingTool = false;
+      currentChatTool = nextTool;
+      wireChatPty("main", nextPty);
+      broadcastPtyFrame(JSON.stringify({ type: "chat_tool", chatId: "main", tool: nextTool }) + "\n");
     }
 
-    function switchChatTool(nextTool: ToolKind): void {
-      if (nextTool === currentChatTool) return;
-      broadcastPtyFrame(JSON.stringify({
-        type: "pty_data",
-        bytes: Buffer.from(`\r\n[sparkflow] switching chat to ${nextTool}…\r\n`, "utf-8").toString("base64"),
-      }) + "\n");
-      switchingTool = true;
-      const oldPty = pty;
-      const oldCleanup = currentCleanup;
-      pty = null;
-      currentCleanup = null;
-      ring = Buffer.alloc(0);
+    function spawnSideChat(tool: ChatTool, clientReqId: string): void {
+      const sideChatCount = [...chats.values()].filter(s => s.kind === "sidechat").length;
+      if (sideChatCount >= MAX_SIDE_CHATS) {
+        broadcastPtyFrame(JSON.stringify({ type: "chat_create_failed", clientReqId, error: "side-chat limit reached (8)" }) + "\n");
+        return;
+      }
+      const chatId = `sidechat-${++sideCounter}`;
+      spawnChatPty(chatId, tool, "sidechat");
+      broadcastPtyFrame(JSON.stringify({ type: "chat_created", clientReqId, chatId, tool }) + "\n");
+    }
+
+    function closeChat(chatId: string, clientReqId: string): void {
+      if (chatId === "main") {
+        broadcastPtyFrame(JSON.stringify({ type: "chat_close_failed", clientReqId, error: "cannot close main chat" }) + "\n");
+        return;
+      }
+      const session = chats.get(chatId);
+      if (!session) {
+        broadcastPtyFrame(JSON.stringify({ type: "chat_close_failed", clientReqId, error: "chat not found" }) + "\n");
+        return;
+      }
+      const oldPty = session.pty;
+      const oldCleanup = session.cleanup;
+      // Remove before kill so the onExit handler skips re-broadcast.
+      chats.delete(chatId);
       try { oldPty?.kill(); } catch { /* ignore */ }
       try { oldCleanup?.(); } catch { /* ignore */ }
-      spawnChatPty(nextTool);
-      switchingTool = false;
-      broadcastPtyFrame(JSON.stringify({ type: "chat_tool", tool: nextTool }) + "\n");
+      broadcastPtyFrame(JSON.stringify({ type: "chat_closed", chatId, clientReqId }) + "\n");
     }
 
-    spawnChatPty(ingredients.chatTool);
+    spawnChatPty("main", ingredients.chatTool, "main");
 
     // PTY bridge server
     try { unlinkSync(ptyBridgePath); } catch { /* not present */ }
     bridgeServer = createNetServer((sock: Socket) => {
       ptyClients.add(sock);
       sock.setEncoding("utf-8");
-      if (ring.length > 0) {
-        sock.write(JSON.stringify({ type: "snapshot", bytes: ring.toString("base64") }) + "\n");
+      // Send chat pool state: list first, then per-chat snapshots.
+      const chatList = [...chats.entries()].map(([cId, s]) => ({ chatId: cId, kind: s.kind, tool: s.tool }));
+      sock.write(JSON.stringify({ type: "chat_list", chats: chatList }) + "\n");
+      for (const [cId, session] of chats) {
+        if (session.ring.length > 0) {
+          sock.write(JSON.stringify({ type: "snapshot", chatId: cId, bytes: session.ring.toString("base64") }) + "\n");
+        }
       }
-      // Announce the current tool on every new client so the UI can initialise
-      // its pulldown from the engine's live state.
-      sock.write(JSON.stringify({ type: "chat_tool", tool: currentChatTool ?? "claude" }) + "\n");
       let buf = "";
       sock.on("data", (chunk) => {
         buf += chunk as unknown as string;
@@ -376,15 +471,22 @@ async function main(): Promise<void> {
           buf = buf.slice(nl + 1);
           if (!line) continue;
           try {
-            const msg = JSON.parse(line) as { type?: string; bytes?: string; cols?: number; rows?: number; tool?: string };
-            if (msg.type === "pty_write" && typeof msg.bytes === "string") {
-              pty?.write(Buffer.from(msg.bytes, "base64").toString("utf-8"));
-            } else if (msg.type === "pty_resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
-              pty?.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
+            const msg = JSON.parse(line) as {
+              type?: string; chatId?: string; bytes?: string;
+              cols?: number; rows?: number; tool?: string; clientReqId?: string;
+            };
+            if (msg.type === "pty_write" && typeof msg.chatId === "string" && typeof msg.bytes === "string") {
+              chats.get(msg.chatId)?.pty?.write(Buffer.from(msg.bytes, "base64").toString("utf-8"));
+            } else if (msg.type === "pty_resize" && typeof msg.chatId === "string" && typeof msg.cols === "number" && typeof msg.rows === "number") {
+              chats.get(msg.chatId)?.pty?.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
             } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
               switchChatTool(msg.tool);
+            } else if (msg.type === "chat_create" && typeof msg.clientReqId === "string" && (msg.tool === "claude" || msg.tool === "gemini")) {
+              spawnSideChat(msg.tool, msg.clientReqId);
+            } else if (msg.type === "chat_close" && typeof msg.chatId === "string" && typeof msg.clientReqId === "string") {
+              closeChat(msg.chatId, msg.clientReqId);
             }
-          } catch { /* ignore */ }
+          } catch { /* ignore bad frame */ }
         }
       });
       sock.on("close", () => ptyClients.delete(sock));
@@ -408,8 +510,11 @@ async function main(): Promise<void> {
   let exiting = false;
 
   function cleanup(): void {
-    try { pty?.kill(); } catch { /* ignore */ }
-    try { currentCleanup?.(); } catch { /* ignore */ }
+    for (const [, session] of chats) {
+      try { session.pty?.kill(); } catch { /* ignore */ }
+      try { session.cleanup?.(); } catch { /* ignore */ }
+    }
+    chats.clear();
     try { bridgeServer?.close(); } catch { /* ignore */ }
     if (ptyBridgePath) try { unlinkSync(ptyBridgePath); } catch { /* ignore */ }
   }

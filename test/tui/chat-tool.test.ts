@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildChatSpawn } from "../../src/tui/chat-tool.js";
+import { buildChatSpawn, buildBareChatSpawn } from "../../src/tui/chat-tool.js";
 
 function baseOpts(tmp: string) {
   return {
@@ -155,6 +155,61 @@ describe("buildChatSpawn", () => {
       // No npx prefix, no injected -y — trust the user's chatArgs.
       expect(spawn.args).toEqual(["--extra", "42"]);
       spawn.cleanup();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("buildBareChatSpawn", () => {
+  it("claude: no --mcp-config or --append-system-prompt flags", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-bare-test-"));
+    try {
+      const spawn = buildBareChatSpawn({ tool: "claude", command: "claude", chatArgs: ["--extra", "42"], cwd: tmp });
+      expect(spawn.cmd).toBe("claude");
+      expect(spawn.args).toEqual(["--extra", "42"]);
+      expect(spawn.args).not.toContain("--mcp-config");
+      expect(spawn.args).not.toContain("--append-system-prompt");
+      // cleanup is a no-op and does not throw
+      expect(() => spawn.cleanup()).not.toThrow();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("gemini via npx: has @google/gemini-cli@latest prefix, no settings.json or GEMINI.md written", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-bare-test-"));
+    try {
+      const spawn = buildBareChatSpawn({ tool: "gemini", command: "npx", chatArgs: [], cwd: tmp });
+      expect(spawn.cmd).toBe("npx");
+      expect(spawn.args[0]).toBe("@google/gemini-cli@latest");
+      expect(spawn.args[1]).toBe("-y");
+      expect(existsSync(join(tmp, ".gemini", "settings.json"))).toBe(false);
+      expect(existsSync(join(tmp, "GEMINI.md"))).toBe(false);
+      expect(() => spawn.cleanup()).not.toThrow();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("gemini with non-npx binary: no prefix, no files written", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-bare-test-"));
+    try {
+      const spawn = buildBareChatSpawn({ tool: "gemini", command: "/usr/bin/gemini", chatArgs: ["--foo"], cwd: tmp });
+      expect(spawn.cmd).toBe("/usr/bin/gemini");
+      expect(spawn.args).toEqual(["--foo"]);
+      expect(existsSync(join(tmp, ".gemini"))).toBe(false);
+      spawn.cleanup();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("claude: chatArgs with no extra args produces empty args list", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-bare-test-"));
+    try {
+      const spawn = buildBareChatSpawn({ tool: "claude", command: "claude", chatArgs: [], cwd: tmp });
+      expect(spawn.args).toEqual([]);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

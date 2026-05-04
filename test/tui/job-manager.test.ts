@@ -543,3 +543,72 @@ describe("JobManager restartJob kind preservation", () => {
     expect(newJob!.kind).toBeUndefined();
   });
 });
+
+describe("JobManager restartJob dead-child regression", () => {
+  // Regression: restarting a failed_waiting job whose engine process has
+  // already exited used to hang forever because killJobAndWait registered a
+  // "close" listener on an already-closed ChildProcess (close doesn't replay).
+  let manager: JobManager;
+  let tmpDir: string;
+  type InternalJobs = Map<string, {
+    info: { state: string };
+    pid: number;
+    child: object | null;
+  }>;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-test-deadchild-"));
+    manager = new JobManager(tmpDir);
+  });
+
+  afterEach(() => {
+    manager.killAll();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("fresh restart of failed_waiting job with dead child returns ok without hanging", async () => {
+    const id = manager.startJob("/nonexistent/workflow.json");
+
+    // Wait for the process to exit so child "close" has already fired.
+    await waitFor(() => manager.getJobs()[0]?.state === "failed");
+
+    // Simulate the production scenario: engine exited while job was paused in
+    // failed_waiting (child ref is non-null, but the OS process is long gone).
+    const jobs = (manager as unknown as { jobs: InternalJobs }).jobs;
+    const job = jobs.get(id)!;
+    job.info.state = "failed_waiting";
+    job.pid = 2147483647; // definitely dead
+
+    const result = await Promise.race([
+      manager.restartJob(id, "fresh"),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("restartJob hung — took > 2s")), 2000),
+      ),
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.newJobId).toBeDefined();
+  });
+
+  it("killJobAndWait resolves immediately when process is already dead", async () => {
+    const id = manager.startJob("/nonexistent/workflow.json");
+    await waitFor(() => manager.getJobs()[0]?.state === "failed");
+
+    const jobs = (manager as unknown as { jobs: InternalJobs }).jobs;
+    const job = jobs.get(id)!;
+    job.info.state = "failed_waiting";
+    job.pid = 2147483647;
+
+    const killJobAndWait = (
+      manager as unknown as { killJobAndWait: (id: string) => Promise<void> }
+    ).killJobAndWait.bind(manager);
+
+    await Promise.race([
+      killJobAndWait(id),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("killJobAndWait hung — took > 2s")), 2000),
+      ),
+    ]);
+    // reaching here without rejection means it resolved promptly
+  });
+});

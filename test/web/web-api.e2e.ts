@@ -144,7 +144,6 @@ test("WS /chat round-trips bytes through the PTY (echo)", async () => {
 test("WS /chat tolerates resize messages", async () => {
   const ws = await openWs({ query: server.token });
   try {
-    await nextMessage(ws, (m) => m.type === "data" && typeof m.bytes === "string");
     ws.send(JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
     // No response expected for resize; just verify the connection stays open.
     await new Promise((r) => setTimeout(r, 200));

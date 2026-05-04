@@ -1045,12 +1045,13 @@ async function killJob(jobId, repoId) {
 
 async function restartJob(jobId, repoId) {
   const rid = repoId || jobRepoId(jobId);
+  const hadTab = state.jobViews.has(jobId);
   const res = await postAction(jobActionUrl(rid, jobId, "restart"));
   if (res.ok) {
     toast("success", `Restarted ${jobId.slice(0, 8)}.`);
-    if (res.newJobId && state.jobViews.has(jobId)) {
+    if (hadTab) {
       closeJobTab(jobId);
-      openJobTab(res.newJobId);
+      if (res.newJobId) openJobTab(res.newJobId);
     }
   } else {
     toast("error", `Restart failed: ${res.error}`);

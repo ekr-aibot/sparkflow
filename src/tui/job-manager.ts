@@ -628,6 +628,12 @@ export class JobManager {
     if (job.info.state === "succeeded" || job.info.state === "failed") {
       return Promise.resolve();
     }
+    // Belt-and-suspenders: if the OS process is already gone (e.g. the engine
+    // died while the job was in failed_waiting), the child "close" event has
+    // already fired and will not replay — awaiting a fresh listener deadlocks.
+    if (job.pid > 0 && !isAlive(job.pid)) {
+      return Promise.resolve();
+    }
 
     return new Promise<void>((resolve) => {
       let settled = false;
@@ -746,7 +752,7 @@ export class JobManager {
     }
 
     if (job.info.state !== "succeeded" && job.info.state !== "failed") {
-      if (job.child) {
+      if (job.child && isAlive(job.pid)) {
         await this.killJobAndWait(jobId);
       } else if (job.pid > 0 && isAlive(job.pid)) {
         // Rehydrated job with a live pid — signal it; don't block.

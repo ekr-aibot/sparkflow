@@ -15,15 +15,13 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { extname, resolve, dirname, join } from "node:path";
-import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { IpcServer } from "../mcp/ipc.js";
 import { JobManager } from "../tui/job-manager.js";
 import { handleIpcRequest } from "../tui/ipc-handler.js";
-import { pruneOldPastedImages } from "./paste-utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -86,13 +84,6 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
-const IMAGE_MIME_EXT: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-};
-
 function enrichJobs(jobManager: JobManager): Array<Record<string, unknown>> {
   return jobManager.getJobs().map((info) => {
     const detail = jobManager.getJobDetail(info.id);
@@ -124,28 +115,6 @@ function deriveActiveSteps(output: string[]): Record<string, string> {
     }
   }
   return active;
-}
-
-function readBinaryBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let aborted = false;
-    req.on("data", (chunk: Buffer) => {
-      if (aborted) return;
-      bytes += chunk.byteLength;
-      if (bytes > maxBytes) {
-        aborted = true;
-        chunks.length = 0;
-        reject(new Error("request body too large"));
-        req.resume();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => { if (!aborted) resolve(Buffer.concat(chunks)); });
-    req.on("error", (err) => reject(err));
-  });
 }
 
 /**
@@ -382,7 +351,6 @@ async function main(): Promise<void> {
   const jobManager = new JobManager(args.cwd);
   jobManager.rehydrate();
   jobManager.autoStartMonitors();
-  pruneOldPastedImages(args.cwd);
 
   try { unlinkSync(args.socketPath); } catch { /* not present */ }
   const ipcServer = new IpcServer(args.socketPath);
@@ -527,32 +495,6 @@ async function main(): Promise<void> {
     if (pathname === "/api/chat/summary" && req.method === "GET") {
       const text = stripAnsi(ring.toString("utf-8"));
       return sendJson(res, 200, { summary: text });
-    }
-
-    if (pathname === "/api/paste-image" && req.method === "POST") {
-      const ct = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
-      const ext = IMAGE_MIME_EXT[ct];
-      if (!ext) {
-        return sendJson(res, 415, { error: `unsupported image type: ${ct}` });
-      }
-      readBinaryBody(req, 10 * 1024 * 1024).then((buf) => {
-        const ts = new Date().toISOString().replace(/[:.]/g, "-");
-        const rand = randomBytes(4).toString("hex");
-        const filename = `${ts}-${rand}.${ext}`;
-        const pastedDir = join(args.cwd, ".sparkflow", "pasted");
-        mkdirSync(pastedDir, { recursive: true });
-        writeFileSync(join(pastedDir, filename), buf);
-        const relpath = `.sparkflow/pasted/${filename}`;
-        sendJson(res, 200, { relpath, bytes: buf.byteLength });
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg === "request body too large") {
-          sendJson(res, 413, { error: "image too large (max 10 MiB)" });
-        } else {
-          sendJson(res, 500, { error: msg });
-        }
-      });
-      return;
     }
 
     res.writeHead(404, { "content-type": "text/plain" });

@@ -27,7 +27,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { FrontendIpcServer, type EngineConnection } from "./frontend-ipc-server.js";
 import { appendRing, RING_BUFFER_BYTES } from "./ring-buffer.js";
 import type { ToolKind } from "./ipc-protocol.js";
-import { pruneOldPastedImages } from "../web/paste-utils.js";
+import { pruneOldPastedImages, readBinaryBody } from "../web/paste-utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -149,28 +149,6 @@ const IMAGE_MIME_EXT: Record<string, string> = {
   "image/gif": "gif",
   "image/webp": "webp",
 };
-
-function readBinaryBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let aborted = false;
-    req.on("data", (chunk: Buffer) => {
-      if (aborted) return;
-      bytes += chunk.byteLength;
-      if (bytes > maxBytes) {
-        aborted = true;
-        chunks.length = 0;
-        reject(new Error("request body too large"));
-        req.resume();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => { if (!aborted) resolve(Buffer.concat(chunks)); });
-    req.on("error", (err) => reject(err));
-  });
-}
 
 // ---------------------------------------------------------------------------
 // PTY bridge proxy (connects to the primary engine's PTY bridge socket)

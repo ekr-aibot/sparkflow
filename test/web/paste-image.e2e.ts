@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { startWebServer, type WebServerHandle } from "./server-fixture.js";
 
-// Minimal 1×1 PNG (67 bytes)
+// Minimal 1×1 PNG (68 bytes)
 const TINY_PNG = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108020000009001" +
   "2e00000000c4944415408d7636060600000000200013491b04000000049454" +

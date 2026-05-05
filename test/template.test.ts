@@ -40,13 +40,31 @@ describe("resolveTemplate", () => {
   it("returns placeholder when referencing a step with no outputs", () => {
     const outputs = new Map<string, Record<string, unknown>>();
     const result = resolveTemplate("${steps.missing.output.x}", outputs);
-    expect(result).toBe('<sparkflow:missing-step step="missing">');
+    expect(result).toBe('(step "missing" did not run)');
   });
 
   it("returns placeholder when referencing a non-existent output field", () => {
     const outputs = new Map([["author", { summary: "ok" }]]);
     const result = resolveTemplate("${steps.author.output.missing}", outputs);
-    expect(result).toBe('<sparkflow:missing-output step="author" field="missing">');
+    expect(result).toBe('(no `missing` output from step "author")');
+  });
+
+  it("missing-step placeholder is plain English in prose context", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const result = resolveTemplate(
+      "The code review found issues: ${steps.reviewer.output.review}",
+      outputs
+    );
+    expect(result).toBe('The code review found issues: (step "reviewer" did not run)');
+  });
+
+  it("missing-output placeholder is plain English in prose context", () => {
+    const outputs = new Map([["reviewer", { approved: false }]]);
+    const result = resolveTemplate(
+      "The code review found issues: ${steps.reviewer.output.review}",
+      outputs
+    );
+    expect(result).toBe('The code review found issues: (no `review` output from step "reviewer")');
   });
 
   it("returns text unchanged when no templates present", () => {

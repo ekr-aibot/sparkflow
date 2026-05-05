@@ -106,17 +106,19 @@ export class ShellAdapter implements RuntimeAdapter {
         }
 
         const outputs: Record<string, unknown> = {};
-        if (success && ctx.step.outputs && !ctx.interactive) {
-          const trimmed = stdout.trim();
+        if (ctx.step.outputs && !ctx.interactive) {
+          // Combine stdout and stderr so callers see the full output on failure
+          // (e.g. test runners write diagnostics to both streams).
+          const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
           for (const [name, decl] of Object.entries(ctx.step.outputs)) {
             if (decl.type === "json") {
               try {
-                outputs[name] = JSON.parse(trimmed);
+                outputs[name] = JSON.parse(combined);
               } catch {
-                outputs[name] = trimmed;
+                outputs[name] = combined;
               }
             } else {
-              outputs[name] = trimmed;
+              outputs[name] = combined;
             }
           }
         }

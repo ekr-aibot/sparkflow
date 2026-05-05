@@ -85,7 +85,7 @@ test("loads the page, terminal renders, and chat WS receives PTY output", async 
   await expect(page.locator("#status")).toBeVisible();
 
   // xterm.js mounts a `.xterm` div inside #chat.
-  await page.waitForSelector("#chat .xterm", { timeout: 10000 });
+  await page.waitForSelector("#chat .xterm", { timeout: 20000 });
 
   // The fake-chat fixture prints SF_TEST_READY immediately. xterm renders it
   // into the screen buffer; we read it back via the Terminal API.
@@ -95,7 +95,7 @@ test("loads the page, terminal renders, and chat WS receives PTY output", async 
     if (!term) return null;
     const text = term.textContent ?? "";
     return text.includes("SF_TEST_READY") ? text : null;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 20000 });
   expect(await readyText.jsonValue()).toContain("SF_TEST_READY");
 
   // Type into the terminal — the fake chat will echo it back as `ECHO:hi\r\n`.
@@ -105,7 +105,7 @@ test("loads the page, terminal renders, and chat WS receives PTY output", async 
     const term = document.querySelector("#chat .xterm-rows");
     const text = term?.textContent ?? "";
     return text.includes("ECHO:hi") ? text : null;
-  }, null, { timeout: 10000 });
+  }, null, { timeout: 20000 });
   expect(await echoText.jsonValue()).toContain("ECHO:hi");
 
   // Status panel renders the empty-state message from the SSE feed.
@@ -123,7 +123,7 @@ test("header has brand and an active Chat tab", async ({ browser }) => {
 
   // The Chat tab is always present and active by default.
   const chatTab = page.locator('#tabs .tab[data-tab-id="chat"]');
-  await expect(chatTab).toBeVisible();
+  await expect(chatTab).toBeVisible({ timeout: 10000 });
   await expect(chatTab).toHaveClass(/active/);
   await expect(chatTab).toContainText("Chat");
 

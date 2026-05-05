@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { writeFileSync, rmSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ClaudeCodeAdapter } from "../../src/runtime/claude-code.js";
 import { NudgeQueue } from "../../src/runtime/types.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
@@ -300,4 +303,199 @@ describe("ClaudeCodeAdapter", () => {
       expect(result.success).toBe(false);
     });
   });
+});
+
+// Fake claude binary helpers for self-nudge integration tests
+
+/**
+ * Creates a temp directory with a fake "claude" script that emits one result event
+ * per user message received on stdin. `turns` is the ordered list of result text
+ * strings to emit; subsequent messages get an empty string.
+ */
+function mkFakeClaude(turns: string[]): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "fake-claude-"));
+  const scriptPath = join(dir, "claude");
+  writeFileSync(
+    scriptPath,
+    `#!/usr/bin/env node
+const rl = require('readline').createInterface({ input: process.stdin });
+const turns = ${JSON.stringify(turns)};
+let idx = 0;
+rl.on('line', (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.type === 'user') {
+      const text = turns[idx++] ?? '';
+      process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text }) + '\\n');
+    }
+  } catch {}
+});
+rl.on('close', () => process.exit(0));
+`,
+    { mode: 0o755 }
+  );
+  return { dir, cleanup: () => rmSync(dir, { recursive: true }) };
+}
+
+async function withFakeClaude<T>(turns: string[], fn: () => Promise<T>): Promise<T> {
+  const { dir, cleanup } = mkFakeClaude(turns);
+  const origPath = process.env.PATH;
+  process.env.PATH = `${dir}:${origPath ?? ""}`;
+  try {
+    return await fn();
+  } finally {
+    process.env.PATH = origPath;
+    cleanup();
+  }
+}
+
+describe("ClaudeCodeAdapter self-nudge", () => {
+  const adapter = new ClaudeCodeAdapter();
+
+  function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
+    return {
+      stepId: "test-step",
+      step: { name: "Test", interactive: false },
+      runtime: { type: "claude-code" },
+      cwd: process.cwd(),
+      env: {},
+      interactive: false,
+      ...overrides,
+    };
+  }
+
+  it("self-nudges once when gate output is absent in turn 1, succeeds in turn 2", async () => {
+    const selfNudgeLogs: string[] = [];
+    const result = await withFakeClaude(
+      ["I'll review the code.", '{"approved": true, "review": "LGTM"}'],
+      () =>
+        adapter.run(
+          makeCtx({
+            step: {
+              name: "Reviewer",
+              interactive: false,
+              success_output: "approved",
+              outputs: { approved: { type: "json" }, review: { type: "json" } },
+            },
+            prompt: "Review the code",
+            logger: {
+              info: (msg: string) => {
+                if (msg.includes("self-nudge")) selfNudgeLogs.push(msg);
+              },
+            } as any,
+          })
+        )
+    );
+    expect(result.success).toBe(true);
+    expect(result.outputs.approved).toBe(true);
+    expect(selfNudgeLogs).toHaveLength(1);
+  }, 15000);
+
+  it("does NOT self-nudge when gate output is false (agent decided no)", async () => {
+    const selfNudgeLogs: string[] = [];
+    const result = await withFakeClaude(
+      ['{"approved": false, "review": "Issues found"}'],
+      () =>
+        adapter.run(
+          makeCtx({
+            step: {
+              name: "Reviewer",
+              interactive: false,
+              success_output: "approved",
+              outputs: { approved: { type: "json" }, review: { type: "json" } },
+            },
+            prompt: "Review the code",
+            logger: {
+              info: (msg: string) => {
+                if (msg.includes("self-nudge")) selfNudgeLogs.push(msg);
+              },
+            } as any,
+          })
+        )
+    );
+    expect(result.success).toBe(false);
+    expect(result.outputs.approved).toBe(false);
+    expect(selfNudgeLogs).toHaveLength(0);
+  }, 15000);
+
+  it("self-nudges at most once even if turn 2 also misses the output", async () => {
+    const selfNudgeLogs: string[] = [];
+    const result = await withFakeClaude(
+      ["Prose only.", "Still prose, no JSON."],
+      () =>
+        adapter.run(
+          makeCtx({
+            step: {
+              name: "Reviewer",
+              interactive: false,
+              success_output: "approved",
+              outputs: { approved: { type: "json" } },
+            },
+            prompt: "Review the code",
+            logger: {
+              info: (msg: string) => {
+                if (msg.includes("self-nudge")) selfNudgeLogs.push(msg);
+              },
+            } as any,
+          })
+        )
+    );
+    expect(result.success).toBe(false);
+    expect(selfNudgeLogs).toHaveLength(1);
+  }, 15000);
+
+  it("does NOT self-nudge when step has no success_output", async () => {
+    const selfNudgeLogs: string[] = [];
+    const result = await withFakeClaude(
+      ["Just prose output."],
+      () =>
+        adapter.run(
+          makeCtx({
+            step: { name: "Plain step", interactive: false },
+            prompt: "Do something",
+            logger: {
+              info: (msg: string) => {
+                if (msg.includes("self-nudge")) selfNudgeLogs.push(msg);
+              },
+            } as any,
+          })
+        )
+    );
+    expect(result.success).toBe(true);
+    expect(selfNudgeLogs).toHaveLength(0);
+  }, 15000);
+
+  it("user-pushed nudges work alongside self-nudge", async () => {
+    const selfNudgeLogs: string[] = [];
+    const q = new NudgeQueue();
+    q.push("Also confirm the architecture is clean.");
+    const result = await withFakeClaude(
+      [
+        "Let me think about this.",
+        '{"approved": true, "review": "LGTM"}',
+        '{"approved": true, "review": "Architecture looks good"}',
+      ],
+      () =>
+        adapter.run(
+          makeCtx({
+            step: {
+              name: "Reviewer",
+              interactive: false,
+              success_output: "approved",
+              outputs: { approved: { type: "json" }, review: { type: "json" } },
+            },
+            prompt: "Review the code",
+            nudgeQueue: q,
+            logger: {
+              info: (msg: string) => {
+                if (msg.includes("self-nudge")) selfNudgeLogs.push(msg);
+              },
+            } as any,
+          })
+        )
+    );
+    expect(result.success).toBe(true);
+    expect(result.outputs.approved).toBe(true);
+    expect(selfNudgeLogs).toHaveLength(1);
+  }, 15000);
 });

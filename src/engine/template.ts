@@ -44,10 +44,10 @@ export function resolveTemplate(
   let resolved = text.replace(TEMPLATE_RE, (_match, stepId: string, field: string) => {
     const outputs = stepOutputs.get(stepId);
     if (!outputs) {
-      return `<sparkflow:missing-step step="${stepId}">`;
+      return `(step "${stepId}" did not run)`;
     }
     if (!(field in outputs)) {
-      return `<sparkflow:missing-output step="${stepId}" field="${field}">`;
+      return `(no \`${field}\` output from step "${stepId}")`;
     }
     return stringify(outputs[field]);
   });

@@ -194,6 +194,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         }
       });
 
+      let selfNudgeUsed = false;
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       if (ctx.timeout) {
@@ -315,6 +316,38 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         while (true) {
           // Wait for the current turn's result event (or process close)
           await new Promise<void>((r) => { onResultEvent = r; });
+
+          // Self-nudge: if the gate output is absent from this turn's result, inject one retry.
+          // Fires only when success_output is set, the turn succeeded (not is_error), and we
+          // haven't already self-nudged. Skips when value is defined-but-not-true (e.g. false)
+          // so the agent's deliberate decision is respected and falls through to normal failure.
+          const currentResult = resultEvent;
+          if (
+            currentResult &&
+            ctx.step.success_output &&
+            !selfNudgeUsed &&
+            currentResult.is_error !== true
+          ) {
+            const resultText = currentResult.result;
+            const parsedJson = typeof resultText === "string"
+              ? this.extractJsonFromResult(resultText)
+              : null;
+            const gatePresent = parsedJson !== null && ctx.step.success_output in parsedJson;
+
+            if (!gatePresent) {
+              const declaredNames = ctx.step.outputs
+                ? Object.keys(ctx.step.outputs)
+                : [ctx.step.success_output];
+              const nudgeText =
+                `Your previous response did not include the required \`${ctx.step.success_output}\`` +
+                ` field (and possibly other declared outputs). Please respond now with a valid JSON` +
+                ` object containing all of: ${declaredNames.join(", ")}. Do not include any other prose.`;
+              ctx.logger?.info(`[${ctx.stepId}:self-nudge] gate output \`${ctx.step.success_output}\` was absent, requesting re-emit`);
+              child.stdin?.write(streamJsonUserMessage(nudgeText));
+              selfNudgeUsed = true;
+              continue;
+            }
+          }
 
           const nudge = ctx.nudgeQueue?.shift();
           if (nudge) {

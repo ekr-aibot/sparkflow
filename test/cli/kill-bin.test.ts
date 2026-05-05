@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { spawn, type ChildProcess } from "node:child_process";
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,6 +11,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, "../..");
 const KILL_BIN = join(REPO_ROOT, "dist/src/cli/kill-bin.js");
+
+// When tests run in a fork worktree (e.g. the sparkflow test step), dist/ is
+// absent because it is gitignored. Build on demand so the binary tests always run.
+beforeAll(() => {
+  if (!existsSync(KILL_BIN)) {
+    const result = spawnSync("npm", ["run", "build"], {
+      cwd: REPO_ROOT,
+      stdio: "pipe",
+      encoding: "utf-8",
+      shell: true,
+    });
+    if (result.status !== 0) {
+      throw new Error(`Pre-test build failed:\n${result.stderr}\n${result.stdout}`);
+    }
+  }
+}, 60000);
 
 function spawnLongLived(ignoreSigterm = false): ChildProcess {
   const code = ignoreSigterm

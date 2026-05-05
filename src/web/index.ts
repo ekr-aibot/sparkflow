@@ -39,7 +39,9 @@ import { buildChatSpawn, type ChatTool, type McpServerSpec, type SlashCommandSpe
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const SERVER_ENTRY = resolve(__dirname, "server.js");
-const WATCH_DIR = resolve(__dirname); // dist/src/web/
+// dist/ root — covers server.js, dashboard/, tui/job-manager.js, runtime/, etc.
+const WATCH_DIR = resolve(__dirname, "..", "..");
+const SUPERVISOR_REL = "src/web/index.js";
 
 const RING_BUFFER_BYTES = 64 * 1024;
 
@@ -304,20 +306,21 @@ async function main(): Promise<void> {
   }
   spawnChild();
 
-  // --- Dev watcher: kill the child on any .js change under dist/src/web/. -
+  // --- Dev watcher: kill the child on any .js change under dist/. -
   let watcher: FSWatcher | null = null;
   if (dev) {
     try {
       watcher = fsWatch(WATCH_DIR, { recursive: true }, (_evt, filename) => {
         if (!filename || typeof filename !== "string") return;
-        if (!filename.endsWith(".js")) return;
+        const rel = filename.split(/[\\/]/).join("/");
+        if (!rel.endsWith(".js")) return;
         // Don't restart on changes to our own code — re-running the supervisor
         // is the user's job. Only server-side changes trigger a respawn.
-        if (filename === "index.js") return;
+        if (rel === SUPERVISOR_REL) return;
         if (respawnTimer) clearTimeout(respawnTimer);
         respawnTimer = setTimeout(() => {
           if (!child || shuttingDown) return;
-          console.error(`[sparkflow web] detected change in ${filename} — restarting server…`);
+          console.error(`[sparkflow web] detected change in ${rel} — restarting server…`);
           try { child.kill("SIGTERM"); } catch { /* already gone */ }
         }, 80);
       });

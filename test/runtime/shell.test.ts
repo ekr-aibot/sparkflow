@@ -70,6 +70,25 @@ describe("ShellAdapter", () => {
     expect(result.outputs.data).toEqual({ key: "value" });
   });
 
+  it("parses JSON output even when the script also writes to stderr", async () => {
+    const ctx = makeCtx({
+      step: {
+        name: "Test",
+        interactive: false,
+        outputs: { data: { type: "json" } },
+      },
+      runtime: {
+        type: "shell",
+        command: "sh",
+        args: ["-c", "'echo log-line >&2; echo \"[{\\\"n\\\":1}]\"'"],
+      },
+    });
+
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs.data).toEqual([{ n: 1 }]);
+  });
+
   it("passes SPARKFLOW_PROMPT env var when prompt is set", async () => {
     const ctx = makeCtx({
       step: {

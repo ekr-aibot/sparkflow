@@ -128,15 +128,18 @@ export class ShellAdapter implements RuntimeAdapter {
 
         const outputs: Record<string, unknown> = {};
         if (ctx.step.outputs && !ctx.interactive) {
-          // Combine stdout and stderr so callers see the full output on failure
-          // (e.g. test runners write diagnostics to both streams).
+          const stdoutTrimmed = stdout.trim();
+          // For text/file outputs, combine stdout+stderr so callers see the full
+          // output on failure (e.g. test runners write diagnostics to both streams).
+          // For json outputs, parse stdout only — mixing stderr breaks the common
+          // "stdout is JSON, stderr is logs" contract.
           const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
           for (const [name, decl] of Object.entries(ctx.step.outputs)) {
             if (decl.type === "json") {
               try {
-                outputs[name] = JSON.parse(combined);
+                outputs[name] = JSON.parse(stdoutTrimmed);
               } catch {
-                outputs[name] = combined;
+                outputs[name] = stdoutTrimmed;
               }
             } else {
               outputs[name] = combined;

@@ -84,6 +84,54 @@ describe("resolveTemplate", () => {
     const result = resolveTemplate("${item.name}", outputs);
     expect(result).toBe("${item.name}");
   });
+
+  it("resolves ${config.git.pull_remote} from project config", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const config = { git: { pull_remote: "upstream" } };
+    const result = resolveTemplate("git pull ${config.git.pull_remote}", outputs, undefined, config);
+    expect(result).toBe("git pull upstream");
+  });
+
+  it("resolves nested config path ${config.git.base}", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const config = { git: { base: "main" } };
+    const result = resolveTemplate("${config.git.base}", outputs, undefined, config);
+    expect(result).toBe("main");
+  });
+
+  it("returns missing-config marker for unknown config path", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const config = { git: {} };
+    const result = resolveTemplate("${config.git.pull_remote}", outputs, undefined, config);
+    expect(result).toBe('<sparkflow:missing-config path="git.pull_remote">');
+  });
+
+  it("returns missing-config marker for entirely absent config section", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const config = {};
+    const result = resolveTemplate("${config.git.base}", outputs, undefined, config);
+    expect(result).toBe('<sparkflow:missing-config path="git.base">');
+  });
+
+  it("ignores ${config.X} when no config is provided", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const result = resolveTemplate("${config.git.base}", outputs);
+    expect(result).toBe("${config.git.base}");
+  });
+
+  it("resolves multiple config refs in one string", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const config = { git: { pull_remote: "upstream", base: "main" } };
+    const result = resolveTemplate("pull --ff-only ${config.git.pull_remote} ${config.git.base}", outputs, undefined, config);
+    expect(result).toBe("pull --ff-only upstream main");
+  });
+
+  it("handles escape $${config.X} → literal ${config.X}", () => {
+    const outputs = new Map<string, Record<string, unknown>>();
+    const config = { git: { base: "main" } };
+    const result = resolveTemplate("$${config.git.base}", outputs, undefined, config);
+    expect(result).toBe("${config.git.base}");
+  });
 });
 
 describe("resolvePrompt", () => {

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolve as pathResolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
+import { resolveTemplate } from "../engine/template.js";
 
 export class ShellAdapter implements RuntimeAdapter {
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
@@ -23,7 +24,9 @@ export class ShellAdapter implements RuntimeAdapter {
 
     const stdio = ctx.interactive ? "inherit" as const : "pipe" as const;
 
-    let command = runtime.command;
+    const stepOutputs = ctx.stepOutputs ?? new Map<string, Record<string, unknown>>();
+
+    let command = resolveTemplate(runtime.command, stepOutputs, undefined, ctx.projectConfig);
     if (command.startsWith("./")) {
       command = pathResolve(ctx.workflowDir ?? ctx.cwd, command);
       if (command.includes(" ") && !command.startsWith("\"")) {
@@ -31,16 +34,27 @@ export class ShellAdapter implements RuntimeAdapter {
       }
     }
 
-    const args = (runtime.args ?? []).map((arg) => {
-      let resolved = arg;
-      if (arg.startsWith("./")) {
-        resolved = pathResolve(ctx.workflowDir ?? ctx.cwd, arg);
+    const resolvedArgs: string[] = [];
+    for (const arg of runtime.args ?? []) {
+      const interpolated = resolveTemplate(arg, stepOutputs, undefined, ctx.projectConfig);
+      const missingMatch = /<sparkflow:missing-config path="([^"]+)">/.exec(interpolated);
+      if (missingMatch) {
+        return {
+          success: false,
+          outputs: {},
+          error: `Shell arg requires config.${missingMatch[1]} — set it in .sparkflow/config.json`,
+        };
+      }
+      let resolved = interpolated;
+      if (resolved.startsWith("./")) {
+        resolved = pathResolve(ctx.workflowDir ?? ctx.cwd, resolved);
       }
       if (resolved.includes(" ") && !resolved.startsWith("\"") && !resolved.startsWith("'")) {
-        return `"${resolved}"`;
+        resolved = `"${resolved}"`;
       }
-      return resolved;
-    });
+      resolvedArgs.push(resolved);
+    }
+    const args = resolvedArgs;
 
     return new Promise<RuntimeResult>((resolve) => {
       const child = spawn(command, args, {

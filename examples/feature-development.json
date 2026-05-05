@@ -145,7 +145,7 @@
       "runtime": {
         "type": "shell",
         "command": "git",
-        "args": ["pull", "--ff-only"]
+        "args": ["pull", "--ff-only", "${config.git.pull_remote}", "${config.git.base}"]
       }
     }
   }

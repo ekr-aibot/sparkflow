@@ -325,7 +325,7 @@ export class WorkflowEngine {
     let resolvedMessage = message;
     if (message) {
       try {
-        resolvedMessage = resolveTemplate(message, this.stepOutputs);
+        resolvedMessage = resolveTemplate(message, this.stepOutputs, undefined, this.config);
       } catch {
         // Fall back to raw string; executeStep will attempt resolution again
         // and surface the error there with proper logging.
@@ -446,7 +446,7 @@ export class WorkflowEngine {
         }
         if (step.prompt) {
           const raw = resolvePrompt(step.prompt, this.workflowDir);
-          parts.push(resolveTemplate(raw, this.stepOutputs));
+          parts.push(resolveTemplate(raw, this.stepOutputs, undefined, this.config));
         }
         prompt = parts.join("\n\n");
       } catch (err) {
@@ -462,7 +462,7 @@ export class WorkflowEngine {
     let transitionMessage: string | undefined;
     if (message) {
       try {
-        transitionMessage = resolveTemplate(message, this.stepOutputs);
+        transitionMessage = resolveTemplate(message, this.stepOutputs, undefined, this.config);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         this.logger.error(`[${stepId}] message resolution failed: ${errMsg}`);
@@ -487,7 +487,7 @@ export class WorkflowEngine {
     if (step.env) {
       try {
         for (const [key, value] of Object.entries(step.env)) {
-          env[key] = resolveTemplate(value, this.stepOutputs);
+          env[key] = resolveTemplate(value, this.stepOutputs, undefined, this.config);
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -575,6 +575,7 @@ export class WorkflowEngine {
       cwd,
       env,
       git: this.config?.git,
+      projectConfig: this.config,
       interactive: step.interactive,
       timeout: step.timeout ?? this.workflow.defaults?.timeout,
       ipcSocketPath,

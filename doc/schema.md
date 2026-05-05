@@ -118,10 +118,11 @@ Invocation: `<command> -p "" -y [-m <model>] -o text|stream-json [...args]`. The
 
 ## Template Syntax
 
-Templates allow steps to reference outputs from other steps. They are interpolated by the runtime before being passed to the agent or command.
+Templates allow steps to reference outputs from other steps or values from the project config. They are interpolated by the runtime before being passed to the agent or command.
 
 ### Syntax
 
+**Step output references:**
 ```
 ${steps.<step_id>.output.<field>}
 ```
@@ -129,20 +130,37 @@ ${steps.<step_id>.output.<field>}
 - `step_id` — key of a step in the `steps` map
 - `field` — key declared in that step's `outputs` map
 
+**Config references:**
+```
+${config.<dot.path>}
+```
+
+- `dot.path` — dot-separated path into the merged project config (`.sparkflow/config.json` → `~/.sparkflow/config.json`)
+- Example: `${config.git.pull_remote}`, `${config.git.base}`
+- Non-string values (arrays, objects) are JSON-serialized
+
+**Foreach item references** (workflow runtime only):
+```
+${item}
+${item.<field>}
+```
+
 ### Where templates are allowed
 
 1. **`prompt`** — instructions injected into an agent for a step
 2. **`message`** — message attached to a transition
 3. **`env`** — environment variable values on a step
+4. **`runtime.command`** and **`runtime.args`** — shell runtime command and arguments (supports `${config.X}` and `${steps.X.output.Y}`)
 
 Templates are **not** allowed in other fields.
 
 ### Resolution rules
 
 - Resolved at **runtime**, just before a step executes
-- Can only reference steps that have **already completed**
+- Step output references can only reference steps that have **already completed**
 - Reference to a step that has not run → **runtime error**
 - Reference to an undeclared output field → **runtime error**
+- Config references to a missing key → **runtime error** (shell adapter fails fast with a clear message)
 - Nested templates are not supported
 
 ### Type-specific behavior
@@ -159,6 +177,7 @@ To include a literal `${` without triggering interpolation, use `$${`:
 
 ```
 $${steps.foo.output.bar}  →  ${steps.foo.output.bar}
+$${config.git.base}       →  ${config.git.base}
 ```
 
 ## Concurrent Failure Semantics

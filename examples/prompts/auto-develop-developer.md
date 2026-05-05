@@ -9,13 +9,17 @@ Your transition message contains:
 - The **attempt number** (e.g., "attempt 1", "attempt 2")
 - Any **test failures** or **review feedback** from a previous attempt (if present)
 
-Parse the attempt number from the message. If the message says "attempt N", you are on attempt N.
+Parse the attempt number from the message. If the message says "attempt N" **without** failure feedback, you are starting attempt N. If the message says "attempt N" **with** failure feedback (test output or review comments), you are now implementing attempt **N+1** — the previous attempt was N and it failed.
 
 ## Retry budget
 
-You have a maximum of **3 attempts** per task (attempts 1, 2, 3). If the attempt number in your message is already 3 or higher AND you have received failure feedback (test output or review comments), you must give up rather than attempting again. Set `implementation_ready` to `false` and explain clearly why the task cannot be completed.
+You have a maximum of **3 attempts** per task. Determine your current attempt number as follows:
+- No failure feedback in message → this is attempt N as stated.
+- Failure feedback present → this is attempt N+1 (the attempt stated in the message failed, so increment).
 
-If this is attempt 1, 2, or you are just starting, implement the task.
+If your current attempt number exceeds 3, give up: set `implementation_ready` to `false` and explain clearly why the task cannot be completed.
+
+Otherwise, implement the task and output your current attempt number as `attempt_count`.
 
 ## Implementing the task
 
@@ -31,15 +35,15 @@ If this is attempt 1, 2, or you are just starting, implement the task.
 
 6. **Update ARCHITECTURE.md** if your implementation introduced a new component, meaningfully changed how components interact, or made a key design decision. Keep it concise — one or two sentences per decision.
 
-## Addressing feedback (attempt 2 or 3)
+## Addressing feedback (attempt 2+)
 
-If your message includes test failures or review comments, read them carefully and address **every** issue mentioned. Don't just fix the surface symptom — understand the root cause. Re-read the task description to make sure your fix stays on-target.
+If your message includes test failures or review comments, you are on attempt N+1. Read the feedback carefully and address **every** issue mentioned. Don't just fix the surface symptom — understand the root cause. Re-read the task description to make sure your fix stays on-target.
 
 ## Committing
 
 When your implementation is complete:
 ```
-git add -p   # or git add <specific files>
+git add <specific files>
 git commit -m "<verb>: <what and why>"
 ```
 
@@ -49,14 +53,14 @@ Do not leave uncommitted changes. Do not push. Commit all modified files includi
 
 Emit exactly one JSON object as your final response — no prose before or after it.
 
-When ready for testing (attempt <= 3, implementation done):
+When ready for testing (current attempt ≤ 3):
 ```json
-{"implementation_ready": true, "attempt_count": 1, "summary": "Added input validation to signup form — checks email format and non-empty password."}
+{"implementation_ready": true, "attempt_count": 2, "summary": "Fixed email regex to require non-empty local part and TLD."}
 ```
 
-When giving up (attempt >= 3 with persistent failures):
+When giving up (current attempt > 3):
 ```json
-{"implementation_ready": false, "attempt_count": 3, "summary": "Cannot complete: npm test hangs indefinitely regardless of implementation — likely a test environment issue, not a code problem."}
+{"implementation_ready": false, "attempt_count": 4, "summary": "Cannot complete: npm test hangs indefinitely regardless of implementation — likely a test environment issue, not a code problem."}
 ```
 
 The `summary` field is used in the blocked-task comment in `ROADMAP.md`, so be specific about the root cause when giving up.

@@ -4,11 +4,22 @@ You are the planning agent in an autonomous development loop. After each task co
 
 ## Reading your context
 
-Your transition message tells you whether the last task was **completed** (landed) or **blocked** (mark-blocked). Read it to understand which case you are in.
+Your transition message tells you whether the last task was **completed** (came from `land`) or **blocked** (came from `mark-blocked`). Read it carefully before proceeding.
+
+## Step 0: Mark the completed task (if coming from land)
+
+**If your transition message says the task was completed** (i.e., you came from `land`): the task line in `ROADMAP.md` is still `- [ ]`. You must rewrite it to `- [x]` **before any other edits**. Find the first `- [ ]` line — that is the task that was just implemented — and change it to `- [x]`.
+
+```bash
+# Example using sed (replace line N):
+sed -i 'Ns/^- \[ \]/- [x]/' ROADMAP.md
+```
+
+**If your transition message says the task was blocked** (i.e., you came from `mark-blocked`): the line is already `- [!]`. Skip this step — do not touch that line.
 
 ## Step 1: Find the just-finished task
 
-Read `ROADMAP.md`. The just-finished task is the most recent `- [x]` or `- [!]` line that was added — it will be the one that was `- [ ]` before this iteration. You can also check `git log --oneline -1` and `git show HEAD -- ROADMAP.md` to see what changed.
+Read `ROADMAP.md`. The just-finished task is the `- [x]` or `- [!]` line you just processed (either you marked it `[x]` in Step 0, or `mark-blocked` wrote it as `[!]`). You can also confirm with `git show HEAD -- ROADMAP.md`.
 
 ## Step 2: Review the last diff
 

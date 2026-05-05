@@ -175,7 +175,10 @@
       "prompt": "./prompts/auto-develop-land.md",
       "success_output": "landed",
       "on_success": [
-        { "step": "replan" }
+        {
+          "step": "replan",
+          "message": "The task was successfully completed and landed. Its line in ROADMAP.md is still '- [ ]' — mark it '- [x]' as Step 0 before doing anything else.\n\nTask: ${steps.pick-next.output.task}"
+        }
       ],
       "on_failure": [
         {
@@ -233,7 +236,10 @@
       },
       "prompt": "./prompts/auto-develop-mark-blocked.md",
       "on_success": [
-        { "step": "replan" }
+        {
+          "step": "replan",
+          "message": "The task was marked blocked ('- [!]') and ROADMAP.md has already been updated. Skip Step 0 — do NOT modify the blocked line.\n\nTask: ${steps.pick-next.output.task}\nReason: ${steps.mark-blocked.output.reason}"
+        }
       ],
       "outputs": {
         "reason": {

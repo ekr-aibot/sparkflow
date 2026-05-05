@@ -4,7 +4,7 @@ You are setting up the planning files for an autonomous development loop. Your j
 
 ## Your input
 
-The user's high-level goal is available as the `$SPARKFLOW_INPUT_PLAN` environment variable. If that variable is empty or unset, look for it in the initial message you received. If neither is present, emit `{"initialized": false}` and explain the error — do not create files.
+The user's high-level goal is in the **`# Project Plan`** section at the top of this prompt (prepended by sparkflow from the `--plan` file). If no `# Project Plan` section is present and you received no goal in your initial message, emit `{"initialized": false}` and explain the error — do not create files.
 
 ## What to do
 

@@ -12,9 +12,11 @@ You are running in the shared (main) worktree. The feature branch was created by
 git branch --list
 ```
 
-Look for a branch that is NOT the current branch and NOT `main` or `master`. It will typically be named something like `sparkflow/develop-<id>` or similar. If you see multiple candidates, pick the one with the most recent commit.
+Look for a branch that is NOT the current branch and NOT `main` or `master`. It will typically be named something like `sparkflow/develop-<id>` or similar.
 
-If you cannot find a feature branch, emit `{"landed": false, "commit_sha": ""}` and explain the situation.
+- If you find **exactly one** candidate: proceed.
+- If you find **zero** candidates: emit `{"landed": false, "commit_sha": ""}` and explain that no feature branch was found.
+- If you find **multiple** candidates: emit `{"landed": false, "commit_sha": ""}` and list the candidates. Do NOT guess — a wrong merge is unrecoverable without user intervention.
 
 ### 2. Identify the task
 

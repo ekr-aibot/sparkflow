@@ -27,6 +27,14 @@ export class ShellAdapter implements RuntimeAdapter {
     const stepOutputs = ctx.stepOutputs ?? new Map<string, Record<string, unknown>>();
 
     let command = resolveTemplate(runtime.command, stepOutputs, undefined, ctx.projectConfig);
+    const commandMissingMatch = /<sparkflow:missing-config path="([^"]+)">/.exec(command);
+    if (commandMissingMatch) {
+      return {
+        success: false,
+        outputs: {},
+        error: `Shell command requires config.${commandMissingMatch[1]} — set it in .sparkflow/config.json`,
+      };
+    }
     if (command.startsWith("./")) {
       command = pathResolve(ctx.workflowDir ?? ctx.cwd, command);
       if (command.includes(" ") && !command.startsWith("\"")) {
@@ -54,10 +62,9 @@ export class ShellAdapter implements RuntimeAdapter {
       }
       resolvedArgs.push(resolved);
     }
-    const args = resolvedArgs;
 
     return new Promise<RuntimeResult>((resolve) => {
-      const child = spawn(command, args, {
+      const child = spawn(command, resolvedArgs, {
         cwd: runtime.cwd ?? ctx.cwd,
         env,
         stdio,

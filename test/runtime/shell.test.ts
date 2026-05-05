@@ -153,7 +153,7 @@ describe("ShellAdapter", () => {
     expect(result.outputs.result).toBe("upstream develop");
   });
 
-  it("fails fast with helpful error when config path is missing", async () => {
+  it("fails fast with helpful error when config path is missing in args", async () => {
     const ctx = makeCtx({
       step: { name: "Test", interactive: false },
       runtime: {
@@ -167,6 +167,23 @@ describe("ShellAdapter", () => {
     const result = await adapter.run(ctx);
     expect(result.success).toBe(false);
     expect(result.error).toContain("config.git.pull_remote");
+    expect(result.error).toContain(".sparkflow/config.json");
+  });
+
+  it("fails fast with helpful error when config path is missing in command", async () => {
+    const ctx = makeCtx({
+      step: { name: "Test", interactive: false },
+      runtime: {
+        type: "shell",
+        command: "${config.custom.runner}",
+        args: [],
+      },
+      projectConfig: {},
+    });
+
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("config.custom.runner");
     expect(result.error).toContain(".sparkflow/config.json");
   });
 });

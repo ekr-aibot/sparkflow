@@ -7,6 +7,7 @@ import type { JobInfo } from "./types.js";
 import { LogTailer } from "./log-tailer.js";
 import { StateStore, type PersistedJob } from "./state-store.js";
 import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
+import { extractPastedImageRefs } from "../dashboard/paste-refs.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,7 +142,7 @@ export class JobManager {
     }
   }
 
-  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor"; deduplicate?: boolean; resumeFrom?: string; existingWorktree?: string }): string {
+  startJob(workflowPath: string, opts?: { cwd?: string; plan?: string; planText?: string; slug?: string; description?: string; kind?: "monitor"; deduplicate?: boolean; resumeFrom?: string; existingWorktree?: string; attachedImages?: string[] }): string {
     const id = randomBytes(6).toString("hex");
     const jobCwd = opts?.cwd ?? this.cwd;
 
@@ -198,6 +199,19 @@ export class JobManager {
     // We no longer need the parent's copy of the log fd.
     try { closeSync(logFd); } catch { /* ignore */ }
 
+    let attachedImages = opts?.attachedImages ?? [];
+    if (attachedImages.length === 0) {
+      if (opts?.planText) {
+        attachedImages = extractPastedImageRefs(opts.planText);
+      } else if (opts?.plan) {
+        try {
+          attachedImages = extractPastedImageRefs(readFileSync(opts.plan, "utf-8"));
+        } catch {
+          // ignore read failures — plan file may not exist yet
+        }
+      }
+    }
+
     const info: JobInfo = {
       id,
       workflowPath,
@@ -208,6 +222,7 @@ export class JobManager {
       state: "running",
       summary: "starting…",
       startTime: Date.now(),
+      attachedImages: attachedImages.length > 0 ? attachedImages : undefined,
     };
 
     const tailer = new LogTailer(logPath, 0, (line) => {

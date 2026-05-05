@@ -90,7 +90,7 @@ describeE2e("e2e pipeline", () => {
       expect(result.stepResults.get("author")?.state).toBe("succeeded");
       expect(result.stepResults.get("tester")?.state).toBe("succeeded");
     },
-    { timeout: 120_000 }
+    120_000
   );
 
   it(
@@ -151,6 +151,6 @@ describeE2e("e2e pipeline", () => {
       expect(result.stepResults.get("author")?.state).toBe("succeeded");
       expect(result.stepResults.get("tester")?.state).toBe("succeeded");
     },
-    { timeout: 120_000 }
+    120_000
   );
 });

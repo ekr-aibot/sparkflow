@@ -71,6 +71,14 @@ Detection patterns (both `ClaudeCodeAdapter.isQuotaError` and `GeminiAdapter`):
 - Claude: `is_error` result events or stderr containing "rate limit", "quota", "overloaded", "too many requests", "529"
 - Gemini: stderr containing any of the above plus "RESOURCE_EXHAUSTED"
 
+### Pasted Image Serving
+
+Pasted images (from chat `Ctrl+V`) are saved to `<repo>/.sparkflow/pasted/<ts>-<rand>.<ext>` by `POST /repos/:repoId/paste-image`. A companion `GET /repos/:repoId/pasted/:filename` endpoint (in `frontend-daemon.ts`) serves those bytes back to the browser with `Cache-Control: private, max-age=86400`. Filename validation uses a strict allowlist regex (`^[A-Za-z0-9_.-]+\.(png|jpg|jpeg|gif|webp)$`) plus `realpathSync` traversal check.
+
+`extractPastedImageRefs` (`src/dashboard/paste-refs.ts`) extracts `@.sparkflow/pasted/<filename>` references from plan text. It is called in `JobManager.startJob()` from either `opts.planText` (direct) or `opts.plan` (read from file), and the resulting relpaths are stored on `JobInfo.attachedImages`. These flow to the frontend via the existing `JobSnapshotMessage` → `JobInfo[]` wire path and are used to render image thumbnails in the job-slug hover tooltip.
+
+The dashboard chat pane shows a thumbnail strip (`.paste-strip`) that is an absolute overlay at the bottom of the chat pane, populated when images are pasted and cleared when a new job is dispatched. The job list renders a `#slug-tooltip` overlay on hover when `job.attachedImages` is non-empty.
+
 ### Worktree Manager (`src/engine/worktree.ts`)
 Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout.
 

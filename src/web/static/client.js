@@ -188,6 +188,7 @@ async function handlePastedImages(tabId, files) {
       if (res.ok) {
         const body = await res.json();
         relpaths.push(body.relpath);
+        addPasteThumb(tabId, body.relpath);
       } else {
         const body = await res.json().catch(() => ({}));
         toast("error", `paste failed: ${body.error ?? res.status}`);
@@ -216,6 +217,61 @@ function b64decode(b64) { return decodeURIComponent(escape(atob(b64))); }
 const chatTerminals = new Map(); // tabId → { term, fit, ws, retryDelay, suppress }
 let wsRepoId = null;
 
+// paste-strip: per-tab thumbnail state
+const pasteStrips = new Map(); // tabId → { el: HTMLElement, relpaths: Set<string> }
+
+function setupPasteStrip(tabId, paneEl) {
+  const strip = document.createElement("div");
+  strip.className = "paste-strip";
+  strip.dataset.tabId = tabId;
+  paneEl.appendChild(strip);
+  pasteStrips.set(tabId, { el: strip, relpaths: new Set() });
+}
+
+function addPasteThumb(tabId, relpath) {
+  const entry = pasteStrips.get(tabId);
+  if (!entry || !wsRepoId) return;
+  if (entry.relpaths.has(relpath)) return;
+  entry.relpaths.add(relpath);
+
+  const filename = relpath.split("/").pop();
+  const imgUrl = `/repos/${encodeURIComponent(wsRepoId)}/pasted/${encodeURIComponent(filename)}`;
+
+  const card = document.createElement("div");
+  card.className = "paste-thumb";
+  card.dataset.relpath = relpath;
+
+  const img = document.createElement("img");
+  img.src = imgUrl;
+  img.alt = "pasted image";
+  img.addEventListener("click", () => window.open(imgUrl, "_blank"));
+  card.appendChild(img);
+
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "paste-thumb-dismiss";
+  dismiss.setAttribute("aria-label", "Remove");
+  dismiss.textContent = "×";
+  dismiss.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    card.remove();
+    entry.relpaths.delete(relpath);
+    if (entry.relpaths.size === 0) entry.el.classList.remove("visible");
+  });
+  card.appendChild(dismiss);
+
+  entry.el.appendChild(card);
+  entry.el.classList.add("visible");
+}
+
+function clearPasteStrip(tabId) {
+  const entry = pasteStrips.get(tabId);
+  if (!entry) return;
+  entry.el.replaceChildren();
+  entry.relpaths.clear();
+  entry.el.classList.remove("visible");
+}
+
 const mainTerm = new Terminal({
   fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
   fontSize: 13,
@@ -231,6 +287,7 @@ mainFit.fit();
 chatTerminals.set("chat", { term: mainTerm, fit: mainFit, ws: null, retryDelay: 250, suppress: false });
 mainTerm.onData((data) => sendBytesForTab("chat", data));
 installPasteHandler("chat", mainTerm);
+setupPasteStrip("chat", els.chat);
 
 function sendBytesForTab(tabId, str) {
   const entry = chatTerminals.get(tabId);
@@ -354,6 +411,7 @@ function openSideChat(chatId) {
   chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
   term.onData((data) => sendBytesForTab(chatId, data));
   installPasteHandler(chatId, term);
+  setupPasteStrip(chatId, pane);
 
   connectChatWs(chatId, wsRepoId, chatId);
   activateTab(chatId);
@@ -365,6 +423,7 @@ function closeSideChatTab(tabId) {
   closeChatWs(tabId);
   try { entry.term.dispose(); } catch { /* ignore */ }
   chatTerminals.delete(tabId);
+  pasteStrips.delete(tabId);
   const pane = els.main.querySelector(`[data-tab-id="${CSS.escape(tabId)}"]`);
   if (pane) pane.remove();
   state.tabs = state.tabs.filter((t) => t.id !== tabId);
@@ -402,6 +461,7 @@ async function restoreSideChats() {
       chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
       term.onData((data) => sendBytesForTab(chatId, data));
       installPasteHandler(chatId, term);
+      setupPasteStrip(chatId, pane);
       connectChatWs(chatId, wsRepoId, chatId);
       added = true;
     }
@@ -982,7 +1042,14 @@ function renderJobCard(job) {
   name.className = "name";
   const base = job.workflowName || job.workflowPath || "workflow";
   name.textContent = job.slug ? `${base}: ${job.slug}` : base;
-  attachTooltip(name, job.description || name.textContent);
+  if (Array.isArray(job.attachedImages) && job.attachedImages.length > 0) {
+    const repoId = job.repoId || state.selectedRepoId;
+    name.style.cursor = "help";
+    name.addEventListener("mouseenter", () => showSlugTooltip(name, job.attachedImages, repoId));
+    name.addEventListener("mouseleave", hideSlugTooltip);
+  } else {
+    attachTooltip(name, job.description || name.textContent);
+  }
   top.appendChild(name);
 
   // Show repo badge when multiple repos are attached.
@@ -1144,7 +1211,40 @@ els.showMonitors.addEventListener("change", () => {
   renderJobs();
 });
 
+// --------------------------- slug image tooltip ---------------------------
+
+const slugTooltipEl = document.getElementById("slug-tooltip");
+
+function showSlugTooltip(anchorEl, images, repoId) {
+  slugTooltipEl.replaceChildren();
+  const toShow = images.slice(0, 6);
+  for (const relpath of toShow) {
+    const filename = relpath.split("/").pop();
+    const img = document.createElement("img");
+    img.src = `/repos/${encodeURIComponent(repoId)}/pasted/${encodeURIComponent(filename)}`;
+    img.alt = filename;
+    slugTooltipEl.appendChild(img);
+  }
+  if (images.length > 6) {
+    const more = document.createElement("span");
+    more.className = "more-count";
+    more.textContent = `(+${images.length - 6} more)`;
+    slugTooltipEl.appendChild(more);
+  }
+  slugTooltipEl.classList.add("visible");
+  const rect = anchorEl.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - slugTooltipEl.offsetWidth - 8);
+  slugTooltipEl.style.left = `${Math.max(8, left)}px`;
+  slugTooltipEl.style.top = `${rect.bottom + 4}px`;
+}
+
+function hideSlugTooltip() {
+  slugTooltipEl.classList.remove("visible");
+}
+
 // --------------------------- SSE feed ---------------------------
+
+let prevJobIds = new Set();
 
 function connectEvents() {
   const es = new EventSource("/events");
@@ -1159,7 +1259,13 @@ function connectEvents() {
         // Sort by startTime so the list order is stable across status updates.
         // Without this, Map iteration order on the backend can shift when jobs
         // are added/removed, causing cards to jump position in the UI.
-        state.jobs = data.jobs.slice().sort((a, b) => a.startTime - b.startTime);
+        const incoming = data.jobs.slice().sort((a, b) => a.startTime - b.startTime);
+        const hasNewJob = incoming.some((j) => !prevJobIds.has(j.id));
+        prevJobIds = new Set(incoming.map((j) => j.id));
+        state.jobs = incoming;
+        if (hasNewJob) {
+          for (const tabId of pasteStrips.keys()) clearPasteStrip(tabId);
+        }
         renderJobs();
         updateJobTabLabels();
         updateNudgeBars();

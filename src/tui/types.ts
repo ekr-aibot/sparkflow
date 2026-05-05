@@ -28,6 +28,8 @@ export interface JobInfo {
   killedByUser?: boolean;
   /** Path to the run-level worktree, captured from the run_info engine event. Used by resume mode. */
   worktreePath?: string;
+  /** Relpaths of pasted images referenced in the dispatch plan (e.g. ".sparkflow/pasted/…"). */
+  attachedImages?: string[];
 }
 
 export type DashboardRequest =

@@ -19,7 +19,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { extname, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -736,6 +736,46 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
         if (msg === "request body too large") sendJson(res, 413, { error: "image too large (max 10 MiB)" });
         else sendJson(res, 500, { error: msg });
       });
+      return;
+    }
+
+    // GET /repos/:repoId/pasted/:filename — serve a pasted image by filename
+    const getPastedMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/pasted\/([^/]+)$/);
+    if (getPastedMatch && req.method === "GET") {
+      const [, repoId, filename] = getPastedMatch;
+      const engine = registry.getEngine(repoId);
+      if (!engine) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+      if (!/^[A-Za-z0-9_.-]+\.(png|jpg|jpeg|gif|webp)$/.test(filename)) {
+        return sendJson(res, 400, { error: "invalid filename" });
+      }
+      const EXT_MIME: Record<string, string> = {
+        png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+        gif: "image/gif", webp: "image/webp",
+      };
+      const ext = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
+      const contentType = EXT_MIME[ext] ?? "application/octet-stream";
+      const pastedDir = join(engine.repoPath, ".sparkflow", "pasted");
+      const filePath = join(pastedDir, filename);
+      try {
+        const resolved = realpathSync(filePath);
+        const dirResolved = realpathSync(pastedDir);
+        if (!resolved.startsWith(dirResolved + "/") && resolved !== dirResolved) {
+          return sendJson(res, 400, { error: "invalid path" });
+        }
+      } catch {
+        return sendJson(res, 404, { error: "not found" });
+      }
+      try {
+        const buf = readFileSync(filePath);
+        res.writeHead(200, {
+          "content-type": contentType,
+          "content-length": String(buf.byteLength),
+          "cache-control": "private, max-age=86400",
+        });
+        res.end(buf);
+      } catch {
+        sendJson(res, 404, { error: "not found" });
+      }
       return;
     }
 

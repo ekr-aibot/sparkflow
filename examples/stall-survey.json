@@ -1,0 +1,59 @@
+{
+  "version": "1",
+  "name": "stall-survey",
+  "description": "On-demand triage of blocked tasks in ROADMAP.md. Scans for [!]-tagged items and walks the user through each one interactively.",
+  "entry": "scan",
+  "defaults": {
+    "worktree": { "mode": "shared" }
+  },
+  "steps": {
+    "scan": {
+      "name": "Scan Blocked Tasks",
+      "description": "Reads ROADMAP.md and extracts all [!]-tagged blocked tasks into a structured list.",
+      "interactive": false,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/stall-survey-scan.md",
+      "on_success": [
+        { "step": "triage" }
+      ],
+      "outputs": {
+        "blocked": {
+          "type": "json",
+          "description": "JSON array of blocked task objects: [{text, reason, line}]"
+        },
+        "count": {
+          "type": "json",
+          "description": "Number of blocked tasks found"
+        }
+      }
+    },
+
+    "triage": {
+      "name": "Triage",
+      "description": "Interactively walks the user through each blocked task. Options: unblock-with-context, defer, drop, or retry-as-is. Edits ROADMAP.md and commits.",
+      "interactive": true,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": false
+      },
+      "prompt": "./prompts/stall-survey-triage.md",
+      "outputs": {
+        "resolved": {
+          "type": "json",
+          "description": "Number of blocked tasks resolved (unblocked or dropped)"
+        },
+        "deferred": {
+          "type": "json",
+          "description": "Number of blocked tasks left as [!] (deferred for later)"
+        }
+      }
+    }
+  }
+}

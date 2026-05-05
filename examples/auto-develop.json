@@ -1,0 +1,252 @@
+{
+  "version": "1",
+  "name": "auto-develop",
+  "description": "Autonomous local task-execution loop. Takes a high-level goal, builds ROADMAP.md, and implements tasks one by one with planner, dev, test, review, land, and replan steps. No GitHub — all commits land locally. Invoke with: sparkflow-run auto-develop --plan goal.md --cwd <repo>",
+  "entry": "seed-plan",
+  "defaults": {
+    "worktree": { "mode": "shared" }
+  },
+  "steps": {
+    "seed-plan": {
+      "name": "Seed Plan",
+      "description": "Creates ROADMAP.md and ARCHITECTURE.md from the user's high-level goal. Runs once at workflow start.",
+      "interactive": false,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-seed-plan.md",
+      "success_output": "initialized",
+      "on_success": [
+        { "step": "pick-next" }
+      ],
+      "outputs": {
+        "initialized": {
+          "type": "json",
+          "description": "true if ROADMAP.md and ARCHITECTURE.md were created or validated successfully"
+        }
+      }
+    },
+
+    "pick-next": {
+      "name": "Pick Next Task",
+      "description": "Reads ROADMAP.md and picks the first pending [ ] task. Succeeds (workflow exits) when all tasks are done; fails (routes to develop) when a task remains.",
+      "interactive": false,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-pick-next.md",
+      "success_output": "done",
+      "on_failure": [
+        {
+          "step": "develop",
+          "message": "Implement this task (attempt 1):\n\n${steps.pick-next.output.task}"
+        }
+      ],
+      "outputs": {
+        "task": {
+          "type": "text",
+          "description": "The task description to implement"
+        },
+        "line": {
+          "type": "text",
+          "description": "Line number of the task in ROADMAP.md"
+        },
+        "done": {
+          "type": "json",
+          "description": "true when no pending [ ] tasks remain — triggers workflow exit"
+        }
+      }
+    },
+
+    "develop": {
+      "name": "Developer Agent",
+      "description": "Implements the current task. Succeeds (routes to test) when implementation is ready; fails (routes to mark-blocked) after exhausting retries.",
+      "interactive": false,
+      "worktree": { "mode": "isolated" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-developer.md",
+      "success_output": "implementation_ready",
+      "on_success": [
+        { "step": "test" }
+      ],
+      "on_failure": [
+        {
+          "step": "mark-blocked",
+          "message": "Task could not be completed after exhausting retries.\n\nTask: ${steps.pick-next.output.task}\n\nReason: ${steps.develop.output.summary}"
+        }
+      ],
+      "outputs": {
+        "implementation_ready": {
+          "type": "json",
+          "description": "true if implementation is complete and ready for testing; false if giving up after exhausting retries"
+        },
+        "attempt_count": {
+          "type": "json",
+          "description": "Current attempt number for this task (starts at 1, incremented on each retry)"
+        },
+        "summary": {
+          "type": "text",
+          "description": "Brief summary of what was implemented, or why the task is being marked blocked"
+        }
+      }
+    },
+
+    "test": {
+      "name": "Test Runner",
+      "description": "Runs the project's test suite. On failure, routes back to develop with output and attempt count.",
+      "interactive": false,
+      "worktree": { "mode": "fork" },
+      "runtime": {
+        "type": "shell",
+        "command": "npm",
+        "args": ["test"]
+      },
+      "timeout": 300,
+      "on_success": [
+        { "step": "review" }
+      ],
+      "on_failure": [
+        {
+          "step": "develop",
+          "message": "Tests failed (attempt ${steps.develop.output.attempt_count}). Fix the implementation and try again.\n\nTask: ${steps.pick-next.output.task}\n\nTest output:\n\n${steps.test.output.results}"
+        }
+      ],
+      "outputs": {
+        "results": {
+          "type": "text",
+          "description": "Full test output including failure messages and stack traces"
+        }
+      }
+    },
+
+    "review": {
+      "name": "Reviewer Agent",
+      "description": "Reviews the implementation against ARCHITECTURE.md and the task. Approves (routes to land) or rejects (routes to develop with feedback).",
+      "interactive": false,
+      "worktree": { "mode": "fork" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-reviewer.md",
+      "success_output": "approved",
+      "on_success": [
+        { "step": "land" }
+      ],
+      "on_failure": [
+        {
+          "step": "develop",
+          "message": "Code review found issues (attempt ${steps.develop.output.attempt_count}). Fix the implementation.\n\nTask: ${steps.pick-next.output.task}\n\nReview:\n\n${steps.review.output.review}"
+        }
+      ],
+      "outputs": {
+        "approved": {
+          "type": "json",
+          "description": "true if the implementation is correct and ready to land"
+        },
+        "review": {
+          "type": "text",
+          "description": "Review feedback explaining what needs to change"
+        }
+      }
+    },
+
+    "land": {
+      "name": "Land",
+      "description": "Merges the isolated develop branch into the source branch with a commit. Local only — no push.",
+      "interactive": false,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-land.md",
+      "success_output": "landed",
+      "on_success": [
+        {
+          "step": "replan",
+          "message": "The task was successfully completed and landed. Its line in ROADMAP.md is still '- [ ]' — mark it '- [x]' as Step 0 before doing anything else.\n\nTask: ${steps.pick-next.output.task}"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "mark-blocked",
+          "message": "Failed to merge the implementation branch into source.\n\nTask: ${steps.pick-next.output.task}\n\nThis is likely a merge conflict caused by out-of-band commits to the source branch."
+        }
+      ],
+      "outputs": {
+        "landed": {
+          "type": "json",
+          "description": "true if the branch was merged and committed successfully"
+        },
+        "commit_sha": {
+          "type": "text",
+          "description": "SHA of the merge commit on the source branch"
+        }
+      }
+    },
+
+    "replan": {
+      "name": "Replanner",
+      "description": "Marks the completed or blocked task in ROADMAP.md, updates ARCHITECTURE.md, and optionally adds/reorders pending tasks. Commits changes then loops back to pick-next.",
+      "interactive": false,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-replan.md",
+      "on_success": [
+        { "step": "pick-next" }
+      ],
+      "outputs": {
+        "added_tasks": {
+          "type": "json",
+          "description": "Array of new task description strings added to ROADMAP.md"
+        },
+        "architecture_updated": {
+          "type": "json",
+          "description": "true if ARCHITECTURE.md was updated with new decisions"
+        }
+      }
+    },
+
+    "mark-blocked": {
+      "name": "Mark Blocked",
+      "description": "Tags the current task as blocked in ROADMAP.md with a reason comment, then commits and routes to replan.",
+      "interactive": false,
+      "worktree": { "mode": "shared" },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-mark-blocked.md",
+      "on_success": [
+        {
+          "step": "replan",
+          "message": "The task was marked blocked ('- [!]') and ROADMAP.md has already been updated. Skip Step 0 — do NOT modify the blocked line.\n\nTask: ${steps.pick-next.output.task}\nReason: ${steps.mark-blocked.output.reason}"
+        }
+      ],
+      "outputs": {
+        "reason": {
+          "type": "text",
+          "description": "Brief explanation of why the task was blocked"
+        }
+      }
+    }
+  }
+}

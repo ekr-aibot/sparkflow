@@ -318,16 +318,30 @@ export class WorkflowEngine {
     const status = this.stepStatuses.get(stepId)!;
     const step = this.workflow.steps[stepId];
 
+    // Resolve template variables now so that nudge/pending-message paths (below)
+    // deliver the substituted text rather than the raw template string.
+    // executeStep also calls resolveTemplate, which is a safe no-op for text
+    // that contains no unresolved ${steps.*} references.
+    let resolvedMessage = message;
+    if (message) {
+      try {
+        resolvedMessage = resolveTemplate(message, this.stepOutputs);
+      } catch {
+        // Fall back to raw string; executeStep will attempt resolution again
+        // and surface the error there with proper logging.
+      }
+    }
+
     // If step is running, inject the message directly into the running adapter
     // via its nudge queue (claude-code only). For other runtimes, fall back to
     // the post-completion pendingMessages queue.
     if (status.state === "running") {
-      if (message) {
+      if (resolvedMessage) {
         if (status.nudgeQueue) {
-          status.nudgeQueue.push(message);
+          status.nudgeQueue.push(resolvedMessage);
           this.logger.info(`[${stepId}] nudge received mid-run`);
         } else {
-          status.pendingMessages.push(message);
+          status.pendingMessages.push(resolvedMessage);
         }
       }
       return;

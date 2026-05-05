@@ -1,10 +1,13 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { PersistedJob } from "../tui/state-store.js";
+import { readDashboardInfo, releaseFrontendLock } from "../dashboard/discovery.js";
 
 export interface KillAllOptions {
   cwd: string;
   force: boolean;
+  /** Also kill the user-global frontend daemon (~/.sparkflow/dashboard.json). */
+  all?: boolean;
   /** Grace period between initial SIGTERM and SIGKILL escalation. Default 5000 ms. */
   timeoutMs?: number;
 }
@@ -16,6 +19,13 @@ export interface KillAllSummary {
   forceKilled: number;
   stillAlive: number;
   errors: Array<{ jobId: string; pid: number; error: string }>;
+
+  /** Counts broken out by kind for the summary string. */
+  jobsKilled: number;
+  /** true if a repo engine daemon was SIGTERM'd (found alive and signalled). */
+  engineDaemonKilled: boolean;
+  /** true only if --all and one was found+killed. */
+  frontendDaemonKilled: boolean;
 }
 
 function isAlive(pid: number): boolean {
@@ -58,50 +68,90 @@ function loadRunningJobs(cwd: string): RunningJob[] {
   return running;
 }
 
+type TargetKind = "job" | "engine" | "frontend";
+
+interface Target {
+  kind: TargetKind;
+  id: string;
+  pid: number;
+}
+
+function readEngineDaemonTarget(cwd: string): Target | null {
+  const pidFile = join(cwd, ".sparkflow", "state", "engine-daemon.pid");
+  try {
+    const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
+    if (pid > 0 && isAlive(pid)) {
+      return { kind: "engine", id: "engine-daemon", pid };
+    }
+  } catch {
+    /* not present or unreadable */
+  }
+  return null;
+}
+
+function readFrontendTarget(): Target | null {
+  const info = readDashboardInfo();
+  if (!info) return null;
+  if (info.pid > 0 && isAlive(info.pid)) {
+    return { kind: "frontend", id: "frontend-daemon", pid: info.pid };
+  }
+  return null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Kill all non-terminal Sparkflow jobs recorded in `<cwd>/.sparkflow/state/jobs/`.
+ * Kill all non-terminal Sparkflow jobs, the per-repo engine daemon, and
+ * optionally the user-global frontend daemon.
  *
- * Always sends SIGTERM to every running job, then polls isAlive up to
- * `timeoutMs` so the returned summary reflects what exited gracefully. With
- * `force: true`, any jobs still alive after the grace period are SIGKILLed.
- *
- * The daemon's own child-close listeners (for live children) and rehydrated
- * liveness ping (for detached children) will reconcile in-memory state to
- * "failed" when the pids die, so the TUI reflects the termination without
- * any IPC round-trip from this command.
+ * Always sends SIGTERM to every target, then polls isAlive up to `timeoutMs`
+ * so the returned summary reflects what exited gracefully. With `force: true`,
+ * any targets still alive after the grace period are SIGKILLed.
  */
 export async function runKillAll(opts: KillAllOptions): Promise<KillAllSummary> {
   const timeoutMs = opts.timeoutMs ?? 5000;
+
   const jobs = loadRunningJobs(opts.cwd);
+  const engineTarget = readEngineDaemonTarget(opts.cwd);
+  const frontendTarget = opts.all ? readFrontendTarget() : null;
+
+  const targets: Target[] = [
+    ...jobs.map((j) => ({ kind: "job" as const, id: j.id, pid: j.pid })),
+    ...(engineTarget ? [engineTarget] : []),
+    ...(frontendTarget ? [frontendTarget] : []),
+  ];
 
   const summary: KillAllSummary = {
-    total: jobs.length,
+    total: targets.length,
     signalled: 0,
     terminated: 0,
     forceKilled: 0,
     stillAlive: 0,
     errors: [],
+    jobsKilled: 0,
+    engineDaemonKilled: false,
+    frontendDaemonKilled: false,
   };
 
-  if (jobs.length === 0) return summary;
+  if (targets.length === 0) return summary;
 
-  for (const job of jobs) {
+  for (const target of targets) {
     try {
-      process.kill(job.pid, "SIGTERM");
+      process.kill(target.pid, "SIGTERM");
       summary.signalled++;
+      if (target.kind === "engine") summary.engineDaemonKilled = true;
+      if (target.kind === "frontend") summary.frontendDaemonKilled = true;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ESRCH") {
-        // process already exited between our isAlive check and signal — count as terminated.
+        // process already exited between isAlive check and signal — count as terminated.
         continue;
       }
       summary.errors.push({
-        jobId: job.id,
-        pid: job.pid,
+        jobId: target.id,
+        pid: target.pid,
         error: (err as Error).message,
       });
     }
@@ -109,18 +159,18 @@ export async function runKillAll(opts: KillAllOptions): Promise<KillAllSummary> 
 
   const deadline = Date.now() + timeoutMs;
   const pollMs = 100;
-  let remaining = jobs.slice();
+  let remaining = targets.slice();
   while (remaining.length > 0 && Date.now() < deadline) {
     await sleep(pollMs);
-    remaining = remaining.filter((j) => isAlive(j.pid));
+    remaining = remaining.filter((t) => isAlive(t.pid));
   }
 
-  summary.terminated = jobs.length - remaining.length;
+  summary.terminated = targets.length - remaining.length;
 
   if (opts.force && remaining.length > 0) {
-    for (const job of remaining) {
+    for (const target of remaining) {
       try {
-        process.kill(job.pid, "SIGKILL");
+        process.kill(target.pid, "SIGKILL");
         summary.forceKilled++;
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
@@ -129,24 +179,53 @@ export async function runKillAll(opts: KillAllOptions): Promise<KillAllSummary> 
           continue;
         }
         summary.errors.push({
-          jobId: job.id,
-          pid: job.pid,
+          jobId: target.id,
+          pid: target.pid,
           error: (err as Error).message,
         });
       }
     }
     await sleep(200);
-    remaining = remaining.filter((j) => isAlive(j.pid));
+    remaining = remaining.filter((t) => isAlive(t.pid));
   }
 
   summary.stillAlive = remaining.length;
+
+  const alivePids = new Set(remaining.map((t) => t.pid));
+  summary.jobsKilled = jobs.filter((j) => !alivePids.has(j.pid)).length;
+
+  // Clean up per-repo engine daemon PID file after it exits.
+  // Only remove if we targeted it (it was alive when we started), not if it was already dead.
+  if (summary.engineDaemonKilled && engineTarget && !alivePids.has(engineTarget.pid)) {
+    try {
+      unlinkSync(join(opts.cwd, ".sparkflow", "state", "engine-daemon.pid"));
+    } catch { /* ignore */ }
+  }
+
+  // Release the frontend lock only if we successfully killed the frontend daemon.
+  if (summary.frontendDaemonKilled && frontendTarget && !alivePids.has(frontendTarget.pid)) {
+    releaseFrontendLock();
+  }
+
   return summary;
 }
 
 export function formatSummary(s: KillAllSummary, force: boolean): string {
-  if (s.total === 0) return "No running Sparkflow jobs found.";
-  const parts: string[] = [];
-  parts.push(`Found ${s.total} running job${s.total === 1 ? "" : "s"}.`);
+  if (s.total === 0) return "No running Sparkflow jobs or daemons found.";
+
+  const jobCount = s.total - (s.engineDaemonKilled ? 1 : 0) - (s.frontendDaemonKilled ? 1 : 0);
+
+  const found: string[] = [];
+  if (jobCount > 0) found.push(`${jobCount} running job${jobCount === 1 ? "" : "s"}`);
+  if (s.engineDaemonKilled) found.push("engine daemon");
+  if (s.frontendDaemonKilled) found.push("frontend daemon");
+
+  const foundDesc = found.length === 1
+    ? found[0]
+    : found.slice(0, -1).join(", ") + " and " + found[found.length - 1];
+
+  const parts: string[] = [`Found ${foundDesc}.`];
+
   if (force) {
     parts.push(
       `Terminated gracefully: ${s.terminated - s.forceKilled}. Force-killed: ${s.forceKilled}.`,

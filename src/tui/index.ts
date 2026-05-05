@@ -498,6 +498,13 @@ try {
           String(engineProc.pid ?? -1),
         );
       } catch { /* ignore */ }
+      // Write per-repo PID file so sparkflow-kill can find and terminate this daemon.
+      const repoStateDir = join(args.cwd, ".sparkflow", "state");
+      const repoEnginePidFile = join(repoStateDir, "engine-daemon.pid");
+      try {
+        mkdirSync(repoStateDir, { recursive: true });
+        writeFileSync(repoEnginePidFile, String(engineProc.pid ?? -1));
+      } catch { /* ignore */ }
       engineProc.once("error", (err) => {
         console.error(`[sparkflow] failed to spawn engine daemon: ${err.message}`);
         process.exitCode = 1;
@@ -505,6 +512,7 @@ try {
       });
       engineProc.once("exit", (code) => {
         process.exitCode = code ?? 0;
+        try { unlinkSync(repoEnginePidFile); } catch { /* ignore */ }
         resolveEngine();
       });
       // Forward shutdown signals to the engine daemon so it can flush state

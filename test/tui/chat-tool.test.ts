@@ -37,6 +37,7 @@ describe("buildChatSpawn", () => {
       const spawn = buildChatSpawn(opts);
       expect(spawn.cmd).toBe("claude");
       expect(spawn.args).toEqual([
+        "--dangerously-skip-permissions",
         "--extra", "42",
         "--mcp-config", "/tmp/mcp-config.json",
         "--append-system-prompt", "You are helpful.",
@@ -49,6 +50,28 @@ describe("buildChatSpawn", () => {
       spawn.cleanup();
       expect(existsSync(planFile)).toBe(false);
       expect(existsSync(join(tmp, ".claude"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("claude path with overridden command does NOT inject --dangerously-skip-permissions", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-chat-test-"));
+    try {
+      const opts = {
+        ...baseOpts(tmp),
+        tool: "claude" as const,
+        command: "/usr/local/bin/my-custom-claude",
+        slashCommands: {},
+      };
+      const spawn = buildChatSpawn(opts);
+      expect(spawn.cmd).toBe("/usr/local/bin/my-custom-claude");
+      expect(spawn.args).toEqual([
+        "--extra", "42",
+        "--mcp-config", "/tmp/mcp-config.json",
+        "--append-system-prompt", "You are helpful.",
+      ]);
+      spawn.cleanup();
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

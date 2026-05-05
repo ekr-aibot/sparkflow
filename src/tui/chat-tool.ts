@@ -110,13 +110,21 @@ export function buildChatSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
 }
 
 function buildClaudeSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
+  // When command resolves to the default `claude`, we control the invocation
+  // and run with --dangerously-skip-permissions so MCP / deferred tools and
+  // file edits don't prompt mid-conversation. If the user overrode
+  // --chat-command to a different binary, pass chatArgs through verbatim and
+  // trust the user — the same policy as the gemini path's `-y` flag.
+  const yoloPrefix = opts.command === "claude" ? ["--dangerously-skip-permissions"] : [];
   const args = [
+    ...yoloPrefix,
     ...opts.chatArgs,
     "--mcp-config", opts.mcpConfigPath,
     "--append-system-prompt", opts.systemPromptText,
   ];
   const shellCmd = [
     sq(opts.command),
+    ...yoloPrefix.map(sq),
     ...opts.chatArgs.map(sq),
     "--mcp-config", sq(opts.mcpConfigPath),
     "--append-system-prompt", `"$(cat ${sq(opts.systemPromptPath)})"`,

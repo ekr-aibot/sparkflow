@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { ProjectConfig } from "../config/project-config.js";
 
 // Same regex used in validate.ts
 const TEMPLATE_RE =
@@ -8,6 +9,10 @@ const TEMPLATE_RE =
 // Matches ${item} and ${item.field} (field may use dot-paths, e.g. ${item.issue.number})
 const ITEM_TEMPLATE_RE =
   /(?<!\$)\$\{item(?:\.([a-zA-Z0-9_.-]+))?\}/g;
+
+// Matches ${config.<dot.path>} (e.g. ${config.git.pull_remote})
+const CONFIG_TEMPLATE_RE =
+  /(?<!\$)\$\{config\.([a-zA-Z0-9_.]+)\}/g;
 
 function stringify(value: unknown): string {
   if (typeof value === "string") return value;
@@ -26,6 +31,17 @@ function resolveItemPath(item: unknown, path: string | undefined): unknown {
   return cur;
 }
 
+function resolveConfigPath(config: Record<string, unknown>, path: string): unknown {
+  let cur: unknown = config;
+  for (const segment of path.split(".")) {
+    if (cur == null || typeof cur !== "object") {
+      return undefined;
+    }
+    cur = (cur as Record<string, unknown>)[segment];
+  }
+  return cur;
+}
+
 /**
  * Resolve template interpolation in a string.
  *
@@ -33,13 +49,15 @@ function resolveItemPath(item: unknown, path: string | undefined): unknown {
  *   ${steps.<id>.output.<field>} — output of a prior step
  *   ${item}                      — current foreach item (only when itemContext is set)
  *   ${item.<field>}              — nested field on the item
+ *   ${config.<dot.path>}         — value from merged project config (only when config is set)
  *
  * `$${` escapes to a literal `${`.
  */
 export function resolveTemplate(
   text: string,
   stepOutputs: Map<string, Record<string, unknown>>,
-  itemContext?: unknown
+  itemContext?: unknown,
+  config?: ProjectConfig
 ): string {
   let resolved = text.replace(TEMPLATE_RE, (_match, stepId: string, field: string) => {
     const outputs = stepOutputs.get(stepId);
@@ -55,6 +73,16 @@ export function resolveTemplate(
   if (itemContext !== undefined) {
     resolved = resolved.replace(ITEM_TEMPLATE_RE, (_match, path?: string) => {
       return stringify(resolveItemPath(itemContext, path));
+    });
+  }
+
+  if (config !== undefined) {
+    resolved = resolved.replace(CONFIG_TEMPLATE_RE, (_match, path: string) => {
+      const value = resolveConfigPath(config as Record<string, unknown>, path);
+      if (value === undefined) {
+        return `<sparkflow:missing-config path="${path}">`;
+      }
+      return stringify(value);
     });
   }
 

@@ -132,4 +132,58 @@ describe("ShellAdapter", () => {
     expect(result.outputs.arg).toContain(existingDir);
     expect(result.outputs.arg).toContain("bar.sh");
   });
+
+  it("resolves ${config.X} template in args from projectConfig", async () => {
+    const ctx = makeCtx({
+      step: {
+        name: "Test",
+        interactive: false,
+        outputs: { result: { type: "text" } },
+      },
+      runtime: {
+        type: "shell",
+        command: "echo",
+        args: ["${config.git.pull_remote}", "${config.git.base}"],
+      },
+      projectConfig: { git: { pull_remote: "upstream", base: "develop" } },
+    });
+
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(true);
+    expect(result.outputs.result).toBe("upstream develop");
+  });
+
+  it("fails fast with helpful error when config path is missing in args", async () => {
+    const ctx = makeCtx({
+      step: { name: "Test", interactive: false },
+      runtime: {
+        type: "shell",
+        command: "echo",
+        args: ["${config.git.pull_remote}"],
+      },
+      projectConfig: { git: {} },
+    });
+
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("config.git.pull_remote");
+    expect(result.error).toContain(".sparkflow/config.json");
+  });
+
+  it("fails fast with helpful error when config path is missing in command", async () => {
+    const ctx = makeCtx({
+      step: { name: "Test", interactive: false },
+      runtime: {
+        type: "shell",
+        command: "${config.custom.runner}",
+        args: [],
+      },
+      projectConfig: {},
+    });
+
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("config.custom.runner");
+    expect(result.error).toContain(".sparkflow/config.json");
+  });
 });

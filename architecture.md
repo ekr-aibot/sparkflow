@@ -16,8 +16,14 @@ Loads and merges user-level (`~/.sparkflow/config.json`) and project-level (`.sp
 - `issues_repo` — `OWNER/NAME` for issue polling (default: `pr_repo`). Decouples issue tracker from PR target.
 - `base` — base branch for PRs
 
+### Template Engine (`src/engine/template.ts`)
+`resolveTemplate(text, stepOutputs, itemContext?, config?)` interpolates three forms:
+- `${steps.<id>.output.<field>}` — output from a prior step
+- `${item}` / `${item.<field>}` — current foreach item (only when `itemContext` is set)
+- `${config.<dot.path>}` — value from the merged `ProjectConfig` (only when `config` is passed); missing paths render as `<sparkflow:missing-config path="...">` and the shell adapter fails fast with a helpful error
+
 ### Engine (`src/engine/engine.ts`)
-Executes workflow steps, resolves worktrees, injects env vars. Auto-injects `SPARKFLOW_*` env vars from `git` config into every step environment:
+Executes workflow steps, resolves worktrees, injects env vars. Passes `config` to every `resolveTemplate` call so `${config.X}` works in prompts, transition messages, step `env` values, and shell `args`. Puts the full `ProjectConfig` on `RuntimeContext.projectConfig` for adapters that need it. Auto-injects `SPARKFLOW_*` env vars from `git` config into every step environment:
 - `SPARKFLOW_PR_REPO`, `SPARKFLOW_PUSH_REMOTE`, `SPARKFLOW_BASE_BRANCH` from their respective fields
 - `SPARKFLOW_ISSUES_REPO` from `issues_repo ?? pr_repo`
 
@@ -30,7 +36,7 @@ Executes workflow steps, resolves worktrees, injects env vars. Auto-injects `SPA
 ### Runtimes
 - `claude-code` — spawns `claude` CLI with a prompt, supports nudges and session resumption
 - `gemini` — spawns `gemini` CLI
-- `shell` — runs arbitrary shell commands
+- `shell` — runs arbitrary shell commands; applies `resolveTemplate` to `command` and each `arg` before spawning, so `${config.X}` and `${steps.X.output.Y}` work in shell args; fails fast with a clear error if a config path resolves to missing
 - `pr-watcher` — polls GitHub for CI results and review activity
 - `workflow` — dispatches child workflows (supports `foreach`)
 

@@ -1,5 +1,5 @@
 import type { Runtime, Step } from "../schema/types.js";
-import type { GitConfig } from "../config/project-config.js";
+import type { GitConfig, ProjectConfig } from "../config/project-config.js";
 
 /**
  * A lightweight FIFO queue for injecting user messages into a running ClaudeCodeAdapter turn loop.
@@ -27,6 +27,8 @@ export interface RuntimeContext {
   runtime: Runtime;
   /** Project-level git/GitHub config (from .sparkflow/config.json). Used by pr-creator and pr-watcher. */
   git?: GitConfig;
+  /** Full merged project config — available to adapters for template interpolation. */
+  projectConfig?: ProjectConfig;
   prompt?: string;
   transitionMessage?: string;
   cwd: string;

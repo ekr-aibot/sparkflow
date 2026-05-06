@@ -25,6 +25,7 @@
     "vitest": "^3.0.0"
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.4.2",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",

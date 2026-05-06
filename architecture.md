@@ -85,6 +85,21 @@ Pasted images (from chat `Ctrl+V`) are saved to `<repo>/.sparkflow/pasted/<ts>-<
 
 The dashboard chat pane shows a thumbnail strip (`.paste-strip`) that is an absolute overlay at the bottom of the chat pane, populated when images are pasted and cleared when a new job is dispatched. The job list renders a `#slug-tooltip` overlay on hover when `job.attachedImages` is non-empty.
 
+### First-Run Onboarding (`src/cli/init-interview.ts`)
+
+Interactive CLI interview that runs before the dashboard launches when `.sparkflow/config.json` is missing in the project directory.
+
+**Entry points:**
+- `shouldAutoTrigger(cwd)` — returns true iff `.sparkflow/config.json` is absent, `stdin` is a TTY, and `SPARKFLOW_SKIP_INIT` is not set.
+- `runInitInterview({ cwd, existing })` — runs 8 prompts (via `@inquirer/prompts`), returns a validated `ProjectConfig`. Does not write to disk. Exits 130 on Ctrl-C; exits 0 if user declines the confirm.
+- `detectGitDefaults(cwd)` — best-effort autodetect of `push_remote`/`pull_remote` from `git remote -v` and `pr_repo`/`base` from `gh repo view`. Swallows all errors.
+
+**Wire-up in `src/tui/index.ts`:**
+- `sparkflow init` subcommand: detected before `parseArgs`; runs the interview with the existing merged config as defaults, writes the result, exits 0.
+- Auto-trigger: checked after `parseArgs`; if `shouldAutoTrigger` is true, runs the interview with `existing = null` and writes the result before proceeding to the normal dashboard launch.
+
+**Workflow listing:** Concatenates `.sparkflow/workflows/` (project) and `~/.sparkflow/flows/` (user) with project shadowing user on name conflicts. Aborts with an error if both are empty.
+
 ### Worktree Manager (`src/engine/worktree.ts`)
 Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout.
 

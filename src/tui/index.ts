@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { createServer as createNetServer } from "node:net";
-import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
+import { loadProjectConfig, resolveWorkflowPath, writeProjectConfig } from "../config/project-config.js";
 import { buildChatSpawn, type SlashCommandSpec } from "./chat-tool.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -192,7 +192,41 @@ function checkTmux(): void {
   }
 }
 
+// Handle `sparkflow init` subcommand before parseArgs (it would be flagged as unknown).
+if (process.argv[2] === "init") {
+  const initCwd = process.cwd();
+  const { runInitInterview } = await import("../cli/init-interview.js");
+  let existing = null;
+  try {
+    existing = loadProjectConfig(initCwd);
+  } catch { /* use null */ }
+  try {
+    const config = await runInitInterview({ cwd: initCwd, existing });
+    const written = writeProjectConfig(initCwd, config);
+    process.stdout.write(`\nWrote ${written}\n`);
+  } catch (err) {
+    process.stderr.write(`Error: ${(err as Error).message}\n`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 const args = parseArgs(process.argv.slice(2));
+
+// Run first-run onboarding if no project config exists (and we're in a TTY).
+{
+  const { shouldAutoTrigger, runInitInterview } = await import("../cli/init-interview.js");
+  if (shouldAutoTrigger(args.cwd)) {
+    try {
+      const config = await runInitInterview({ cwd: args.cwd, existing: null });
+      const written = writeProjectConfig(args.cwd, config);
+      process.stdout.write(`\nWrote ${written}\n\n`);
+    } catch (err) {
+      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.exit(1);
+    }
+  }
+}
 
 // Resolve workflow via .sparkflow/config.json when not provided on CLI,
 // and accept bare names as .sparkflow/workflows/<name>.json.

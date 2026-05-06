@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
 import { resolve, join, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 
@@ -37,7 +37,7 @@ export function userConfigDir(): string {
   return join(homedir(), ".sparkflow");
 }
 
-function parseConfigObject(obj: Record<string, unknown>, label: string): ProjectConfig {
+export function parseConfigObject(obj: Record<string, unknown>, label: string): ProjectConfig {
   const config: ProjectConfig = {};
   if (obj.defaultWorkflow !== undefined) {
     if (typeof obj.defaultWorkflow !== "string") {
@@ -103,7 +103,7 @@ export function loadProjectConfig(cwd: string): ProjectConfig {
   return { ...user, ...project };
 }
 
-function listWorkflowsIn(dir: string): string[] {
+export function listWorkflowsIn(dir: string): string[] {
   if (!existsSync(dir)) return [];
   try {
     return readdirSync(dir)
@@ -112,6 +112,18 @@ function listWorkflowsIn(dir: string): string[] {
   } catch {
     return [];
   }
+}
+
+export function projectConfigExists(cwd: string): boolean {
+  return existsSync(join(cwd, PROJECT_CONFIG_PATH));
+}
+
+export function writeProjectConfig(cwd: string, config: ProjectConfig): string {
+  const dir = join(cwd, ".sparkflow");
+  mkdirSync(dir, { recursive: true });
+  const path = resolve(join(cwd, PROJECT_CONFIG_PATH));
+  writeFileSync(path, JSON.stringify(config, null, 2));
+  return path;
 }
 
 function looksLikePath(input: string): boolean {

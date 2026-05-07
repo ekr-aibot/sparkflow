@@ -1,4 +1,5 @@
 import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { select, checkbox, input, confirm } from "@inquirer/prompts";
 import {
@@ -12,6 +13,16 @@ import {
 
 const PROJECT_WORKFLOWS_DIR = ".sparkflow/workflows";
 const USER_FLOWS_DIR = "flows";
+
+function readWorkflowKind(dir: string, name: string): string | undefined {
+  try {
+    const raw = readFileSync(join(dir, `${name}.json`), "utf-8");
+    const data = JSON.parse(raw) as { kind?: unknown };
+    return typeof data.kind === "string" ? data.kind : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function listGitRemotes(cwd: string): string[] {
   try {
@@ -77,19 +88,32 @@ export async function runInitInterview(opts: {
     );
   }
 
-  const workflowChoices = [
+  // All workflows (for monitors select)
+  const allChoices = [
     ...projectWorkflows.map((n) => ({ name: `${n} (project)`, value: n })),
     ...dedupedUser.map((n) => ({ name: `${n} (user)`, value: n })),
   ];
 
+  // Only kind:"main" workflows are eligible as the project default.
+  const projectDir = join(cwd, PROJECT_WORKFLOWS_DIR);
+  const userDir = join(userConfigDir(), USER_FLOWS_DIR);
+  const mainChoices = [
+    ...projectWorkflows
+      .filter((n) => readWorkflowKind(projectDir, n) === "main")
+      .map((n) => ({ name: `${n} (project)`, value: n })),
+    ...dedupedUser
+      .filter((n) => readWorkflowKind(userDir, n) === "main")
+      .map((n) => ({ name: `${n} (user)`, value: n })),
+  ];
+
   try {
-    // 1. Default workflow
+    // 1. Default workflow (only kind:"main" workflows offered)
     const NONE = "__none__";
-    const defaultChoices = [...workflowChoices, { name: "(none)", value: NONE }];
+    const defaultChoices = [...mainChoices, { name: "(none)", value: NONE }];
 
     let defaultWorkflowSeed = NONE;
     if (existing?.defaultWorkflow) {
-      const found = workflowChoices.some((c) => c.value === existing.defaultWorkflow);
+      const found = mainChoices.some((c) => c.value === existing.defaultWorkflow);
       if (found) defaultWorkflowSeed = existing.defaultWorkflow;
     }
 
@@ -99,8 +123,8 @@ export async function runInitInterview(opts: {
       default: defaultWorkflowSeed,
     });
 
-    // 2. Monitors
-    const monitorChoices = workflowChoices.filter((c) => c.value !== selectedDefault);
+    // 2. Monitors (all workflows minus the chosen default)
+    const monitorChoices = allChoices.filter((c) => c.value !== selectedDefault);
     const existingMonitors = (existing?.monitors ?? []).filter((m) =>
       monitorChoices.some((c) => c.value === m),
     );

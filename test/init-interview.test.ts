@@ -30,16 +30,16 @@ function makeTmp(): string {
   return mkdtempSync(join(tmpdir(), "sf-init-test-"));
 }
 
-function writeUserWorkflow(home: string, name: string): void {
+function writeUserWorkflow(home: string, name: string, kind = "main"): void {
   const dir = join(home, ".sparkflow", "flows");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${name}.json`), "{}");
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ kind }));
 }
 
-function writeProjectWorkflow(cwd: string, name: string): void {
+function writeProjectWorkflow(cwd: string, name: string, kind = "main"): void {
   const dir = join(cwd, ".sparkflow", "workflows");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${name}.json`), "{}");
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ kind }));
 }
 
 // ---- detectGitDefaults -------------------------------------------------------
@@ -363,12 +363,38 @@ describe("runInitInterview", () => {
 
     await runInitInterview({ cwd, existing: null });
 
-    // The select choices should include "shared (project)" but NOT "shared (user)"
+    // Default workflow select: "shared (project)" present, "shared (user)" absent (deduped)
     const selectCall = vi.mocked(select).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };
     const names = selectCall.choices.map((c) => c.name);
     expect(names).toContain("shared (project)");
     expect(names).not.toContain("shared (user)");
     expect(names).toContain("user-only (user)");
+  });
+
+  it("only kind:main workflows appear in the default select; monitor workflows do not", async () => {
+    writeUserWorkflow(home, "feature-dev", "main");
+    writeUserWorkflow(home, "github-poller", "monitor");
+
+    vi.mocked(select).mockResolvedValueOnce("feature-dev");
+    vi.mocked(checkbox).mockResolvedValueOnce([]);
+    vi.mocked(input)
+      .mockResolvedValueOnce("origin")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("");
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+
+    await runInitInterview({ cwd, existing: null });
+
+    const selectCall = vi.mocked(select).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };
+    const defaultChoiceNames = selectCall.choices.map((c) => c.name);
+    expect(defaultChoiceNames).toContain("feature-dev (user)");
+    expect(defaultChoiceNames).not.toContain("github-poller (user)");
+
+    // But github-poller should still appear in the monitors checkbox
+    const checkboxCall = vi.mocked(checkbox).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };
+    const monitorChoiceNames = checkboxCall.choices.map((c) => c.name);
+    expect(monitorChoiceNames).toContain("github-poller (user)");
   });
 
   it("existing defaultWorkflow that no longer resolves falls back to NONE seed", async () => {

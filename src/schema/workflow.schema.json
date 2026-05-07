@@ -21,6 +21,11 @@
       "type": "string",
       "description": "Longer description of what this workflow does."
     },
+    "kind": {
+      "type": "string",
+      "enum": ["main", "monitor"],
+      "description": "Workflow role. 'main' marks a development workflow eligible to be the project default in sparkflow init. 'monitor' marks a background watcher. Omit if neither category applies."
+    },
     "entry": {
       "type": "string",
       "minLength": 1,

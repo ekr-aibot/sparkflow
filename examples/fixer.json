@@ -2,8 +2,13 @@
   "version": "1",
   "name": "fixer",
   "description": "Poll for failed jobs and auto-triage each one via fixer-one.",
+  "kind": "monitor",
   "entry": "poll",
-  "defaults": { "worktree": { "mode": "shared" } },
+  "defaults": {
+    "worktree": {
+      "mode": "shared"
+    }
+  },
   "steps": {
     "poll": {
       "name": "Poll for failed jobs",
@@ -12,7 +17,9 @@
       "runtime": {
         "type": "shell",
         "command": "bash",
-        "args": ["./scripts/fixer-poll.sh"]
+        "args": [
+          "./scripts/fixer-poll.sh"
+        ]
       },
       "outputs": {
         "items": {
@@ -20,7 +27,11 @@
           "description": "Array of { job_id, log_path, workflow_name, workflow_path, slug } for unhandled failed jobs."
         }
       },
-      "on_success": [{ "step": "dispatch" }]
+      "on_success": [
+        {
+          "step": "dispatch"
+        }
+      ]
     },
     "dispatch": {
       "name": "Dispatch fixer-one per failure",
@@ -40,7 +51,11 @@
           "SLUG": "${item.slug}"
         }
       },
-      "on_success": [{ "step": "sleep" }]
+      "on_success": [
+        {
+          "step": "sleep"
+        }
+      ]
     },
     "sleep": {
       "name": "Sleep before next poll",
@@ -49,9 +64,15 @@
       "runtime": {
         "type": "shell",
         "command": "sleep",
-        "args": ["60"]
+        "args": [
+          "60"
+        ]
       },
-      "on_success": [{ "step": "poll" }]
+      "on_success": [
+        {
+          "step": "poll"
+        }
+      ]
     }
   }
 }

@@ -161,11 +161,11 @@ export class WorkflowEngine {
    * pendingMessages queue (non-claude-code or not-yet-running). Returns an error
    * if the stepId is not part of this workflow.
    */
-  pushNudge(stepId: string, message: string): { ok: boolean; error?: string } {
+  pushNudge(stepId: string, message: string, nudgeId: string = ""): { ok: boolean; error?: string } {
     if (!this.stepStatuses.has(stepId)) {
       return { ok: false, error: `unknown step: ${stepId}` };
     }
-    this.triggerStep(stepId, message);
+    this.triggerStep(stepId, message, false, nudgeId);
     return { ok: true };
   }
 
@@ -312,7 +312,7 @@ export class WorkflowEngine {
     return true;
   }
 
-  private triggerStep(stepId: string, message?: string, viaFailure: boolean = false): void {
+  private triggerStep(stepId: string, message?: string, viaFailure: boolean = false, nudgeId?: string): void {
     if (this.aborted) return;
 
     const status = this.stepStatuses.get(stepId)!;
@@ -338,7 +338,13 @@ export class WorkflowEngine {
     if (status.state === "running") {
       if (resolvedMessage) {
         if (status.nudgeQueue) {
-          status.nudgeQueue.push(resolvedMessage);
+          // Emit received only when the nudge actually enters the delivery queue
+          if (nudgeId) {
+            process.stderr.write(
+              JSON.stringify({ type: "nudge_event", nudge_id: nudgeId, phase: "received", step: stepId, at: Date.now() }) + "\n"
+            );
+          }
+          status.nudgeQueue.push(resolvedMessage, nudgeId ?? "");
           this.logger.info(`[${stepId}] nudge received mid-run`);
         } else {
           status.pendingMessages.push(resolvedMessage);
@@ -671,9 +677,16 @@ export class WorkflowEngine {
     } finally {
       // Flush any nudges that arrived after the adapter closed stdin back into
       // pendingMessages so they are processed as a post-completion re-run.
+      // Emit abandoned for each so the dashboard waiter resolves immediately.
       if (status.nudgeQueue) {
-        for (const msg of status.nudgeQueue.drain()) {
+        for (const { message: msg, id: nid } of status.nudgeQueue.drain()) {
           status.pendingMessages.push(msg);
+          if (nid) {
+            process.stderr.write(
+              JSON.stringify({ type: "nudge_event", nudge_id: nid, phase: "abandoned",
+                step: stepId, at: Date.now(), reason: "step finished before delivery" }) + "\n"
+            );
+          }
         }
         status.nudgeQueue = undefined;
       }

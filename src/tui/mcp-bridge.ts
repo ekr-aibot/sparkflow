@@ -184,8 +184,30 @@ server.tool(
         isError: true,
       };
     }
+    const payload = response.payload;
+    const info = payload.info as Record<string, unknown> | undefined;
+    const nudges = (info?.nudges ?? []) as Array<Record<string, unknown>>;
+    let nudgesSection = "";
+    if (nudges.length > 0) {
+      const now = Date.now();
+      const lines = nudges.map((n) => {
+        const sentAgo = Math.floor(((now - (n.sentAt as number ?? now)) / 1000));
+        const msgPreview = typeof n.message === "string" ? n.message.slice(0, 80) : "";
+        const dur = typeof n.durationMs === "number" ? ` ${(n.durationMs / 1000).toFixed(1)}s` : "";
+        const turns = typeof n.turnCount === "number" ? ` ${n.turnCount} turns` : "";
+        return `  ${n.id} [${n.status}] ${sentAgo}s ago${dur}${turns} — "${msgPreview}"`;
+      });
+      nudgesSection = `\nNudges:\n${lines.join("\n")}\n`;
+    }
+    // Strip nudges from the JSON body — they're shown in the formatted section above.
+    let displayPayload = payload;
+    if (nudges.length > 0 && info) {
+      const { nudges: _n, ...infoWithoutNudges } = info;
+      displayPayload = { ...payload, info: infoWithoutNudges };
+    }
+    const text = JSON.stringify(displayPayload, null, 2) + nudgesSection;
     return {
-      content: [{ type: "text" as const, text: JSON.stringify(response.payload, null, 2) }],
+      content: [{ type: "text" as const, text }],
     };
   })
 );
@@ -296,11 +318,11 @@ server.tool(
 
 server.tool(
   "nudge_job",
-  "Send a mid-run message to redirect a running claude-code step. The message is delivered as an additional conversation turn at the next turn boundary. Only works while the job is running with a live stdin pipe (not after a reload).",
+  "Send a mid-run message to redirect a running claude-code step. Blocks until the LLM has processed the nudge and its response turn completes (up to 600 s, configurable via NUDGE_ACK_TIMEOUT_MS). Returns {ok:true, nudgeId, sentAt, deliveredAt, ackedAt, durationMs, turnCount} on success. Returns {ok:false, status:'pending', nudgeId} on timeout — poll get_job_detail for the eventual ack. Returns {ok:false, error:...} if the step is not running.",
   {
     job_id: z.string().describe("The job ID (shown in status pane or list_jobs output)"),
     step_id: z.string().describe("The step ID to nudge (must be a running claude-code step)"),
-    message: z.string().describe("The redirection message delivered to the agent as the next conversation turn"),
+    message: z.string().min(1).describe("The redirection message delivered to the agent as the next conversation turn"),
   },
   withReloadNotice(async ({ job_id, step_id, message }) => {
     const msg: IpcMessage = {
@@ -316,7 +338,7 @@ server.tool(
       };
     }
     return {
-      content: [{ type: "text" as const, text: `Nudge sent to step ${step_id} in job ${job_id}.` }],
+      content: [{ type: "text" as const, text: JSON.stringify(response.payload, null, 2) }],
     };
   })
 );

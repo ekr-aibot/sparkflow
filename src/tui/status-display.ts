@@ -60,7 +60,19 @@ function renderJobs(jobs: JobInfo[]): void {
       const stateLabel = job.state.toUpperCase();
       const time = elapsed(job.startTime, job.endTime);
       const question = job.pendingQuestion ? ` ? ${job.pendingQuestion}` : "";
-      out += `${COLORS.dim}${job.id.slice(0, 8)}${COLORS.reset} ${COLORS.cyan}[${name}${step}]${COLORS.reset} ${color}${stateLabel}${COLORS.reset} ${job.summary}${question} ${COLORS.dim}(${time})${COLORS.reset}\n`;
+      let nudgeLabel = "";
+      if (job.nudges && job.nudges.length > 0) {
+        const latest = job.nudges[job.nudges.length - 1];
+        const now = Date.now();
+        if (latest.status === "pending" || latest.status === "delivered") {
+          const ageS = Math.floor((now - latest.sentAt) / 1000);
+          nudgeLabel = ` ${COLORS.yellow}nudge:pending(${ageS}s)${COLORS.reset}`;
+        } else if (latest.status === "acked" && latest.ackedAt && now - latest.ackedAt < 5000) {
+          const durS = ((latest.durationMs ?? 0) / 1000).toFixed(1);
+          nudgeLabel = ` ${COLORS.green}nudge:ack ${durS}s (${latest.turnCount ?? 0} turns)${COLORS.reset}`;
+        }
+      }
+      out += `${COLORS.dim}${job.id.slice(0, 8)}${COLORS.reset} ${COLORS.cyan}[${name}${step}]${COLORS.reset} ${color}${stateLabel}${COLORS.reset} ${job.summary}${nudgeLabel}${question} ${COLORS.dim}(${time})${COLORS.reset}\n`;
     }
   }
 

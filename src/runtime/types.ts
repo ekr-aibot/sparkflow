@@ -1,23 +1,28 @@
 import type { Runtime, Step } from "../schema/types.js";
 import type { GitConfig, ProjectConfig } from "../config/project-config.js";
 
+export interface NudgeItem {
+  id: string;
+  message: string;
+}
+
 /**
  * A lightweight FIFO queue for injecting user messages into a running ClaudeCodeAdapter turn loop.
  * The engine pushes messages; the adapter drains them after each completed turn.
  */
 export class NudgeQueue {
-  private readonly messages: string[] = [];
+  private readonly items: NudgeItem[] = [];
 
-  push(message: string): void {
-    this.messages.push(message);
+  push(message: string, id: string): void {
+    this.items.push({ id, message });
   }
 
-  shift(): string | undefined {
-    return this.messages.shift();
+  shift(): NudgeItem | undefined {
+    return this.items.shift();
   }
 
-  drain(): string[] {
-    return this.messages.splice(0);
+  drain(): NudgeItem[] {
+    return this.items.splice(0);
   }
 }
 

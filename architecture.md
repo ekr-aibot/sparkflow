@@ -69,6 +69,24 @@ When a `sparkflow-run` engine process dies while a job is in `failed_waiting` st
 
 **`answerRecovery` liveness check**: `answerRecovery` now verifies the engine process is alive before writing to its stdin, preventing in-memory state from drifting to `"running"` when the process is already dead.
 
+### Nudge Acknowledgement Lifecycle
+
+Each `nudge_job` call is tracked end-to-end through three phases: **received → delivered → acked** (or **abandoned** on early worker death).
+
+**Identity:** The IPC handler (or engine-daemon command handler) generates a `nudgeId = randomBytes(8).toString("hex")` and threads it through the entire call chain.
+
+**Phase events** (emitted to process.stderr as JSON by the worker process, picked up by the LogTailer and processed in `handleStatusLine`):
+- `{type:"nudge_event", phase:"received", nudge_id, step, at}` — engine.ts, when nudge is queued on the NudgeQueue
+- `{type:"nudge_event", phase:"delivered", nudge_id, step, at}` — claude-code.ts, when the message is written to the LLM's stdin
+- `{type:"nudge_event", phase:"acked", nudge_id, step, at, duration_ms, turn_count}` — claude-code.ts, when the first `result` event arrives after delivery
+- `{type:"nudge_event", phase:"abandoned", nudge_id, step, at, reason}` — claude-code.ts, when the child exits with a delivered-but-not-acked nudge
+
+**JobManager** maintains `JobInfo.nudges: NudgeRecord[]` and a `nudgeWaiters` map. When acked/abandoned events arrive, any registered waiter is resolved. Worker death also abandons in-flight waiters.
+
+**MCP tool blocking:** `nudge_job` in the IPC handler awaits `jobManager.waitForNudgeAck(nudgeId, timeoutMs)` before returning, so the MCP tool call blocks until the LLM has responded. On timeout it returns `{ok:false, status:"pending", nudgeId}`.
+
+**Status pane** shows `nudge:pending(Xs)` while in flight and `nudge:ack Xs (Y turns)` for ~5 s after ack.
+
 ### Quota / Rate-Limit Handling
 
 When a runtime adapter returns `quotaHit: true`, the engine waits with exponential backoff (60 s → 120 s → 300 s → 600 s → 1800 s → 3600 s) and retries the step without counting the wait against `max_retries` or `retry.attempts`. This avoids treating a temporary API quota exhaustion as a permanent job failure. `StepStatus.quotaWaitAttempts` tracks how many times the step has waited. The dashboard receives a `{"type":"quota_wait", "step": …, "wait_seconds": …, "attempt": …}` event on stderr.

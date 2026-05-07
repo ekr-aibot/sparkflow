@@ -4,6 +4,7 @@
  * beyond what the JobManager already does.
  */
 
+import { randomBytes } from "node:crypto";
 import type { IpcMessage } from "../mcp/ipc.js";
 import type { JobManager } from "./job-manager.js";
 
@@ -91,9 +92,29 @@ export async function handleIpcRequest(
     }
     case "nudge_job": {
       const { jobId, stepId, message } = msg.payload as { jobId: string; stepId: string; message: string };
-      const result = jobManager.nudgeJob(jobId, stepId, message);
+      if (!message || typeof message !== "string" || !message.trim()) {
+        return errorResponse("message must be a non-empty string");
+      }
+      const nudgeId = randomBytes(8).toString("hex");
+      const timeoutMs = Number(process.env.NUDGE_ACK_TIMEOUT_MS ?? "600000");
+      const result = jobManager.nudgeJob(jobId, stepId, message, nudgeId);
       if (!result.ok) return errorResponse(result.error ?? "nudge failed");
-      return response({});
+      const ackResult = await jobManager.waitForNudgeAck(nudgeId, timeoutMs);
+      if ("status" in ackResult && ackResult.status === "timeout") {
+        const detail = jobManager.getJobDetail(jobId);
+        const partialRecord = detail?.info.nudges?.find((n) => n.id === nudgeId);
+        return response({
+          ok: false,
+          status: "pending",
+          nudgeId,
+          sentAt: partialRecord?.sentAt,
+          deliveredAt: partialRecord?.deliveredAt,
+        });
+      }
+      if (ackResult.status === "abandoned") {
+        return response({ ok: false, nudgeId: ackResult.id, ...ackResult });
+      }
+      return response({ ok: true, nudgeId: ackResult.id, ...ackResult });
     }
     default:
       return errorResponse(`Unknown message type: ${msg.type}`);

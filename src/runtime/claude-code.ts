@@ -153,6 +153,10 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       // Also resolved (with null) by the close handler to unblock a pending wait.
       let onResultEvent: (() => void) | null = null;
 
+      // Nudge lifecycle tracking
+      let deliveredNudge: { id: string; deliveredAt: number } | null = null;
+      let postNudgeTurnCount = 0;
+
       child.stdout?.on("data", (data: Buffer) => {
         const chunk = data.toString();
         stdout += chunk;
@@ -170,6 +174,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
               const cb = onResultEvent;
               onResultEvent = null;
               cb?.();
+            } else if (event.type === "assistant" && deliveredNudge) {
+              postNudgeTurnCount++;
             }
             if (ctx.verbose && ctx.logger) {
               for (const block of formatClaudeEvent(event)) {
@@ -209,6 +215,18 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         // Cleanup temp files
         for (const f of tempFiles) {
           try { unlinkSync(f); } catch { /* ignore */ }
+        }
+
+        // If a nudge was delivered but the child died before acking, emit abandoned
+        if (deliveredNudge) {
+          const dn = deliveredNudge;
+          deliveredNudge = null;
+          process.stderr.write(
+            JSON.stringify({
+              type: "nudge_event", nudge_id: dn.id, phase: "abandoned",
+              step: ctx.stepId, at: Date.now(), reason: `child exited (code=${code ?? -1})`,
+            }) + "\n"
+          );
         }
 
         // Unblock the turn loop if it's still waiting for a result event
@@ -349,10 +367,35 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
             }
           }
 
-          const nudge = ctx.nudgeQueue?.shift();
-          if (nudge) {
-            ctx.logger?.info(`[${ctx.stepId}:nudge] sending: ${nudge.slice(0, 120)}`);
-            child.stdin?.write(streamJsonUserMessage(nudge));
+          // Emit ack if a nudge was in flight and we just completed a turn
+          if (deliveredNudge) {
+            const now = Date.now();
+            const dn = deliveredNudge;
+            const tc = postNudgeTurnCount;
+            deliveredNudge = null;
+            const durS = ((now - dn.deliveredAt) / 1000).toFixed(1);
+            process.stderr.write(
+              JSON.stringify({
+                type: "nudge_event", nudge_id: dn.id, phase: "acked",
+                step: ctx.stepId, at: now, duration_ms: now - dn.deliveredAt, turn_count: tc,
+              }) + "\n"
+            );
+            ctx.logger?.info(`[${ctx.stepId}:nudge:acked ${durS}s / ${tc} turns]`);
+          }
+
+          const nudgeItem = ctx.nudgeQueue?.shift();
+          if (nudgeItem) {
+            const { id: nudgeId, message: nudgeMsg } = nudgeItem;
+            process.stderr.write(
+              JSON.stringify({
+                type: "nudge_event", nudge_id: nudgeId, phase: "delivered",
+                step: ctx.stepId, at: Date.now(),
+              }) + "\n"
+            );
+            ctx.logger?.info(`[${ctx.stepId}:nudge:delivered] ${nudgeId}`);
+            deliveredNudge = { id: nudgeId, deliveredAt: Date.now() };
+            postNudgeTurnCount = 0;
+            child.stdin?.write(streamJsonUserMessage(nudgeMsg));
             // Continue loop to wait for the next turn's result
           } else {
             // No queued nudge — we're done; close stdin so the process exits

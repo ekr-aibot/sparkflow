@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join, basename, isAbsolute } from "node:path";
-import type { JobInfo } from "./types.js";
+import type { JobInfo, NudgeRecord } from "./types.js";
 import { LogTailer } from "./log-tailer.js";
 import { StateStore, type PersistedJob } from "./state-store.js";
 import { loadProjectConfig, resolveWorkflowPath } from "../config/project-config.js";
@@ -49,6 +49,7 @@ export class JobManager {
   private cwd: string;
   private persistTimers = new Map<string, NodeJS.Timeout>();
   private rehydratedPingTimer: NodeJS.Timeout | null = null;
+  private nudgeWaiters = new Map<string, { resolve: (r: NudgeRecord) => void; timer: NodeJS.Timeout }>();
 
   constructor(cwd: string) {
     this.cwd = cwd;
@@ -251,6 +252,16 @@ export class JobManager {
     child.on("close", (code) => {
       const job = this.jobs.get(id);
       if (!job) return;
+      // Abandon any in-flight nudge waiters for this job
+      if (job.info.nudges) {
+        for (const nudge of job.info.nudges) {
+          if (nudge.status === "pending" || nudge.status === "delivered") {
+            nudge.status = "abandoned";
+            nudge.reason = `worker exited (code=${code ?? -1})`;
+            this.resolveNudgeWaiter(nudge.id, { ...nudge });
+          }
+        }
+      }
       job.info.endTime = Date.now();
       if (job.info.state === "running" || job.info.state === "blocked") {
         job.info.state = code === 0 ? "succeeded" : "failed";
@@ -345,6 +356,31 @@ export class JobManager {
     } else if (type === "run_info") {
       job.info.worktreePath = event.worktreePath as string;
       changed = true;
+    } else if (type === "nudge_event") {
+      const nudgeId = event.nudge_id as string;
+      const phase = event.phase as string;
+      const at = (event.at as number) ?? Date.now();
+
+      if (job.info.nudges) {
+        const record = job.info.nudges.find((n) => n.id === nudgeId);
+        if (record) {
+          if (phase === "delivered") {
+            record.deliveredAt = at;
+            record.status = "delivered";
+          } else if (phase === "acked") {
+            record.ackedAt = at;
+            record.durationMs = event.duration_ms as number | undefined;
+            record.turnCount = event.turn_count as number | undefined;
+            record.status = "acked";
+            this.resolveNudgeWaiter(nudgeId, { ...record });
+          } else if (phase === "abandoned") {
+            record.status = "abandoned";
+            record.reason = event.reason as string | undefined;
+            this.resolveNudgeWaiter(nudgeId, { ...record });
+          }
+          changed = true;
+        }
+      }
     }
 
     if (changed) {
@@ -455,17 +491,50 @@ export class JobManager {
     return true;
   }
 
-  nudgeJob(jobId: string, stepId: string, message: string): { ok: boolean; error?: string } {
+  nudgeJob(jobId: string, stepId: string, message: string, nudgeId: string): { ok: boolean; error?: string } {
     const job = this.jobs.get(jobId);
     if (!job) return { ok: false, error: `Job not found: ${jobId}` };
     if (job.info.state !== "running") return { ok: false, error: `Job ${jobId} is not running` };
     if (!job.child || !job.child.stdin) {
       return { ok: false, error: "nudges unavailable after reload" };
     }
+
+    const record: NudgeRecord = {
+      id: nudgeId,
+      stepId,
+      message,
+      sentAt: Date.now(),
+      status: "pending",
+    };
+    if (!job.info.nudges) job.info.nudges = [];
+    job.info.nudges.push(record);
+
     job.child.stdin.write(
-      JSON.stringify({ type: "nudge", step_id: stepId, message }) + "\n",
+      JSON.stringify({ type: "nudge", step_id: stepId, message, nudge_id: nudgeId }) + "\n",
     );
+    this.schedulePersist(jobId);
+    this.fireUpdate();
     return { ok: true };
+  }
+
+  private resolveNudgeWaiter(nudgeId: string, record: NudgeRecord): void {
+    const waiter = this.nudgeWaiters.get(nudgeId);
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      this.nudgeWaiters.delete(nudgeId);
+      waiter.resolve(record);
+    }
+  }
+
+  waitForNudgeAck(nudgeId: string, timeoutMs: number): Promise<NudgeRecord | { status: "timeout"; nudgeId: string }> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.nudgeWaiters.delete(nudgeId);
+        resolve({ status: "timeout", nudgeId });
+      }, timeoutMs);
+      timer.unref?.();
+      this.nudgeWaiters.set(nudgeId, { resolve, timer });
+    });
   }
 
   getJobs(): JobInfo[] {

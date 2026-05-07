@@ -206,7 +206,7 @@ describe("JobManager.nudgeJob", () => {
   });
 
   it("returns error for unknown job", () => {
-    const result = manager.nudgeJob("nonexistent", "step1", "hello");
+    const result = manager.nudgeJob("nonexistent", "step1", "hello", "nid1");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not found/);
   });
@@ -214,7 +214,7 @@ describe("JobManager.nudgeJob", () => {
   it("returns error when job is not running (terminal state)", async () => {
     const id = manager.startJob("/nonexistent/workflow.json");
     await waitFor(() => manager.getJobs()[0]?.state === "failed");
-    const result = manager.nudgeJob(id, "step1", "hello");
+    const result = manager.nudgeJob(id, "step1", "hello", "nid2");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/not running/);
   });
@@ -242,7 +242,7 @@ describe("JobManager.nudgeJob", () => {
       const originalWrite = job.child.stdin.write.bind(job.child.stdin);
       job.child.stdin.write = (s: string) => { written.push(s); return true; };
 
-      const result = manager.nudgeJob(id, "step-a", "please do X instead");
+      const result = manager.nudgeJob(id, "step-a", "please do X instead", "nid-test");
       expect(result.ok).toBe(true);
       expect(written.length).toBe(1);
       const parsed = JSON.parse(written[0].trim());

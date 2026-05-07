@@ -1,3 +1,16 @@
+export interface NudgeRecord {
+  id: string;
+  stepId: string;
+  message: string;
+  sentAt: number;
+  deliveredAt?: number;
+  ackedAt?: number;
+  durationMs?: number;
+  turnCount?: number;
+  status: "pending" | "delivered" | "acked" | "abandoned";
+  reason?: string;
+}
+
 export interface JobInfo {
   id: string;
   workflowPath: string;
@@ -30,6 +43,8 @@ export interface JobInfo {
   worktreePath?: string;
   /** Relpaths of pasted images referenced in the dispatch plan (e.g. ".sparkflow/pasted/…"). */
   attachedImages?: string[];
+  /** Per-nudge lifecycle records for this job. */
+  nudges?: NudgeRecord[];
 }
 
 export type DashboardRequest =

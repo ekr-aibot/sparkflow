@@ -16,6 +16,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createConnection, type Socket } from "node:net";
 import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { extname, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -464,8 +465,9 @@ async function main(): Promise<void> {
         if (typeof stepId !== "string" || !stepId) {
           return sendJson(res, 400, { error: "stepId is required" });
         }
-        const r = jobManager.nudgeJob(jobId, stepId, message);
-        if (r.ok) sendJson(res, 200, { ok: true });
+        const nudgeId = randomBytes(8).toString("hex");
+        const r = jobManager.nudgeJob(jobId, stepId, message, nudgeId);
+        if (r.ok) sendJson(res, 200, { ok: true, nudgeId });
         else sendJson(res, 400, { error: r.error ?? "nudge failed" });
       }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);

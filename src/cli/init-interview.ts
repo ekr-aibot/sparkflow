@@ -14,14 +14,26 @@ import {
 const PROJECT_WORKFLOWS_DIR = ".sparkflow/workflows";
 const USER_FLOWS_DIR = "flows";
 
-function readWorkflowKind(dir: string, name: string): string | undefined {
+type WorkflowMeta = { kind?: string; description?: string };
+
+function readWorkflowMeta(dir: string, name: string): WorkflowMeta {
   try {
     const raw = readFileSync(join(dir, `${name}.json`), "utf-8");
-    const data = JSON.parse(raw) as { kind?: unknown };
-    return typeof data.kind === "string" ? data.kind : undefined;
+    const data = JSON.parse(raw) as { kind?: unknown; description?: unknown };
+    const result: WorkflowMeta = {};
+    if (typeof data.kind === "string") result.kind = data.kind;
+    if (typeof data.description === "string" && data.description) result.description = data.description;
+    return result;
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+function truncate(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  const cut = s.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > maxLen * 0.8 ? cut.slice(0, lastSpace) : cut) + "…";
 }
 
 function listGitRemotes(cwd: string): string[] {
@@ -88,22 +100,31 @@ export async function runInitInterview(opts: {
     );
   }
 
-  // All workflows (for monitors select)
-  const allChoices = [
-    ...projectWorkflows.map((n) => ({ name: `${n} (project)`, value: n })),
-    ...dedupedUser.map((n) => ({ name: `${n} (user)`, value: n })),
-  ];
-
-  // Only kind:"main" workflows are eligible as the project default.
   const projectDir = join(cwd, PROJECT_WORKFLOWS_DIR);
   const userDir = join(userConfigDir(), USER_FLOWS_DIR);
+
+  // Single pre-pass: read kind + description for each workflow (each file read once).
+  const metaMap = new Map<string, WorkflowMeta>();
+  for (const n of dedupedUser) metaMap.set(n, readWorkflowMeta(userDir, n));
+  for (const n of projectWorkflows) metaMap.set(n, readWorkflowMeta(projectDir, n));
+
+  function makeChoice(n: string) {
+    const meta = metaMap.get(n) ?? {};
+    const choice: { name: string; value: string; description?: string } = { name: n, value: n };
+    if (meta.description) choice.description = truncate(meta.description, 200);
+    return choice;
+  }
+
+  // kind:"main" only — eligible as project default.
   const mainChoices = [
-    ...projectWorkflows
-      .filter((n) => readWorkflowKind(projectDir, n) === "main")
-      .map((n) => ({ name: `${n} (project)`, value: n })),
-    ...dedupedUser
-      .filter((n) => readWorkflowKind(userDir, n) === "main")
-      .map((n) => ({ name: `${n} (user)`, value: n })),
+    ...projectWorkflows.filter((n) => metaMap.get(n)?.kind === "main").map(makeChoice),
+    ...dedupedUser.filter((n) => metaMap.get(n)?.kind === "main").map(makeChoice),
+  ];
+
+  // kind:"monitor" only — offered in the monitors checkbox.
+  const monitorChoices = [
+    ...projectWorkflows.filter((n) => metaMap.get(n)?.kind === "monitor").map(makeChoice),
+    ...dedupedUser.filter((n) => metaMap.get(n)?.kind === "monitor").map(makeChoice),
   ];
 
   try {
@@ -123,18 +144,22 @@ export async function runInitInterview(opts: {
       default: defaultWorkflowSeed,
     });
 
-    // 2. Monitors (all workflows minus the chosen default)
-    const monitorChoices = allChoices.filter((c) => c.value !== selectedDefault);
-    const existingMonitors = (existing?.monitors ?? []).filter((m) =>
-      monitorChoices.some((c) => c.value === m),
-    );
-    const selectedMonitors = await checkbox<string>({
-      message: "Which workflows should run as monitors on launch?",
-      choices: monitorChoices.map((c) => ({
-        ...c,
-        checked: existingMonitors.includes(c.value),
-      })),
-    });
+    // 2. Monitors (only kind:"monitor" workflows, minus the chosen default).
+    //    Skip entirely when no eligible monitors exist.
+    const eligibleMonitors = monitorChoices.filter((c) => c.value !== selectedDefault);
+    let selectedMonitors: string[] = [];
+    if (eligibleMonitors.length > 0) {
+      const existingMonitors = (existing?.monitors ?? []).filter((m) =>
+        eligibleMonitors.some((c) => c.value === m),
+      );
+      selectedMonitors = await checkbox<string>({
+        message: "Which workflows should run as monitors on launch?",
+        choices: eligibleMonitors.map((c) => ({
+          ...c,
+          checked: existingMonitors.includes(c.value),
+        })),
+      });
+    }
 
     // 3. Git remotes — detect defaults and get list for choices
     const remotes = listGitRemotes(cwd);
@@ -173,7 +198,7 @@ export async function runInitInterview(opts: {
 
     // 7. Base branch
     const baseBranch = await input({
-      message: "Default base branch (blank ⇒ target repo’s default)?",
+      message: "Default base branch (blank ⇒ target repo's default)?",
       default: existing?.git?.base ?? gitDefaults.base ?? "",
     });
 

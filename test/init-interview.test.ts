@@ -30,16 +30,32 @@ function makeTmp(): string {
   return mkdtempSync(join(tmpdir(), "sf-init-test-"));
 }
 
-function writeUserWorkflow(home: string, name: string, kind = "main"): void {
+function writeUserWorkflow(
+  home: string,
+  name: string,
+  kind: string | undefined = "main",
+  description?: string,
+): void {
   const dir = join(home, ".sparkflow", "flows");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ kind }));
+  const data: Record<string, unknown> = {};
+  if (kind !== undefined) data.kind = kind;
+  if (description !== undefined) data.description = description;
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify(data));
 }
 
-function writeProjectWorkflow(cwd: string, name: string, kind = "main"): void {
+function writeProjectWorkflow(
+  cwd: string,
+  name: string,
+  kind: string | undefined = "main",
+  description?: string,
+): void {
   const dir = join(cwd, ".sparkflow", "workflows");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ kind }));
+  const data: Record<string, unknown> = {};
+  if (kind !== undefined) data.kind = kind;
+  if (description !== undefined) data.description = description;
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify(data));
 }
 
 // ---- detectGitDefaults -------------------------------------------------------
@@ -242,7 +258,7 @@ describe("runInitInterview", () => {
 
   it("produces correct ProjectConfig from canned answers", async () => {
     writeUserWorkflow(home, "feature-development");
-    writeUserWorkflow(home, "monitor-a");
+    writeUserWorkflow(home, "monitor-a", "monitor");
 
     // one remote → skip push_remote select
     vi.mocked(select).mockResolvedValueOnce("feature-development");
@@ -269,7 +285,6 @@ describe("runInitInterview", () => {
     vi.mocked(execFileSync).mockReturnValue(""); // no remotes
 
     vi.mocked(select).mockResolvedValueOnce("wf");
-    vi.mocked(checkbox).mockResolvedValueOnce([]);
     vi.mocked(input)
       .mockResolvedValueOnce("") // pull_remote
       .mockResolvedValueOnce("") // pr_repo
@@ -283,7 +298,7 @@ describe("runInitInterview", () => {
 
   it("seeds prompts with existing config values", async () => {
     writeUserWorkflow(home, "feature-development");
-    writeUserWorkflow(home, "monitor-a");
+    writeUserWorkflow(home, "monitor-a", "monitor");
 
     const existing = {
       defaultWorkflow: "feature-development",
@@ -318,7 +333,6 @@ describe("runInitInterview", () => {
     vi.mocked(select)
       .mockResolvedValueOnce("wf")       // defaultWorkflow
       .mockResolvedValueOnce("origin");   // push_remote
-    vi.mocked(checkbox).mockResolvedValueOnce([]);
     vi.mocked(input)
       .mockResolvedValueOnce("origin")
       .mockResolvedValueOnce("")
@@ -335,7 +349,6 @@ describe("runInitInterview", () => {
   it("omits defaultWorkflow when (none) is chosen", async () => {
     writeUserWorkflow(home, "wf");
     vi.mocked(select).mockResolvedValueOnce("__none__");
-    vi.mocked(checkbox).mockResolvedValueOnce([]);
     vi.mocked(input)
       .mockResolvedValueOnce("origin")
       .mockResolvedValueOnce("")
@@ -353,7 +366,6 @@ describe("runInitInterview", () => {
     writeUserWorkflow(home, "user-only");
 
     vi.mocked(select).mockResolvedValueOnce("shared");
-    vi.mocked(checkbox).mockResolvedValueOnce(["user-only"]);
     vi.mocked(input)
       .mockResolvedValueOnce("origin")
       .mockResolvedValueOnce("")
@@ -363,12 +375,15 @@ describe("runInitInterview", () => {
 
     await runInitInterview({ cwd, existing: null });
 
-    // Default workflow select: "shared (project)" present, "shared (user)" absent (deduped)
+    // "shared" appears exactly once (user version deduped), "user-only" is present
     const selectCall = vi.mocked(select).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };
     const names = selectCall.choices.map((c) => c.name);
-    expect(names).toContain("shared (project)");
-    expect(names).not.toContain("shared (user)");
-    expect(names).toContain("user-only (user)");
+    expect(names.filter((n) => n === "shared")).toHaveLength(1);
+    expect(names).toContain("user-only");
+    // No (user) or (project) suffixes
+    for (const name of names) {
+      expect(name).not.toMatch(/\(user\)|\(project\)/);
+    }
   });
 
   it("only kind:main workflows appear in the default select; monitor workflows do not", async () => {
@@ -388,13 +403,13 @@ describe("runInitInterview", () => {
 
     const selectCall = vi.mocked(select).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };
     const defaultChoiceNames = selectCall.choices.map((c) => c.name);
-    expect(defaultChoiceNames).toContain("feature-dev (user)");
-    expect(defaultChoiceNames).not.toContain("github-poller (user)");
+    expect(defaultChoiceNames).toContain("feature-dev");
+    expect(defaultChoiceNames).not.toContain("github-poller");
 
-    // But github-poller should still appear in the monitors checkbox
+    // github-poller should appear in the monitors checkbox (kind:"monitor")
     const checkboxCall = vi.mocked(checkbox).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };
     const monitorChoiceNames = checkboxCall.choices.map((c) => c.name);
-    expect(monitorChoiceNames).toContain("github-poller (user)");
+    expect(monitorChoiceNames).toContain("github-poller");
   });
 
   it("existing defaultWorkflow that no longer resolves falls back to NONE seed", async () => {
@@ -402,7 +417,6 @@ describe("runInitInterview", () => {
 
     const existing = { defaultWorkflow: "deleted-workflow" };
     vi.mocked(select).mockResolvedValueOnce("wf");
-    vi.mocked(checkbox).mockResolvedValueOnce([]);
     vi.mocked(input)
       .mockResolvedValueOnce("origin")
       .mockResolvedValueOnce("")
@@ -416,5 +430,111 @@ describe("runInitInterview", () => {
     // "deleted-workflow" doesn't exist in any workflow dir.
     const selectCall = vi.mocked(select).mock.calls[0][0] as { default: string };
     expect(selectCall.default).toBe("__none__");
+  });
+
+  // ---- New test cases for kind:helper and description rendering ----
+
+  it("excludes kind:helper workflows from both default-workflow and monitor choices", async () => {
+    writeUserWorkflow(home, "helper-wf", "helper");
+    writeUserWorkflow(home, "main-wf", "main");
+
+    vi.mocked(select).mockResolvedValueOnce("main-wf");
+    vi.mocked(input)
+      .mockResolvedValueOnce("origin")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("");
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+
+    await runInitInterview({ cwd, existing: null });
+
+    const selectCall = vi.mocked(select).mock.calls[0][0] as unknown as { choices: Array<{ value: string }> };
+    const defaultValues = selectCall.choices.map((c) => c.value);
+    expect(defaultValues).toContain("main-wf");
+    expect(defaultValues).not.toContain("helper-wf");
+    // No monitor prompt since there are no kind:"monitor" workflows
+    expect(vi.mocked(checkbox)).not.toHaveBeenCalled();
+  });
+
+  it("excludes workflows with no kind from monitor choices", async () => {
+    writeUserWorkflow(home, "main-wf", "main");
+    // Write a workflow with no kind field — simulates a third-party or misconfigured flow
+    const flowsDir = join(home, ".sparkflow", "flows");
+    mkdirSync(flowsDir, { recursive: true });
+    writeFileSync(join(flowsDir, "no-kind.json"), JSON.stringify({ version: "1", name: "no-kind" }));
+
+    vi.mocked(select).mockResolvedValueOnce("main-wf");
+    vi.mocked(input)
+      .mockResolvedValueOnce("origin")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("");
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+
+    await runInitInterview({ cwd, existing: null });
+
+    // No kind:"monitor" workflows → checkbox skipped entirely
+    expect(vi.mocked(checkbox)).not.toHaveBeenCalled();
+  });
+
+  it("populates choice description from workflow JSON description field", async () => {
+    writeUserWorkflow(home, "feature-dev", "main", "Implements feature branches end-to-end.");
+    writeUserWorkflow(home, "monitor-flow", "monitor", "Polls GitHub for CI results.");
+
+    vi.mocked(select).mockResolvedValueOnce("feature-dev");
+    vi.mocked(checkbox).mockResolvedValueOnce([]);
+    vi.mocked(input)
+      .mockResolvedValueOnce("origin")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("");
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+
+    await runInitInterview({ cwd, existing: null });
+
+    const selectCall = vi.mocked(select).mock.calls[0][0] as unknown as { choices: Array<{ name: string; description?: string }> };
+    const featureChoice = selectCall.choices.find((c) => c.name === "feature-dev");
+    expect(featureChoice?.description).toBe("Implements feature branches end-to-end.");
+
+    const checkboxCall = vi.mocked(checkbox).mock.calls[0][0] as unknown as { choices: Array<{ name: string; description?: string }> };
+    const monitorChoice = checkboxCall.choices.find((c) => c.name === "monitor-flow");
+    expect(monitorChoice?.description).toBe("Polls GitHub for CI results.");
+  });
+
+  it("choice names do not contain (user) or (project) substrings", async () => {
+    writeUserWorkflow(home, "feature-dev", "main");
+    writeProjectWorkflow(cwd, "project-flow", "main");
+
+    vi.mocked(select).mockResolvedValueOnce("feature-dev");
+    vi.mocked(input)
+      .mockResolvedValueOnce("origin")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("");
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+
+    await runInitInterview({ cwd, existing: null });
+
+    const selectCall = vi.mocked(select).mock.calls[0][0] as unknown as { choices: Array<{ name: string }> };
+    for (const choice of selectCall.choices) {
+      expect(choice.name).not.toMatch(/\(user\)|\(project\)/);
+    }
+  });
+
+  it("skips monitor prompt when no kind:monitor workflows exist; config has no monitors key", async () => {
+    writeUserWorkflow(home, "main-wf", "main");
+
+    vi.mocked(select).mockResolvedValueOnce("main-wf");
+    vi.mocked(input)
+      .mockResolvedValueOnce("origin")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("")
+      .mockResolvedValueOnce("");
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+
+    const config = await runInitInterview({ cwd, existing: null });
+
+    expect(vi.mocked(checkbox)).not.toHaveBeenCalled();
+    expect(config.monitors).toBeUndefined();
   });
 });

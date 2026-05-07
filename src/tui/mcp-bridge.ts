@@ -199,7 +199,13 @@ server.tool(
       });
       nudgesSection = `\nNudges:\n${lines.join("\n")}\n`;
     }
-    const text = JSON.stringify(payload, null, 2) + nudgesSection;
+    // Strip nudges from the JSON body — they're shown in the formatted section above.
+    let displayPayload = payload;
+    if (nudges.length > 0 && info) {
+      const { nudges: _n, ...infoWithoutNudges } = info;
+      displayPayload = { ...payload, info: infoWithoutNudges };
+    }
+    const text = JSON.stringify(displayPayload, null, 2) + nudgesSection;
     return {
       content: [{ type: "text" as const, text }],
     };

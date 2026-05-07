@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NudgeQueue } from "../src/runtime/types.js";
 import { WorkflowEngine } from "../src/engine/engine.js";
+import { ClaudeCodeAdapter } from "../src/runtime/claude-code.js";
 import { JobManager } from "../src/tui/job-manager.js";
 import { handleIpcRequest } from "../src/tui/ipc-handler.js";
 import type { SparkflowWorkflow } from "../src/schema/types.js";
@@ -105,7 +106,7 @@ describe("WorkflowEngine.pushNudge", () => {
     stderrSpy?.mockRestore();
   });
 
-  it("emits nudge_event received on stderr with correct nudgeId and step", async () => {
+  it("emits nudge_event received on stderr for a claude-code step (nudgeQueue path)", async () => {
     let capturedCtx: RuntimeContext | undefined;
     let unblock!: () => void;
     const blockP = new Promise<void>((r) => (unblock = r));
@@ -116,7 +117,11 @@ describe("WorkflowEngine.pushNudge", () => {
       return { success: true, outputs: {} };
     });
 
-    const workflow = makeWorkflow();
+    // received is only emitted when the nudge enters the nudgeQueue,
+    // which is only created for claude-code steps.
+    const workflow = makeWorkflow({
+      steps: { start: { name: "Start", interactive: false, runtime: { type: "claude-code" } } },
+    });
     const engine = new WorkflowEngine(workflow, { logger: silentLogger }, new Map([["shell", adapter], ["claude-code", adapter]]));
     const runP = engine.run();
 
@@ -134,6 +139,25 @@ describe("WorkflowEngine.pushNudge", () => {
     expect(received?.step).toBe("start");
     expect(typeof received?.at).toBe("number");
 
+    unblock();
+    await runP;
+  });
+
+  it("does NOT emit nudge_event received for shell steps (pendingMessages path)", async () => {
+    let capturedCtx: RuntimeContext | undefined;
+    let unblock!: () => void;
+    const blockP = new Promise<void>((r) => (unblock = r));
+    const adapter = new MockAdapter(async (ctx) => { capturedCtx = ctx; await blockP; return { success: true, outputs: {} }; });
+    const workflow = makeWorkflow(); // shell step (default) — no nudgeQueue
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, new Map([["shell", adapter], ["claude-code", adapter]]));
+    const runP = engine.run();
+    await waitFor(() => capturedCtx !== undefined);
+    stderrOutput = ""; // clear any startup events
+    engine.pushNudge("start", "redirect", "nudge-shell-999");
+    const events = stderrOutput.split("\n").filter(Boolean).flatMap((l) => {
+      try { return [JSON.parse(l) as Record<string, unknown>]; } catch { return []; }
+    });
+    expect(events.find((e) => e.type === "nudge_event" && e.phase === "received")).toBeUndefined();
     unblock();
     await runP;
   });
@@ -354,7 +378,7 @@ describe("handleIpcRequest nudge_job — ok field per ack status", () => {
     payload: { jobId: "j1", stepId: "s1", message: "redirect" },
   };
 
-  it("returns ok:true for acked NudgeRecord", async () => {
+  it("returns ok:true for acked NudgeRecord with nudgeId alias per spec", async () => {
     const record: NudgeRecord = {
       id: "abc", stepId: "s1", message: "redirect", sentAt: 1000,
       deliveredAt: 1100, ackedAt: 1500, durationMs: 400, turnCount: 1, status: "acked",
@@ -365,10 +389,11 @@ describe("handleIpcRequest nudge_job — ok field per ack status", () => {
     expect(resp.payload.status).toBe("acked");
     expect(resp.payload.durationMs).toBe(400);
     expect(resp.payload.turnCount).toBe(1);
-    expect(resp.payload.id).toBe("abc");
+    expect(resp.payload.id).toBe("abc");         // NudgeRecord.id (backward compat)
+    expect(resp.payload.nudgeId).toBe("abc");    // alias per plan spec
   });
 
-  it("returns ok:false for abandoned NudgeRecord", async () => {
+  it("returns ok:false for abandoned NudgeRecord with nudgeId alias", async () => {
     const record: NudgeRecord = {
       id: "abc", stepId: "s1", message: "redirect", sentAt: 1000,
       deliveredAt: 1100, status: "abandoned", reason: "worker exited (code=1)",
@@ -377,6 +402,7 @@ describe("handleIpcRequest nudge_job — ok field per ack status", () => {
     expect(resp.type).toBe("response");
     expect(resp.payload.ok).toBe(false);
     expect(resp.payload.status).toBe("abandoned");
+    expect(resp.payload.nudgeId).toBe("abc");
     expect(String(resp.payload.reason)).toMatch(/worker exited/);
   });
 
@@ -408,4 +434,149 @@ describe("handleIpcRequest nudge_job — ok field per ack status", () => {
     expect(String(resp.payload.error)).toMatch(/non-empty/);
     expect((manager.nudgeJob as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
   });
+});
+
+// ---------------------------------------------------------------------------
+// 5. ClaudeCodeAdapter runtime nudge event emission
+//
+// These tests verify that claude-code.ts actually emits the nudge lifecycle
+// events on process.stderr. A fake "claude" binary simulates the LLM CLI,
+// allowing the real adapter to run its turn loop.
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeAdapter nudge event emission", () => {
+  const adapter = new ClaudeCodeAdapter();
+  let stderrOutput: string;
+  let stderrSpy: ReturnType<typeof vi.spyOn> | null = null;
+  let fakeClaudeDir: string | null = null;
+  let origPath: string | undefined;
+
+  beforeEach(() => {
+    stderrOutput = "";
+    stderrSpy = vi.spyOn(process.stderr, "write" as never).mockImplementation(((chunk: unknown) => {
+      stderrOutput += String(chunk);
+      return true;
+    }) as never);
+  });
+
+  afterEach(() => {
+    stderrSpy?.mockRestore();
+    if (fakeClaudeDir) {
+      process.env.PATH = origPath;
+      try { rmSync(fakeClaudeDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      fakeClaudeDir = null;
+    }
+  });
+
+  function installFakeClaude(script: string): void {
+    fakeClaudeDir = mkdtempSync(join(tmpdir(), "fake-claude-nak-"));
+    origPath = process.env.PATH;
+    const bin = join(fakeClaudeDir, "claude");
+    writeFileSync(bin, `#!/usr/bin/env node\n${script}`, { mode: 0o755 });
+    process.env.PATH = `${fakeClaudeDir}:${origPath ?? ""}`;
+  }
+
+  function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
+    return {
+      stepId: "step1",
+      step: { name: "Test", interactive: false },
+      runtime: { type: "claude-code" },
+      cwd: process.cwd(),
+      env: {},
+      interactive: false,
+      ...overrides,
+    };
+  }
+
+  function nudgeEvents(): Array<Record<string, unknown>> {
+    return stderrOutput.split("\n").filter(Boolean).flatMap((l) => {
+      try {
+        const e = JSON.parse(l) as Record<string, unknown>;
+        return e.type === "nudge_event" ? [e] : [];
+      } catch { return []; }
+    });
+  }
+
+  it("emits delivered then acked (with correct turnCount) when nudge is processed", async () => {
+    // Fake claude: turn 1 (initial prompt) → result; turn 2 (nudge) → assistant + result
+    installFakeClaude(`
+const rl = require('readline').createInterface({ input: process.stdin });
+let n = 0;
+rl.on('line', (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.type === 'user') {
+      n++;
+      if (n === 1) {
+        process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'initial done' }) + '\\n');
+      } else {
+        process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [] } }) + '\\n');
+        process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'nudge handled' }) + '\\n');
+      }
+    }
+  } catch {}
+});
+rl.on('close', () => process.exit(0));
+`);
+
+    const q = new NudgeQueue();
+    q.push("please focus on tests", "rt-nudge-001");
+
+    await adapter.run(makeCtx({ prompt: "initial prompt", nudgeQueue: q }));
+
+    const events = nudgeEvents();
+    const delivered = events.find((e) => e.phase === "delivered");
+    const acked = events.find((e) => e.phase === "acked");
+
+    expect(delivered).toBeDefined();
+    expect(delivered?.nudge_id).toBe("rt-nudge-001");
+    expect(delivered?.step).toBe("step1");
+
+    expect(acked).toBeDefined();
+    expect(acked?.nudge_id).toBe("rt-nudge-001");
+    expect(acked?.turn_count).toBe(1);   // one assistant event counted between delivered and acked
+    expect(typeof acked?.duration_ms).toBe("number");
+
+    expect(events.find((e) => e.phase === "abandoned")).toBeUndefined();
+  }, 15000);
+
+  it("emits delivered then abandoned when child exits before responding to nudge", async () => {
+    // Fake claude: turn 1 → result; turn 2 (nudge) → exit(0) without responding
+    installFakeClaude(`
+const rl = require('readline').createInterface({ input: process.stdin });
+let n = 0;
+rl.on('line', (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.type === 'user') {
+      n++;
+      if (n === 1) {
+        process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done' }) + '\\n');
+      } else {
+        process.exit(0);
+      }
+    }
+  } catch {}
+});
+rl.on('close', () => process.exit(0));
+`);
+
+    const q = new NudgeQueue();
+    q.push("redirect this", "rt-abandon-001");
+
+    await adapter.run(makeCtx({ prompt: "initial prompt", nudgeQueue: q }));
+
+    const events = nudgeEvents();
+    const delivered = events.find((e) => e.phase === "delivered");
+    const abandoned = events.find((e) => e.phase === "abandoned");
+
+    expect(delivered).toBeDefined();
+    expect(delivered?.nudge_id).toBe("rt-abandon-001");
+
+    expect(abandoned).toBeDefined();
+    expect(abandoned?.nudge_id).toBe("rt-abandon-001");
+    expect(String(abandoned?.reason)).toMatch(/child exited/);
+
+    expect(events.find((e) => e.phase === "acked")).toBeUndefined();
+  }, 15000);
 });

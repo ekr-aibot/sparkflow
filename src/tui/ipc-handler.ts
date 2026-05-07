@@ -112,9 +112,9 @@ export async function handleIpcRequest(
         });
       }
       if (ackResult.status === "abandoned") {
-        return response({ ok: false, ...ackResult });
+        return response({ ok: false, nudgeId: ackResult.id, ...ackResult });
       }
-      return response({ ok: true, ...ackResult });
+      return response({ ok: true, nudgeId: ackResult.id, ...ackResult });
     }
     default:
       return errorResponse(`Unknown message type: ${msg.type}`);

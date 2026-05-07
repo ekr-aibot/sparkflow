@@ -165,10 +165,6 @@ export class WorkflowEngine {
     if (!this.stepStatuses.has(stepId)) {
       return { ok: false, error: `unknown step: ${stepId}` };
     }
-    // Emit received event so the dashboard can track nudge lifecycle
-    process.stderr.write(
-      JSON.stringify({ type: "nudge_event", nudge_id: nudgeId, phase: "received", step: stepId, at: Date.now() }) + "\n"
-    );
     this.triggerStep(stepId, message, false, nudgeId);
     return { ok: true };
   }
@@ -342,6 +338,12 @@ export class WorkflowEngine {
     if (status.state === "running") {
       if (resolvedMessage) {
         if (status.nudgeQueue) {
+          // Emit received only when the nudge actually enters the delivery queue
+          if (nudgeId) {
+            process.stderr.write(
+              JSON.stringify({ type: "nudge_event", nudge_id: nudgeId, phase: "received", step: stepId, at: Date.now() }) + "\n"
+            );
+          }
           status.nudgeQueue.push(resolvedMessage, nudgeId ?? "");
           this.logger.info(`[${stepId}] nudge received mid-run`);
         } else {
@@ -675,9 +677,16 @@ export class WorkflowEngine {
     } finally {
       // Flush any nudges that arrived after the adapter closed stdin back into
       // pendingMessages so they are processed as a post-completion re-run.
+      // Emit abandoned for each so the dashboard waiter resolves immediately.
       if (status.nudgeQueue) {
-        for (const { message: msg } of status.nudgeQueue.drain()) {
+        for (const { message: msg, id: nid } of status.nudgeQueue.drain()) {
           status.pendingMessages.push(msg);
+          if (nid) {
+            process.stderr.write(
+              JSON.stringify({ type: "nudge_event", nudge_id: nid, phase: "abandoned",
+                step: stepId, at: Date.now(), reason: "step finished before delivery" }) + "\n"
+            );
+          }
         }
         status.nudgeQueue = undefined;
       }

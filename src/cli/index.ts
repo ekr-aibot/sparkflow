@@ -56,11 +56,12 @@ function setupStdinAnswerReader(engine: WorkflowEngine): void {
         response?: string;
         step_id?: string;
         message?: string;
+        nudge_id?: string;
       };
       if (event.type === "answer" && event.request_id) {
         engine.answerPendingQuestion(event.request_id, event.response ?? "");
       } else if (event.type === "nudge" && event.step_id && typeof event.message === "string") {
-        engine.pushNudge(event.step_id, event.message);
+        engine.pushNudge(event.step_id, event.message, typeof event.nudge_id === "string" ? event.nudge_id : "");
       }
     } catch {
       // ignore non-JSON lines

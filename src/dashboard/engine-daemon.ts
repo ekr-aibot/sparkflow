@@ -24,6 +24,7 @@
 
 import { resolve } from "node:path";
 import { readFileSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 
@@ -239,9 +240,22 @@ async function main(): Promise<void> {
       }
 
       case "nudgeJob": {
-        const result = jobManager.nudgeJob(msg.jobId, msg.stepId, msg.message);
-        if (result.ok) ipcClient.sendResponse(msg.id, { ok: true });
-        else ipcClient.sendError(msg.id, result.error ?? "nudge failed");
+        const nudgeId = randomBytes(8).toString("hex");
+        const result = jobManager.nudgeJob(msg.jobId, msg.stepId, msg.message, nudgeId);
+        if (!result.ok) {
+          ipcClient.sendError(msg.id, result.error ?? "nudge failed");
+          break;
+        }
+        const timeoutMs = Number(process.env.NUDGE_ACK_TIMEOUT_MS ?? "600000");
+        jobManager.waitForNudgeAck(nudgeId, timeoutMs).then((ackResult) => {
+          if ("status" in ackResult && ackResult.status === "timeout") {
+            ipcClient.sendResponse(msg.id, { ok: false, status: "pending", nudgeId });
+          } else {
+            ipcClient.sendResponse(msg.id, { ok: true, ...ackResult });
+          }
+        }).catch(() => {
+          ipcClient.sendResponse(msg.id, { ok: false, nudgeId, error: "ack wait failed" });
+        });
         break;
       }
     }

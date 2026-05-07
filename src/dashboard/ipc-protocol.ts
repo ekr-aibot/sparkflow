@@ -8,7 +8,7 @@
  * in subsequent messages from that socket.
  */
 
-import type { JobInfo } from "../tui/types.js";
+import type { JobInfo, NudgeRecord } from "../tui/types.js";
 
 // ---------------------------------------------------------------------------
 // Engine → Frontend messages
@@ -62,9 +62,12 @@ export type EngineToFrontend =
   | AttachMessage
   | DetachMessage
   | JobSnapshotMessage
+  | NudgeAckMessage
   | ResponseMessage
   | PongMessage
   | ErrorMessage;
+
+export type { NudgeRecord };
 
 // ---------------------------------------------------------------------------
 // Frontend → Engine messages (all have `id` for request/response correlation)
@@ -137,6 +140,14 @@ export interface NudgeJobCommand {
   jobId: string;
   stepId: string;
   message: string;
+  nudgeId: string;
+}
+
+/** Low-latency ack notification sent from engine to frontend when a nudge completes. */
+export interface NudgeAckMessage {
+  type: "nudgeAck";
+  jobId: string;
+  record: NudgeRecord;
 }
 
 /**

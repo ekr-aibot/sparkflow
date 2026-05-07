@@ -1194,7 +1194,7 @@ describe("WorkflowEngine", () => {
       await new Promise<void>((r) => setImmediate(r));
 
       expect(capturedQueue).toBeInstanceOf(NudgeQueue);
-      expect(capturedQueue?.shift()).toBe("nudge from b");
+      expect(capturedQueue?.shift()).toMatchObject({ message: "nudge from b" });
 
       releaseA({ success: true, outputs: {} });
       const result = await runPromise;
@@ -1240,7 +1240,7 @@ describe("WorkflowEngine", () => {
       expect(capturedQueue).toBeInstanceOf(NudgeQueue);
 
       // Push a nudge directly into the queue (simulates a late-arriving nudge)
-      capturedQueue!.push("late nudge");
+      capturedQueue!.push("late nudge", "test-nudge-id");
 
       // Release A — its run loop will see the nudge, drain it into pendingMessages,
       // which triggers a second invocation of A with "late nudge" as transitionMessage.

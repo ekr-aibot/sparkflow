@@ -21,20 +21,20 @@ function makeCtx(overrides: Partial<RuntimeContext> = {}): RuntimeContext {
 describe("NudgeQueue", () => {
   it("push and shift work FIFO", () => {
     const q = new NudgeQueue();
-    q.push("first");
-    q.push("second");
-    expect(q.shift()).toBe("first");
-    expect(q.shift()).toBe("second");
+    q.push("first", "id1");
+    q.push("second", "id2");
+    expect(q.shift()).toEqual({ id: "id1", message: "first" });
+    expect(q.shift()).toEqual({ id: "id2", message: "second" });
     expect(q.shift()).toBeUndefined();
   });
 
   it("drain empties the queue and returns all messages in order", () => {
     const q = new NudgeQueue();
-    q.push("a");
-    q.push("b");
-    q.push("c");
+    q.push("a", "x");
+    q.push("b", "y");
+    q.push("c", "z");
     const drained = q.drain();
-    expect(drained).toEqual(["a", "b", "c"]);
+    expect(drained).toEqual([{ id: "x", message: "a" }, { id: "y", message: "b" }, { id: "z", message: "c" }]);
     expect(q.shift()).toBeUndefined();
   });
 
@@ -468,7 +468,7 @@ describe("ClaudeCodeAdapter self-nudge", () => {
   it("user-pushed nudges work alongside self-nudge", async () => {
     const selfNudgeLogs: string[] = [];
     const q = new NudgeQueue();
-    q.push("Also confirm the architecture is clean.");
+    q.push("Also confirm the architecture is clean.", "nudge-arch-check");
     const result = await withFakeClaude(
       [
         "Let me think about this.",

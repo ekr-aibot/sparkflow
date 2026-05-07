@@ -111,6 +111,9 @@ export async function handleIpcRequest(
           deliveredAt: partialRecord?.deliveredAt,
         });
       }
+      if (ackResult.status === "abandoned") {
+        return response({ ok: false, ...ackResult });
+      }
       return response({ ok: true, ...ackResult });
     }
     default:

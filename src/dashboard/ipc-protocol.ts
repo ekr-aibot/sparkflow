@@ -62,7 +62,6 @@ export type EngineToFrontend =
   | AttachMessage
   | DetachMessage
   | JobSnapshotMessage
-  | NudgeAckMessage
   | ResponseMessage
   | PongMessage
   | ErrorMessage;
@@ -140,14 +139,6 @@ export interface NudgeJobCommand {
   jobId: string;
   stepId: string;
   message: string;
-  nudgeId: string;
-}
-
-/** Low-latency ack notification sent from engine to frontend when a nudge completes. */
-export interface NudgeAckMessage {
-  type: "nudgeAck";
-  jobId: string;
-  record: NudgeRecord;
 }
 
 /**

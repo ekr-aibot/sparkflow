@@ -250,6 +250,8 @@ async function main(): Promise<void> {
         jobManager.waitForNudgeAck(nudgeId, timeoutMs).then((ackResult) => {
           if ("status" in ackResult && ackResult.status === "timeout") {
             ipcClient.sendResponse(msg.id, { ok: false, status: "pending", nudgeId });
+          } else if (ackResult.status === "abandoned") {
+            ipcClient.sendResponse(msg.id, { ok: false, ...ackResult });
           } else {
             ipcClient.sendResponse(msg.id, { ok: true, ...ackResult });
           }

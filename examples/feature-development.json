@@ -2,10 +2,13 @@
   "version": "1",
   "name": "feature-development",
   "description": "Develop code, then fan out to automated review and tests. On failure, loop back to developer with feedback. On success, create and watch a PR.",
+  "kind": "main",
   "entry": "developer",
   "defaults": {
     "max_retries": 5,
-    "worktree": { "mode": "isolated" }
+    "worktree": {
+      "mode": "isolated"
+    }
   },
   "steps": {
     "developer": {
@@ -20,8 +23,12 @@
       },
       "prompt": "./prompts/developer.md",
       "on_success": [
-        { "step": "reviewer" },
-        { "step": "test" }
+        {
+          "step": "reviewer"
+        },
+        {
+          "step": "test"
+        }
       ],
       "outputs": {
         "summary": {
@@ -34,7 +41,9 @@
       "name": "Reviewer Agent",
       "description": "Review code changes for correctness, style, and design.",
       "interactive": false,
-      "worktree": { "mode": "fork" },
+      "worktree": {
+        "mode": "fork"
+      },
       "runtime": {
         "type": "claude-code",
         "model": "sonnet",
@@ -42,7 +51,9 @@
       },
       "prompt": "./prompts/reviewer.md",
       "on_success": [
-        { "step": "pr-create" }
+        {
+          "step": "pr-create"
+        }
       ],
       "on_failure": [
         {
@@ -66,15 +77,21 @@
       "name": "Test Runner",
       "description": "Run the project's test suite.",
       "interactive": false,
-      "worktree": { "mode": "fork" },
+      "worktree": {
+        "mode": "fork"
+      },
       "runtime": {
         "type": "shell",
         "command": "npm",
-        "args": ["test"]
+        "args": [
+          "test"
+        ]
       },
       "timeout": 300,
       "on_success": [
-        { "step": "pr-create" }
+        {
+          "step": "pr-create"
+        }
       ],
       "on_failure": [
         {
@@ -93,14 +110,22 @@
       "name": "PR Creator",
       "description": "Push the branch and create a pull request with an AI-generated title and summary.",
       "interactive": false,
-      "join": ["reviewer", "test"],
+      "join": [
+        "reviewer",
+        "test"
+      ],
       "runtime": {
         "type": "pr-creator",
         "model": "sonnet"
       },
-      "retry": { "attempts": 3, "backoff_seconds": 5 },
+      "retry": {
+        "attempts": 3,
+        "backoff_seconds": 5
+      },
       "on_success": [
-        { "step": "pr-watch" }
+        {
+          "step": "pr-watch"
+        }
       ],
       "outputs": {
         "pr_url": {
@@ -118,12 +143,14 @@
         "poll_interval": 30
       },
       "on_success": [
-        { "step": "git-pull" }
+        {
+          "step": "git-pull"
+        }
       ],
       "on_failure": [
         {
           "step": "developer",
-          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr-watch.output.feedback}. Fix the issue with one or more new commits (rebasing onto origin/main is fine if there's a conflict). Do not push — downstream steps (test, reviewer, pr-creator) will re-run and pr-creator will update the existing PR."
+          "message": "The PR needs attention. GitHub feedback:\n\n${steps.pr-watch.output.feedback}. Fix the issue with one or more new commits (rebasing onto origin/main is fine if there's a conflict). Do not push \u2014 downstream steps (test, reviewer, pr-creator) will re-run and pr-creator will update the existing PR."
         }
       ],
       "outputs": {
@@ -141,11 +168,18 @@
       "name": "Update local repo",
       "description": "Pull latest changes into the user's working tree after PR merge.",
       "interactive": false,
-      "worktree": { "mode": "shared" },
+      "worktree": {
+        "mode": "shared"
+      },
       "runtime": {
         "type": "shell",
         "command": "git",
-        "args": ["pull", "--ff-only", "${config.git.pull_remote}", "${config.git.base}"]
+        "args": [
+          "pull",
+          "--ff-only",
+          "${config.git.pull_remote}",
+          "${config.git.base}"
+        ]
       }
     }
   }

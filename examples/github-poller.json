@@ -2,6 +2,7 @@
   "version": "1",
   "name": "github-poller",
   "description": "Poll GitHub for new issues labeled 'ready-for-sparkflow' and dispatch feature-development for each.",
+  "kind": "monitor",
   "entry": "poll",
   "steps": {
     "poll": {
@@ -11,7 +12,9 @@
       "runtime": {
         "type": "shell",
         "command": "node",
-        "args": ["./scripts/github-poller.mjs"]
+        "args": [
+          "./scripts/github-poller.mjs"
+        ]
       },
       "outputs": {
         "items": {
@@ -20,7 +23,9 @@
         }
       },
       "on_success": [
-        { "step": "dispatch" }
+        {
+          "step": "dispatch"
+        }
       ]
     },
     "dispatch": {
@@ -30,13 +35,17 @@
       "runtime": {
         "type": "shell",
         "command": "node",
-        "args": ["./scripts/github-poller-dispatch.mjs"]
+        "args": [
+          "./scripts/github-poller-dispatch.mjs"
+        ]
       },
       "env": {
         "SPARKFLOW_POLLED_ITEMS": "${steps.poll.output.items}"
       },
       "on_success": [
-        { "step": "sleep" }
+        {
+          "step": "sleep"
+        }
       ]
     },
     "sleep": {
@@ -46,10 +55,14 @@
       "runtime": {
         "type": "shell",
         "command": "sleep",
-        "args": ["60"]
+        "args": [
+          "60"
+        ]
       },
       "on_success": [
-        { "step": "poll" }
+        {
+          "step": "poll"
+        }
       ]
     }
   }

@@ -13,9 +13,19 @@ const REPO_ROOT = resolve(__dirname, "../..");
 const KILL_BIN = join(REPO_ROOT, "dist/src/cli/kill-bin.js");
 
 // When tests run in a fork worktree (e.g. the sparkflow test step), dist/ is
-// absent because it is gitignored. Build on demand so the binary tests always run.
+// absent because it is gitignored. Install deps and build on demand so the
+// binary tests always run even after new dependencies are added.
 beforeAll(() => {
   if (!existsSync(KILL_BIN)) {
+    const install = spawnSync("npm", ["install"], {
+      cwd: REPO_ROOT,
+      stdio: "pipe",
+      encoding: "utf-8",
+      shell: true,
+    });
+    if (install.status !== 0) {
+      throw new Error(`Pre-test npm install failed:\n${install.stderr}\n${install.stdout}`);
+    }
     const result = spawnSync("npm", ["run", "build"], {
       cwd: REPO_ROOT,
       stdio: "pipe",
@@ -26,7 +36,7 @@ beforeAll(() => {
       throw new Error(`Pre-test build failed:\n${result.stderr}\n${result.stdout}`);
     }
   }
-}, 60000);
+}, 120000);
 
 function spawnLongLived(ignoreSigterm = false): ChildProcess {
   const code = ignoreSigterm

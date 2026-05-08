@@ -123,9 +123,10 @@ test("WS /chat with valid token receives the ring buffer (SF_TEST_READY)", async
 test("WS /chat round-trips bytes through the PTY (echo)", async () => {
   const ws = await openWs({ query: server.token });
   try {
-    // Drain the initial ring buffer.
-    await nextMessage(ws, (m) => m.type === "data" && typeof m.bytes === "string");
-
+    // Send before waiting for any ring-buffer flush so the ping is in flight
+    // regardless of whether the ring buffer happens to be non-empty at connect
+    // time. The predicate below skips any SF_TEST_READY data and only resolves
+    // on the fake-chat echo prefix.
     const payload = "ping\r";
     ws.send(JSON.stringify({ type: "data", bytes: Buffer.from(payload, "utf-8").toString("base64") }));
 

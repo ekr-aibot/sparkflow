@@ -23,8 +23,8 @@
     },
     "kind": {
       "type": "string",
-      "enum": ["main", "monitor"],
-      "description": "Workflow role. 'main' marks a development workflow eligible to be the project default in sparkflow init. 'monitor' marks a background watcher. Omit if neither category applies."
+      "enum": ["main", "monitor", "helper"],
+      "description": "Workflow role. 'main' marks a development workflow eligible to be the project default in sparkflow init. 'monitor' marks a background watcher. 'helper' marks an on-demand or sub-workflow that is neither a project default candidate nor a background monitor. Omit if neither category applies."
     },
     "entry": {
       "type": "string",

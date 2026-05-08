@@ -2,7 +2,7 @@
   "version": "1",
   "name": "stall-survey",
   "description": "On-demand triage of blocked tasks in ROADMAP.md. Scans for [!]-tagged items and walks the user through each one interactively.",
-  "kind": "main",
+  "kind": "helper",
   "entry": "scan",
   "defaults": {
     "worktree": {

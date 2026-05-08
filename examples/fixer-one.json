@@ -2,6 +2,7 @@
   "version": "1",
   "name": "fixer-one",
   "description": "Triage a single failed job: analyze the log, then act on the decision.",
+  "kind": "helper",
   "entry": "analyze",
   "defaults": { "worktree": { "mode": "shared" } },
   "steps": {

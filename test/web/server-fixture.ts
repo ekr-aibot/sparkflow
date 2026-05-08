@@ -20,20 +20,39 @@ export interface WebServerHandle {
 const READY_RE = /ready at (http:\/\/127\.0\.0\.1:(\d+)\/\?token=([0-9a-f]+))/;
 
 async function waitForEngine(port: number, token: string, timeoutMs = 15_000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const headers = { Cookie: `sf_token=${token}` };
+
+  // Phase 1: wait for the engine to appear in /repos.
+  let repoId: string | undefined;
+  while (Date.now() < deadline) {
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/repos`, {
-        headers: { Cookie: `sf_token=${token}` },
-      });
+      const r = await fetch(`http://127.0.0.1:${port}/repos`, { headers });
       if (r.ok) {
-        const body = await r.json() as { repos: unknown[] };
-        if (body.repos.length > 0) return;
+        const body = await r.json() as { repos: Array<{ repoId: string }> };
+        if (body.repos.length > 0) { repoId = body.repos[0].repoId; break; }
       }
     } catch { /* not ready yet */ }
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error("Timed out waiting for engine daemon to attach");
+  if (!repoId) throw new Error("Timed out waiting for engine daemon to attach");
+
+  // Phase 2: wait for the PTY bridge to establish and populate the chat list.
+  // The /repos/:id/chats endpoint returns 404 until the PTY bridge unix socket
+  // is connected and chat_list has been processed, so polling it here ensures
+  // WS connections will find a valid chat entry rather than getting 1011/1008.
+  const chatsUrl = `http://127.0.0.1:${port}/repos/${encodeURIComponent(repoId)}/chats`;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(chatsUrl, { headers });
+      if (r.ok) {
+        const body = await r.json() as unknown[];
+        if (Array.isArray(body) && body.length > 0) return;
+      }
+    } catch { /* not ready yet */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("Timed out waiting for PTY bridge to attach");
 }
 
 /** Spawns `sparkflow --web` with fake-chat as the chat command and waits for the ready banner. */

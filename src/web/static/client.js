@@ -217,6 +217,14 @@ function b64decode(b64) { return decodeURIComponent(escape(atob(b64))); }
 const chatTerminals = new Map(); // tabId → { term, fit, ws, retryDelay, suppress }
 let wsRepoId = null;
 
+// lightbox for paste-thumb clicks
+const lightboxEl = document.getElementById("image-lightbox");
+const lightboxImg = lightboxEl.querySelector(".image-lightbox-img");
+lightboxEl.querySelector(".image-lightbox-backdrop").addEventListener("click", closeLightbox);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !lightboxEl.hidden) closeLightbox(); });
+function openLightbox(src) { lightboxImg.src = src; lightboxEl.hidden = false; }
+function closeLightbox() { lightboxEl.hidden = true; lightboxImg.src = ""; }
+
 // paste-strip: per-tab thumbnail state
 const pasteStrips = new Map(); // tabId → { el: HTMLElement, relpaths: Set<string> }
 
@@ -226,6 +234,15 @@ function setupPasteStrip(tabId, paneEl) {
   strip.dataset.tabId = tabId;
   paneEl.appendChild(strip);
   pasteStrips.set(tabId, { el: strip, relpaths: new Set() });
+}
+
+function fitChatTab(tabId) {
+  const entry = chatTerminals.get(tabId);
+  if (!entry) return;
+  requestAnimationFrame(() => {
+    try { entry.fit.fit(); } catch { /* ignore */ }
+    sendResizeForTab(tabId);
+  });
 }
 
 function addPasteThumb(tabId, relpath) {
@@ -244,7 +261,7 @@ function addPasteThumb(tabId, relpath) {
   const img = document.createElement("img");
   img.src = imgUrl;
   img.alt = "pasted image";
-  img.addEventListener("click", () => window.open(imgUrl, "_blank"));
+  img.addEventListener("click", () => openLightbox(imgUrl));
   card.appendChild(img);
 
   const dismiss = document.createElement("button");
@@ -256,22 +273,32 @@ function addPasteThumb(tabId, relpath) {
     ev.stopPropagation();
     card.remove();
     entry.relpaths.delete(relpath);
-    if (entry.relpaths.size === 0) entry.el.classList.remove("visible");
+    if (entry.relpaths.size === 0) {
+      entry.el.classList.remove("visible");
+      fitChatTab(tabId);
+    }
   });
   card.appendChild(dismiss);
 
+  const wasVisible = entry.el.classList.contains("visible");
   entry.el.appendChild(card);
   entry.el.classList.add("visible");
+  if (!wasVisible) fitChatTab(tabId);
 }
 
 function clearPasteStrip(tabId) {
   const entry = pasteStrips.get(tabId);
   if (!entry) return;
+  const wasVisible = entry.el.classList.contains("visible");
   entry.el.replaceChildren();
   entry.relpaths.clear();
   entry.el.classList.remove("visible");
+  if (wasVisible) fitChatTab(tabId);
 }
 
+const mainChatBody = document.createElement("div");
+mainChatBody.className = "chat-body";
+els.chat.appendChild(mainChatBody);
 const mainTerm = new Terminal({
   fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
   fontSize: 13,
@@ -282,7 +309,7 @@ const mainTerm = new Terminal({
 });
 const mainFit = new FitAddon();
 mainTerm.loadAddon(mainFit);
-mainTerm.open(els.chat);
+mainTerm.open(mainChatBody);
 mainFit.fit();
 chatTerminals.set("chat", { term: mainTerm, fit: mainFit, ws: null, retryDelay: 250, suppress: false });
 mainTerm.onData((data) => sendBytesForTab("chat", data));
@@ -382,6 +409,9 @@ function sideChatLabel(chatId) {
 }
 
 function makeChatTerminal(paneEl) {
+  const body = document.createElement("div");
+  body.className = "chat-body";
+  paneEl.appendChild(body);
   const term = new Terminal({
     fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
     fontSize: 13,
@@ -392,7 +422,7 @@ function makeChatTerminal(paneEl) {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  term.open(paneEl);
+  term.open(body);
   return { term, fit };
 }
 

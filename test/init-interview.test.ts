@@ -371,9 +371,10 @@ describe("runInitInterview", () => {
     expect(names).toContain("user-only (user)");
   });
 
-  it("only kind:main workflows appear in the default select; monitor workflows do not", async () => {
+  it("only kind:main workflows appear in the default select; monitor and helper workflows do not", async () => {
     writeUserWorkflow(home, "feature-dev", "main");
     writeUserWorkflow(home, "github-poller", "monitor");
+    writeUserWorkflow(home, "fixer-one", "helper");
 
     vi.mocked(select).mockResolvedValueOnce("feature-dev");
     vi.mocked(checkbox).mockResolvedValueOnce([]);
@@ -390,6 +391,7 @@ describe("runInitInterview", () => {
     const defaultChoiceNames = selectCall.choices.map((c) => c.name);
     expect(defaultChoiceNames).toContain("feature-dev (user)");
     expect(defaultChoiceNames).not.toContain("github-poller (user)");
+    expect(defaultChoiceNames).not.toContain("fixer-one (user)");
 
     // But github-poller should still appear in the monitors checkbox
     const checkboxCall = vi.mocked(checkbox).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };

@@ -365,6 +365,12 @@ describe("validate", () => {
       expect(result.valid).toBe(true);
     });
 
+    it("accepts kind:helper", () => {
+      const result = validate(minimal({ kind: "helper" }));
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    });
+
     it("accepts step without runtime when defaults.runtime is set", () => {
       const result = validate({
         version: "1",

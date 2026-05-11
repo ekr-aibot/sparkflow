@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { JobManager } from "../../src/tui/job-manager.js";
 import { StateStore } from "../../src/tui/state-store.js";
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 
 // Helper to wait for job manager updates
@@ -610,5 +610,67 @@ describe("JobManager restartJob dead-child regression", () => {
       ),
     ]);
     // reaching here without rejection means it resolved promptly
+  });
+});
+
+describe("JobManager autoStartMonitors kind filter", () => {
+  let manager: JobManager;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-test-autostart-"));
+    manager = new JobManager(tmpDir);
+  });
+
+  afterEach(() => {
+    manager.killAll();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  function writeConfig(monitors: string[]) {
+    const cfgDir = join(tmpDir, ".sparkflow");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, "config.json"), JSON.stringify({ monitors }));
+  }
+
+  function writeWorkflowFile(path: string, kind: string) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: "1", kind }));
+  }
+
+  it("starts a kind:monitor workflow listed in config.monitors", () => {
+    const monitorPath = join(tmpDir, "workflows", "monitor-wf.json");
+    writeWorkflowFile(monitorPath, "monitor");
+    writeConfig([monitorPath]);
+
+    manager.autoStartMonitors();
+
+    expect(manager.getJobs()).toHaveLength(1);
+    expect(manager.getJobs()[0].workflowPath).toBe(monitorPath);
+    expect(manager.getJobs()[0].kind).toBe("monitor");
+  });
+
+  it("skips a kind:helper workflow listed in config.monitors", () => {
+    const helperPath = join(tmpDir, "workflows", "helper-wf.json");
+    writeWorkflowFile(helperPath, "helper");
+    writeConfig([helperPath]);
+
+    manager.autoStartMonitors();
+
+    expect(manager.getJobs()).toHaveLength(0);
+  });
+
+  it("starts monitors and skips helpers when both are listed", () => {
+    const monitorPath = join(tmpDir, "workflows", "monitor-wf.json");
+    const helperPath = join(tmpDir, "workflows", "helper-wf.json");
+    writeWorkflowFile(monitorPath, "monitor");
+    writeWorkflowFile(helperPath, "helper");
+    writeConfig([monitorPath, helperPath]);
+
+    manager.autoStartMonitors();
+
+    const jobs = manager.getJobs();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].workflowPath).toBe(monitorPath);
   });
 });

@@ -2,22 +2,24 @@
 set -euo pipefail
 
 decision="${SPARKFLOW_FIXER_DECISION:?SPARKFLOW_FIXER_DECISION is required}"
-job_id="${SPARKFLOW_INPUT_JOB_ID:?SPARKFLOW_INPUT_JOB_ID is required}"
-
-# Mark this job as handled before branching so no re-fire occurs on any path.
-mkdir -p .sparkflow/state/handled-by-fixer
-touch ".sparkflow/state/handled-by-fixer/$job_id"
+job_id="${SPARKFLOW_INPUT_JOB_ID:-}"
 
 action=$(jq -r '.action' <<<"$decision")
 
 case "$action" in
   redispatch)
+    if [[ -z "$job_id" ]]; then
+      echo "[fixer] SPARKFLOW_INPUT_JOB_ID is required for redispatch" >&2
+      exit 1
+    fi
     workflow_path=$(jq -r '.workflow_path // empty' <<<"$decision")
     plan_text=$(jq -r '.plan_text // empty' <<<"$decision")
     if [[ -z "$workflow_path" ]]; then
       echo "[fixer] redispatch missing workflow_path" >&2
       exit 1
     fi
+    mkdir -p .sparkflow/state/handled-by-fixer
+    touch ".sparkflow/state/handled-by-fixer/$job_id"
     mkdir -p .sparkflow/dispatch-queue
     req_file=".sparkflow/dispatch-queue/$(date +%s%N)-${job_id}.json"
     tmp_file="${req_file}.tmp"
@@ -31,6 +33,10 @@ case "$action" in
     ;;
 
   file-issue)
+    if [[ -z "$job_id" ]]; then
+      echo "[fixer] SPARKFLOW_INPUT_JOB_ID is required for file-issue" >&2
+      exit 1
+    fi
     title=$(jq -r '.issue_title' <<<"$decision")
     body=$(jq -r '.issue_body' <<<"$decision")
     echo "[fixer] filing issue: $title" >&2
@@ -39,11 +45,19 @@ case "$action" in
       --title "$title" \
       --body "$body" \
       --label needs-triage
+    mkdir -p .sparkflow/state/handled-by-fixer
+    touch ".sparkflow/state/handled-by-fixer/$job_id"
     ;;
 
   alert-user)
     msg=$(jq -r '.user_message' <<<"$decision")
-    echo "[fixer] ALERT for job $job_id: $msg" >&2
+    if [[ -n "$job_id" ]]; then
+      echo "[fixer] ALERT for job $job_id: $msg" >&2
+      mkdir -p .sparkflow/state/handled-by-fixer
+      touch ".sparkflow/state/handled-by-fixer/$job_id"
+    else
+      echo "[fixer] ALERT: $msg" >&2
+    fi
     exit 0
     ;;
 

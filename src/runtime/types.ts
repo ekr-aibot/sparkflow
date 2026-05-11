@@ -37,6 +37,8 @@ export interface RuntimeContext {
   prompt?: string;
   transitionMessage?: string;
   cwd: string;
+  /** Repo root path. When set and differs from cwd, the agent is running in an isolated worktree. */
+  repoRoot?: string;
   env: Record<string, string>;
   interactive: boolean;
   timeout?: number;

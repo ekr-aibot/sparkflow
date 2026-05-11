@@ -121,6 +121,13 @@ Interactive CLI interview that runs before the dashboard launches when `.sparkfl
 ### Worktree Manager (`src/engine/worktree.ts`)
 Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout. Auto-generated branch names for `isolated` mode include a random 8-hex suffix (`sparkflow/<stepId>-<runId>-<rand>`) so that retrying a failed step in the same run creates a fresh branch rather than colliding with the previous attempt's branch (which persists after `git worktree remove`).
 
+### Worktree Confinement Guardrails
+Two complementary mechanisms prevent agents from accidentally committing to the parent repo instead of their isolated worktree:
+
+**Preventive (soft reminder):** The `claude-code` adapter prepends a system reminder to the agent's prompt whenever `ctx.cwd !== ctx.repoRoot`. The reminder tells the agent to stay inside the worktree and avoid absolute parent-repo paths or `git -C` targeting the parent.
+
+**Detective (escape detection):** The engine captures the parent repo's HEAD SHA before spawning any worktree step, then re-checks it after the step finishes. If the parent HEAD moved but the worktree received no new commits, the step is failed with a descriptive error naming the runaway SHA. This catches both direct `cd` escapes and indirect `git -C` escapes.
+
 ## Data Flow
 
 ```

@@ -572,6 +572,24 @@ export class WorkflowEngine {
       status.nudgeQueue = nudgeQueue;
     }
 
+    // Capture HEAD SHAs before the step runs, for worktree escape detection.
+    // Only applies when the step runs in a worktree (cwd differs from the repo root).
+    const isWorktreeStep = cwd !== this.cwd;
+    let parentHeadBefore: string | undefined;
+    let worktreeHeadBefore: string | undefined;
+    if (isWorktreeStep) {
+      try {
+        parentHeadBefore = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: this.cwd, stdio: "pipe",
+        }).toString().trim();
+        worktreeHeadBefore = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd, stdio: "pipe",
+        }).toString().trim();
+      } catch {
+        // git unavailable or not a repo — skip escape detection
+      }
+    }
+
     const ctx: RuntimeContext = {
       stepId,
       step,
@@ -579,6 +597,7 @@ export class WorkflowEngine {
       prompt,
       transitionMessage,
       cwd,
+      repoRoot: this.cwd,
       env,
       git: this.config?.git,
       projectConfig: this.config,
@@ -608,7 +627,17 @@ export class WorkflowEngine {
 
     // Execute
     try {
-      const result = await adapter.run(ctx);
+      let result = await adapter.run(ctx);
+
+      // Worktree escape detection: if the parent repo's HEAD moved during this step
+      // but the worktree received no new commits, the agent bypassed the worktree.
+      if (isWorktreeStep && parentHeadBefore !== undefined && worktreeHeadBefore !== undefined) {
+        const escapeMsg = this.detectWorktreeEscape(stepId, cwd, parentHeadBefore, worktreeHeadBefore);
+        if (escapeMsg) {
+          this.logger.error(`[${stepId}] worktree escape detected: ${escapeMsg}`);
+          result = { success: false, outputs: result.outputs, error: escapeMsg };
+        }
+      }
 
       // Remember the session id whether the step succeeded or failed —
       // recovery-retry needs it on failure, and future on_failure loops
@@ -869,6 +898,52 @@ export class WorkflowEngine {
       await new Promise((r) => setTimeout(r, backoff * 1000));
     }
     return true;
+  }
+
+  /**
+   * Checks whether a commit landed on the parent repo (this.cwd) during a step
+   * that was supposed to run in an isolated worktree. Returns an error message if
+   * an escape is detected, or null if everything looks clean.
+   */
+  private detectWorktreeEscape(
+    stepId: string,
+    worktreeCwd: string,
+    parentHeadBefore: string,
+    worktreeHeadBefore: string,
+  ): string | null {
+    try {
+      const parentHeadAfter = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: this.cwd, stdio: "pipe",
+      }).toString().trim();
+      if (parentHeadAfter === parentHeadBefore) return null;
+
+      const worktreeHeadAfter = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: worktreeCwd, stdio: "pipe",
+      }).toString().trim();
+      if (worktreeHeadAfter !== worktreeHeadBefore) return null;
+
+      let parentBranch = "unknown";
+      let worktreeBranch = "unknown";
+      try {
+        parentBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+          cwd: this.cwd, stdio: "pipe",
+        }).toString().trim();
+      } catch { /* ignore */ }
+      try {
+        worktreeBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+          cwd: worktreeCwd, stdio: "pipe",
+        }).toString().trim();
+      } catch { /* ignore */ }
+
+      return (
+        `Step "${stepId}" was supposed to run in worktree \`${worktreeCwd}\`, ` +
+        `but a commit landed on the parent repo's \`${parentBranch}\` (SHA \`${parentHeadAfter}\`). ` +
+        `The worktree branch \`${worktreeBranch}\` has no new commits. ` +
+        `The agent escaped the worktree — see the system reminder injected at step start.`
+      );
+    } catch {
+      return null;
+    }
   }
 
   private resolveRuntime(step: Step): Runtime {

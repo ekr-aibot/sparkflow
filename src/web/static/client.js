@@ -432,7 +432,7 @@ function switchChatToRepo(repoId) {
   if (!repoId || repoId === wsRepoId) return;
   closeChatWs("chat");
   const entry = chatTerminals.get("chat");
-  if (entry) { entry.retryDelay = 250; entry.term.reset(); entry.needsRefresh = true; }
+  if (entry) { entry.retryDelay = 250; entry.term.reset(); entry.term.write("\x0c"); entry.needsRefresh = true; }
   connectChat(repoId);
 }
 

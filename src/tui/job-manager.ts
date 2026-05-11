@@ -580,6 +580,21 @@ export class JobManager {
         console.error(`[sparkflow] auto-start monitor "${monitor}": ${(err as Error).message}`);
         continue;
       }
+      // Only auto-start workflows declared as kind:"monitor". Helpers are
+      // invocation-only — auto-starting them without inputs breaks their
+      // required env vars and causes confusing crashes.
+      try {
+        const wf = JSON.parse(readFileSync(resolvedPath, "utf-8")) as { kind?: unknown };
+        if (wf.kind !== "monitor") {
+          console.error(
+            `[sparkflow] auto-start skipped "${monitor}": kind is "${String(wf.kind ?? "")}", not "monitor"`,
+          );
+          continue;
+        }
+      } catch (err) {
+        console.error(`[sparkflow] auto-start monitor "${monitor}": could not read workflow: ${(err as Error).message}`);
+        continue;
+      }
       if (activeWorkflowPaths.has(resolvedPath)) continue;
       this.startJob(resolvedPath, { kind: "monitor" });
     }

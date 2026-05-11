@@ -116,7 +116,7 @@ Interactive CLI interview that runs before the dashboard launches when `.sparkfl
 - `sparkflow init` subcommand: detected before `parseArgs`; runs the interview with the existing merged config as defaults, writes the result, exits 0.
 - Auto-trigger: checked after `parseArgs`; if `shouldAutoTrigger` is true, runs the interview with `existing = null` and writes the result before proceeding to the normal dashboard launch.
 
-**Workflow listing:** Concatenates `.sparkflow/workflows/` (project) and `~/.sparkflow/flows/` (user) with project shadowing user on name conflicts. Aborts with an error if both are empty. The default-workflow select only shows workflows with `"kind": "main"` in their JSON; all workflows appear in the monitors checkbox regardless of kind.
+**Workflow listing:** Concatenates `.sparkflow/workflows/` (project) and `~/.sparkflow/flows/` (user) with project shadowing user on name conflicts. Aborts with an error if both are empty. The default-workflow select only shows workflows with `"kind": "main"` in their JSON; the monitors checkbox only shows workflows with `"kind": "monitor"`. Workflows with `"kind": "helper"` are excluded from both — they are invocation-only and must not be auto-started without inputs.
 
 ### Worktree Manager (`src/engine/worktree.ts`)
 Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout.

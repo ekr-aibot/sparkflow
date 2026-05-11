@@ -10,6 +10,14 @@ The following environment variables identify the failed job:
 - `SPARKFLOW_INPUT_WORKFLOW_PATH` — absolute path to the workflow JSON file
 - `SPARKFLOW_INPUT_SLUG` — optional short label for the job
 
+## Guard: missing inputs
+
+Before doing anything else, check whether `SPARKFLOW_INPUT_JOB_ID` is set (use the Bash tool: `echo "${SPARKFLOW_INPUT_JOB_ID:-}"` and check if the output is empty). If it is empty, this is an upstream dispatch bug — fixer-one was started without the required inputs. Do not attempt to read any log file. Return **immediately** with:
+
+```json
+{"decision": {"action": "alert-user", "user_message": "fixer-one invoked without inputs — check what is launching it (upstream dispatch bug)"}}
+```
+
 ## Your task
 
 1. Read the log file at `$SPARKFLOW_INPUT_LOG_PATH` (use the Bash tool: `tail -200 "$SPARKFLOW_INPUT_LOG_PATH"`).

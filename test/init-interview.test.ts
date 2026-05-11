@@ -393,10 +393,11 @@ describe("runInitInterview", () => {
     expect(defaultChoiceNames).not.toContain("github-poller (user)");
     expect(defaultChoiceNames).not.toContain("fixer-one (user)");
 
-    // But github-poller should still appear in the monitors checkbox
+    // github-poller (kind:monitor) appears in the monitors checkbox; fixer-one (kind:helper) does not
     const checkboxCall = vi.mocked(checkbox).mock.calls[0][0] as unknown as { choices: Array<{ name: string; value: string }> };
     const monitorChoiceNames = checkboxCall.choices.map((c) => c.name);
     expect(monitorChoiceNames).toContain("github-poller (user)");
+    expect(monitorChoiceNames).not.toContain("fixer-one (user)");
   });
 
   it("existing defaultWorkflow that no longer resolves falls back to NONE seed", async () => {

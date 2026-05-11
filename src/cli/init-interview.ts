@@ -88,15 +88,22 @@ export async function runInitInterview(opts: {
     );
   }
 
-  // All workflows (for monitors select)
-  const allChoices = [
-    ...projectWorkflows.map((n) => ({ name: `${n} (project)`, value: n })),
-    ...dedupedUser.map((n) => ({ name: `${n} (user)`, value: n })),
-  ];
-
   // Only kind:"main" workflows are eligible as the project default.
   const projectDir = join(cwd, PROJECT_WORKFLOWS_DIR);
   const userDir = join(userConfigDir(), USER_FLOWS_DIR);
+
+  // Only kind:"monitor" workflows are eligible as monitors on launch.
+  // Helpers must be invoked explicitly — auto-starting them without inputs breaks
+  // required env vars.
+  const monitorKindChoices = [
+    ...projectWorkflows
+      .filter((n) => readWorkflowKind(projectDir, n) === "monitor")
+      .map((n) => ({ name: `${n} (project)`, value: n })),
+    ...dedupedUser
+      .filter((n) => readWorkflowKind(userDir, n) === "monitor")
+      .map((n) => ({ name: `${n} (user)`, value: n })),
+  ];
+
   const mainChoices = [
     ...projectWorkflows
       .filter((n) => readWorkflowKind(projectDir, n) === "main")
@@ -123,8 +130,8 @@ export async function runInitInterview(opts: {
       default: defaultWorkflowSeed,
     });
 
-    // 2. Monitors (all workflows minus the chosen default)
-    const monitorChoices = allChoices.filter((c) => c.value !== selectedDefault);
+    // 2. Monitors (only kind:"monitor" workflows, minus the chosen default)
+    const monitorChoices = monitorKindChoices.filter((c) => c.value !== selectedDefault);
     const existingMonitors = (existing?.monitors ?? []).filter((m) =>
       monitorChoices.some((c) => c.value === m),
     );

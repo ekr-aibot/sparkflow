@@ -23,6 +23,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { IpcServer } from "../mcp/ipc.js";
 import { JobManager } from "../tui/job-manager.js";
 import { handleIpcRequest } from "../tui/ipc-handler.js";
+import { buildAutoDevelopResponse } from "./auto-develop-view.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -231,7 +232,7 @@ function serveFile(res: ServerResponse, absPath: string): void {
   }
 }
 
-const APP_FILES = new Set(["index.html", "client.js", "style.css"]);
+const APP_FILES = new Set(["index.html", "client.js", "style.css", "auto-develop-widget.js", "auto-develop-widget.css"]);
 const VENDOR_FILES: Record<string, string> = {
   "xterm.css": join(NODE_MODULES, "@xterm", "xterm", "css", "xterm.css"),
   "xterm.mjs": join(NODE_MODULES, "@xterm", "xterm", "lib", "xterm.mjs"),
@@ -497,6 +498,27 @@ async function main(): Promise<void> {
     if (pathname === "/api/chat/summary" && req.method === "GET") {
       const text = stripAnsi(ring.toString("utf-8"));
       return sendJson(res, 200, { summary: text });
+    }
+
+    if (pathname === "/api/auto-develop" && req.method === "GET") {
+      return sendJson(res, 200, buildAutoDevelopResponse(args.cwd));
+    }
+
+    if (pathname === "/api/roadmap-raw" && req.method === "GET") {
+      try {
+        const content = readFileSync(join(args.cwd, "ROADMAP.md"), "utf-8");
+        const buf = Buffer.from(content, "utf-8");
+        res.writeHead(200, {
+          "content-type": "text/markdown; charset=utf-8",
+          "content-length": buf.byteLength,
+          "cache-control": "no-store",
+        });
+        res.end(buf);
+      } catch {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("ROADMAP.md not found");
+      }
+      return;
     }
 
     res.writeHead(404, { "content-type": "text/plain" });

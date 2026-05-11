@@ -5,18 +5,8 @@ if [[ "${1:-}" != "rebase" ]]; then
   exit 0
 fi
 
-# stdin: lines of "<old-sha> <new-sha>"; collect the oldest old and newest new.
-OLDEST_OLD=""
-NEWEST_NEW=""
-while read -r old new _rest; do
-  [[ -z "$OLDEST_OLD" ]] && OLDEST_OLD="$old"
-  NEWEST_NEW="$new"
-done
-
-if [[ -z "$OLDEST_OLD" || -z "$NEWEST_NEW" ]]; then
-  exit 0
-fi
-
-export SPARKFLOW_DIFF_OLD="$OLDEST_OLD"
-export SPARKFLOW_DIFF_NEW="$NEWEST_NEW"
+# ORIG_HEAD is the branch tip before the rebase, covering both upstream
+# changes and local replays — the same pattern post-merge uses.
+export SPARKFLOW_DIFF_OLD="${ORIG_HEAD:-}"
+export SPARKFLOW_DIFF_NEW="$(git rev-parse HEAD)"
 exec "$(dirname "$0")/_run-build.sh"

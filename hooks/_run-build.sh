@@ -59,14 +59,20 @@ fi
 # ── Lockfile ──────────────────────────────────────────────────────────────────
 LOCK="$HOOKS_DIR/.build.lock"
 if ! (set -C; echo $$ > "$LOCK") 2>/dev/null; then
-  echo "[sparkflow] another build in progress; skipping" >&2
-  exit 0
+  existing_pid=$(cat "$LOCK" 2>/dev/null || echo "")
+  if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+    echo "[sparkflow] another build in progress; skipping" >&2
+    exit 0
+  fi
+  # Stale lock (process gone) — remove and re-acquire.
+  rm -f "$LOCK"
+  (set -C; echo $$ > "$LOCK") 2>/dev/null || { echo "[sparkflow] could not acquire build lock" >&2; exit 0; }
 fi
 trap 'rm -f "$LOCK"' EXIT
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
-if npm run build >&2 2>&1; then
+if npm run build >&2; then
   echo "[sparkflow] rebuilt dist/" >&2
 else
   echo "" >&2

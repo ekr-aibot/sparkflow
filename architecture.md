@@ -128,6 +128,46 @@ Two complementary mechanisms prevent agents from accidentally committing to the 
 
 **Detective (escape detection):** The engine captures the parent repo's HEAD SHA before spawning any worktree step, then re-checks it after the step finishes. If the parent HEAD moved but the worktree received no new commits, the step is failed with a descriptive error naming the runaway SHA. This catches both direct `cd` escapes and indirect `git -C` escapes.
 
+## Process Architecture & Hot-Reload Semantics
+
+Sparkflow runs as three distinct Node process layers. Knowing which layer holds which code is essential for understanding what does and does not pick up a new `dist/` after `npm run build`.
+
+```
+sparkflow (TUI / src/tui/index.ts)        — foreground, long-running
+  └─ engine-daemon (dist/src/dashboard/engine-daemon.js)   — per-project, long-running
+       └─ sparkflow-run (dist/src/cli/index.js)            — per-job, short-lived
+```
+
+The TUI spawns one engine-daemon per project (`src/tui/index.ts` ≈ line 521). The engine-daemon imports `JobManager` from `src/tui/job-manager.ts`, which for each dispatch calls `spawn(process.execPath, [SPARKFLOW_RUN_PATH, …], { detached: true })` (`src/tui/job-manager.ts` ≈ line 193). Each `sparkflow-run` child is a fresh Node process that loads `dist/src/cli/index.js` from disk at spawn time, which in turn loads the workflow engine and all runtime adapters.
+
+### What auto-picks-up new code (no restart needed)
+
+Any module that runs **only inside the `sparkflow-run` subprocess** picks up changes from `dist/` automatically — the next dispatched job spawns a fresh Node process that reads the latest files. As of this writing this includes:
+
+- `src/engine/*` — workflow engine, worktree manager, template interpolation, scheduler.
+- `src/runtime/*` — claude-code adapter, shell, gemini, pr-creator, pr-watcher.
+- `src/schema/*` — workflow JSON validation and types.
+- `src/config/project-config.ts` — (loaded by both `sparkflow-run` and JobManager; new dispatches see new code via the child, the daemon side keeps the old copy until restarted; see below).
+
+Practically: rebuilding `src/engine/worktree.ts` or `src/runtime/claude-code.ts` and dispatching a new job will use the new behavior with no kill/restart. Existing in-flight jobs keep their original code (they're already running in their own processes).
+
+### What requires a daemon (or TUI) restart
+
+Modules loaded **into the engine-daemon process itself** are cached in memory and do not pick up new code until the daemon restarts. As of this writing this includes:
+
+- `src/tui/job-manager.ts` — the spawn logic itself, log paths, env passthrough.
+- `src/tui/ipc-handler.ts`, `src/tui/state-store.ts`, `src/tui/log-tailer.ts`, `src/tui/supervisor.ts`.
+- `src/dashboard/*` — engine-daemon entry, IPC protocol, discovery, frontend bridge, ring buffer.
+- `src/mcp/ipc.ts` — MCP-tool IPC server.
+
+A change to any of the above only takes effect for daemons spawned after the rebuild. Existing engine-daemon processes keep the old behavior.
+
+The TUI process itself (`src/tui/index.ts` and its imports) is loaded once at sparkflow startup and likewise needs a TUI restart to reflect changes.
+
+### Practical implication
+
+For the common change shape — workflow-engine or runtime-adapter fixes — `npm run build` is sufficient; the next dispatched job picks up the new code automatically. Killing the engine-daemon is unnecessary for those changes and was redundant when previously done. Daemon restart is only needed when modifying daemon-side code (job-manager, IPC, dashboard, chat-tool wiring).
+
 ## Data Flow
 
 ```

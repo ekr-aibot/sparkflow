@@ -86,7 +86,7 @@ function transformLogLine(rawLine, verbose) {
   // Format: "HH:MM:SS\x01<rest>" where HH:MM:SS is 8 chars.
   let line = rawLine;
   let tsPrefix = "";
-  if (rawLine.length > 9 && rawLine[8] === TS_SEP) {
+  if (rawLine.length >= 9 && rawLine[8] === TS_SEP) {
     const ts = rawLine.slice(0, 8);
     if (/^\d{2}:\d{2}:\d{2}$/.test(ts)) {
       tsPrefix = `${ANSI_DIM}${ts}${ANSI_RESET} `;
@@ -832,6 +832,7 @@ function openJobTab(jobId) {
     repoId: job?.repoId ?? "",
     rawLines: [],
     lineLength: 0,
+    hasPolled: false,
     verbose: false,
     verboseCheckbox,
     nudgeEl: nudgeDiv,
@@ -942,7 +943,7 @@ async function pollJobLog(jobId) {
   const repoId = view.repoId || jobRepoId(jobId);
   // isInitial: first fetch loads historical lines — don't timestamp those
   // since we don't know when they were originally produced.
-  const isInitial = view.lineLength === 0;
+  const isInitial = !view.hasPolled;
   try {
     const res = await fetch(
       jobActionUrl(repoId, jobId, `log?since=${view.lineLength}`),
@@ -963,6 +964,7 @@ async function pollJobLog(jobId) {
         }
       }
       if (typeof data.length === "number") view.lineLength = data.length;
+      view.hasPolled = true;
       const terminal = data.state === "succeeded" || data.state === "failed";
       const nextDelay = terminal ? 3000 : 750;
       if (!view.stopped) view.pollTimer = setTimeout(() => pollJobLog(jobId), nextDelay);

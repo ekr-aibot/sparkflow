@@ -168,6 +168,12 @@ The TUI process itself (`src/tui/index.ts` and its imports) is loaded once at sp
 
 For the common change shape — workflow-engine or runtime-adapter fixes — `npm run build` is sufficient; the next dispatched job picks up the new code automatically. Killing the engine-daemon is unnecessary for those changes and was redundant when previously done. Daemon restart is only needed when modifying daemon-side code (job-manager, IPC, dashboard, chat-tool wiring).
 
+### Auto-rebuild after `git pull`
+
+`hooks/post-merge` and `hooks/post-rewrite` automatically run `npm run build` whenever a pull or rebase brings in changes under `src/`, `package.json`, `package-lock.json`, or `tsconfig.json`. After a successful build, if any files listed in `hooks/daemon-side-paths.json` were among the changed files, the hook prints a notice to restart sparkflow. `hooks/daemon-side-paths.json` is the canonical list of daemon-side path prefixes (one source of truth for both the notice and the table above).
+
+The hooks become active after `npm install` (which runs `scripts/install-hooks.sh` via the `prepare` script, setting `core.hooksPath=hooks`). Set `SPARKFLOW_SKIP_AUTOBUILD=1` to disable auto-build in environments where it is unwanted (e.g. CI).
+
 ## Data Flow
 
 ```

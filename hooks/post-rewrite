@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fired after `git rebase` (including `git pull --rebase`).
+# Only act for the rebase command, not amend.
+if [[ "${1:-}" != "rebase" ]]; then
+  exit 0
+fi
+
+# ORIG_HEAD is the branch tip before the rebase, covering both upstream
+# changes and local replays — the same pattern post-merge uses.
+export SPARKFLOW_DIFF_OLD="${ORIG_HEAD:-}"
+export SPARKFLOW_DIFF_NEW="$(git rev-parse HEAD)"
+exec "$(dirname "$0")/_run-build.sh"

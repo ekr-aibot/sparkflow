@@ -15,7 +15,8 @@
     "check": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/run/current-system/sw/bin/chromium playwright test",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepare": "bash scripts/install-hooks.sh || true"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

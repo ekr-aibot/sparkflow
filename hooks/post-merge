@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fired by `git pull` (merge/ff path). ORIG_HEAD is the pre-merge tip.
+export SPARKFLOW_DIFF_OLD="${ORIG_HEAD:-}"
+export SPARKFLOW_DIFF_NEW="$(git rev-parse HEAD)"
+exec "$(dirname "$0")/_run-build.sh"

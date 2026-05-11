@@ -382,6 +382,8 @@ function connectChatWs(tabId, repoId, chatId) {
     sendResizeForTab(tabId);
     if (entry.needsRefresh) {
       entry.needsRefresh = false;
+      // Ring-buffer replay doesn't always fully repaint Claude Code's TUI
+      // after a repo switch; ^L (\x0c) tells it to redraw unconditionally.
       sendBytesForTab(tabId, "\x0c");
     }
   };

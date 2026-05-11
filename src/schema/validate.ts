@@ -158,6 +158,24 @@ function semanticValidation(workflow: SparkflowWorkflow): ValidationDiagnostic[]
       }
     }
 
+    // Validate fork_from
+    if (step.worktree?.fork_from !== undefined) {
+      if (step.worktree.mode !== "fork") {
+        diagnostics.push({
+          severity: "error",
+          message: `Step "${id}" has fork_from set but worktree.mode is "${step.worktree.mode}" — fork_from is only valid with mode "fork"`,
+          path: `${base}.worktree.fork_from`,
+        });
+      }
+      if (!stepIds.has(step.worktree.fork_from)) {
+        diagnostics.push({
+          severity: "error",
+          message: `Step "${id}" fork_from references non-existent step "${step.worktree.fork_from}"`,
+          path: `${base}.worktree.fork_from`,
+        });
+      }
+    }
+
     // Validate templates in prompt
     if (step.prompt) {
       validateTemplateRefs(step.prompt, `${base}.prompt`, stepIds, workflow.steps, diagnostics);
@@ -174,6 +192,24 @@ function semanticValidation(workflow: SparkflowWorkflow): ValidationDiagnostic[]
           validateTemplateRefs(value, `${base}.runtime.inputs.${key}`, stepIds, workflow.steps, diagnostics);
         }
       }
+    }
+  }
+
+  // Validate defaults.worktree.fork_from
+  if (workflow.defaults?.worktree?.fork_from !== undefined) {
+    if (workflow.defaults.worktree.mode !== "fork") {
+      diagnostics.push({
+        severity: "error",
+        message: `defaults.worktree has fork_from set but mode is "${workflow.defaults.worktree.mode}" — fork_from is only valid with mode "fork"`,
+        path: "defaults.worktree.fork_from",
+      });
+    }
+    if (!stepIds.has(workflow.defaults.worktree.fork_from)) {
+      diagnostics.push({
+        severity: "error",
+        message: `defaults.worktree.fork_from references non-existent step "${workflow.defaults.worktree.fork_from}"`,
+        path: "defaults.worktree.fork_from",
+      });
     }
   }
 

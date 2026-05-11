@@ -423,10 +423,22 @@ export class WorkflowEngine {
       if (this.runWorktree && !step.worktree) {
         cwd = this.runWorktree;
       } else {
-        // If there's a run-level worktree, resolve the step's worktree
-        // relative to its HEAD commit (not the repo root HEAD).
+        // Resolve commitish for fork/isolated worktrees.
+        // Priority: fork_from step's HEAD > run-level worktree HEAD > none.
         let commitish: string | undefined;
-        if (this.runWorktree) {
+        const effectiveWorktree = step.worktree ?? this.workflow.defaults?.worktree;
+        if (effectiveWorktree?.mode === "fork" && effectiveWorktree.fork_from) {
+          const forkSourcePath = this.worktreeManager.getPath(effectiveWorktree.fork_from);
+          if (!forkSourcePath) {
+            throw new Error(
+              `step '${stepId}' uses fork_from='${effectiveWorktree.fork_from}' but '${effectiveWorktree.fork_from}' has not been resolved yet — check transition order`
+            );
+          }
+          commitish = execFileSync("git", ["rev-parse", "HEAD"], {
+            cwd: forkSourcePath,
+            stdio: "pipe",
+          }).toString().trim();
+        } else if (this.runWorktree) {
           commitish = execFileSync("git", ["rev-parse", "HEAD"], {
             cwd: this.runWorktree,
             stdio: "pipe",
@@ -438,6 +450,7 @@ export class WorkflowEngine {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.logger.error(`[${stepId}] worktree setup failed: ${errMsg}`);
       status.state = "failed";
+      status.lastError = errMsg;
       this.onStepFailure(stepId);
       return;
     }
@@ -653,8 +666,11 @@ export class WorkflowEngine {
         status.inPlaceAttempt = 0;
         this.stepOutputs.set(stepId, result.outputs);
 
-        // Cleanup isolated worktree on success
-        if (this.worktreeManager.hasWorktree(stepId)) {
+        // Cleanup fork worktrees on success (they are transient).
+        // Isolated worktrees persist for the lifetime of the run so that
+        // retries and fork_from steps can still see their commits.
+        const effectiveMode = (step.worktree ?? this.workflow.defaults?.worktree)?.mode;
+        if (this.worktreeManager.hasWorktree(stepId) && effectiveMode !== "isolated") {
           this.worktreeManager.cleanup(stepId);
         }
 

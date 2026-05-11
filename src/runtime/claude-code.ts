@@ -9,6 +9,21 @@ import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { ClaudeCodeRuntime } from "../schema/types.js";
 import { suffixFor, formatClaudeEvent } from "./log-block.js";
 
+/**
+ * Returns a system reminder instructing the agent to stay inside its worktree.
+ * Returns empty string when the step is not running in an isolated worktree
+ * (i.e., cwd equals the repo root or repoRoot is not set).
+ */
+export function buildWorktreeReminder(ctx: RuntimeContext): string {
+  if (!ctx.repoRoot || ctx.cwd === ctx.repoRoot) return "";
+  return [
+    `Your working directory is \`${ctx.cwd}\`. Treat it as the repo root for all file operations.`,
+    `- Do not use absolute paths to \`${ctx.repoRoot}\` or any path outside this directory.`,
+    `- Do not \`cd\` out of this directory in Bash tool calls.`,
+    `- All \`git\` operations must run inside the worktree (do not use \`git -C\` to target the parent repo).`,
+  ].join("\n");
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -129,9 +144,14 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push("--mcp-config", mcpConfigPath);
     }
 
-    // Build prompt: step prompt + transition message.
+    // Build prompt: worktree confinement reminder + step prompt + transition message.
     // When resuming, skip the original prompt — the conversation already has it.
+    const worktreeReminder = buildWorktreeReminder(ctx);
+    if (worktreeReminder) {
+      ctx.logger?.info(`[${ctx.stepId}] injected worktree confinement reminder (cwd=${ctx.cwd})`);
+    }
     const parts: string[] = [];
+    if (worktreeReminder) parts.push(worktreeReminder);
     if (!resuming && ctx.prompt) parts.push(ctx.prompt);
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
     const fullPrompt = parts.join("\n\n");

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeCodeAdapter } from "../../src/runtime/claude-code.js";
+import { ClaudeCodeAdapter, buildWorktreeReminder } from "../../src/runtime/claude-code.js";
 import { NudgeQueue } from "../../src/runtime/types.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
 
@@ -575,5 +575,81 @@ rl.on('close', () => process.exit(1));
     expect(result.success).toBe(true);
     expect(result.outputs.approved).toBe(true);
     expect(selfNudgeLogs).toHaveLength(1);
+  }, 15000);
+});
+
+describe("buildWorktreeReminder", () => {
+  it("returns empty string when repoRoot is not set", () => {
+    const ctx = makeCtx({ cwd: "/repo/worktree" });
+    expect(buildWorktreeReminder(ctx)).toBe("");
+  });
+
+  it("returns empty string when cwd equals repoRoot", () => {
+    const ctx = makeCtx({ cwd: "/repo", repoRoot: "/repo" });
+    expect(buildWorktreeReminder(ctx)).toBe("");
+  });
+
+  it("returns reminder text when cwd differs from repoRoot", () => {
+    const ctx = makeCtx({ cwd: "/repo/.sparkflow-worktrees/abc/develop", repoRoot: "/repo" });
+    const reminder = buildWorktreeReminder(ctx);
+    expect(reminder).toContain("/repo/.sparkflow-worktrees/abc/develop");
+    expect(reminder).toContain("/repo");
+    expect(reminder).toBeTruthy();
+  });
+
+  it("reminder mentions not to cd outside the worktree", () => {
+    const ctx = makeCtx({ cwd: "/repo/wt", repoRoot: "/repo" });
+    const reminder = buildWorktreeReminder(ctx);
+    expect(reminder).toMatch(/cd/i);
+  });
+});
+
+describe("ClaudeCodeAdapter worktree reminder injection", () => {
+  const adapter = new ClaudeCodeAdapter();
+
+  it("logs reminder injection when cwd differs from repoRoot", async () => {
+    const infoLogs: string[] = [];
+    const cwd = process.cwd();
+    const repoRoot = "/some/other/root";
+    await withFakeClaude(["done"], () =>
+      adapter.run(
+        makeCtx({
+          prompt: "do something",
+          cwd,
+          repoRoot,
+          logger: { info: (msg: string) => infoLogs.push(msg) } as any,
+        })
+      )
+    );
+    expect(infoLogs.some((m) => m.includes("injected worktree confinement reminder"))).toBe(true);
+  }, 15000);
+
+  it("does NOT log reminder injection when cwd equals repoRoot", async () => {
+    const infoLogs: string[] = [];
+    const cwd = process.cwd();
+    await withFakeClaude(["done"], () =>
+      adapter.run(
+        makeCtx({
+          prompt: "do something",
+          cwd,
+          repoRoot: cwd,
+          logger: { info: (msg: string) => infoLogs.push(msg) } as any,
+        })
+      )
+    );
+    expect(infoLogs.some((m) => m.includes("injected worktree confinement reminder"))).toBe(false);
+  }, 15000);
+
+  it("does NOT log reminder injection when repoRoot is absent", async () => {
+    const infoLogs: string[] = [];
+    await withFakeClaude(["done"], () =>
+      adapter.run(
+        makeCtx({
+          prompt: "do something",
+          logger: { info: (msg: string) => infoLogs.push(msg) } as any,
+        })
+      )
+    );
+    expect(infoLogs.some((m) => m.includes("injected worktree confinement reminder"))).toBe(false);
   }, 15000);
 });

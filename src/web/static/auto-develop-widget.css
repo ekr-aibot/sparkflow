@@ -1,0 +1,193 @@
+/* Auto-develop accordion widget — fixed upper-right overlay */
+
+.adw {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 280px;
+  z-index: 50;
+  font-family: var(--ui-font, -apple-system, BlinkMacSystemFont, "Inter", sans-serif);
+  font-size: 13px;
+  color: var(--fg, #e0e4f5);
+  border-left: 1px solid var(--border, #2d3047);
+  border-bottom: 1px solid var(--border, #2d3047);
+  border-bottom-left-radius: var(--radius-sm, 5px);
+  background: rgba(30, 31, 43, 0.96);
+  backdrop-filter: blur(4px);
+  box-shadow: -2px 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* Header */
+
+.adw-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted, #9ba1c2);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.adw-header:hover { color: var(--fg, #e0e4f5); }
+.adw-header:focus-visible { outline: 2px solid var(--accent, #7aa2f7); outline-offset: -2px; }
+
+.adw-chevron::before { content: "▸"; display: inline-block; transition: transform 150ms ease; }
+.adw--expanded .adw-chevron::before { transform: rotate(90deg); }
+
+.adw-header-label { flex: none; }
+
+.adw-header-summary {
+  color: var(--fg-dim, #656b8a);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Body */
+
+.adw-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 150ms ease;
+  border-top: 0 solid transparent;
+}
+
+.adw--expanded .adw-body {
+  max-height: min(70vh, 600px);
+  overflow-y: auto;
+  border-top: 1px solid var(--border, #2d3047);
+}
+
+/* Summary line */
+
+.adw-summary-line {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  color: var(--fg-muted, #9ba1c2);
+  border-bottom: 1px solid var(--border, #2d3047);
+}
+
+/* Task list */
+
+.adw-task-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+
+.adw-task {
+  padding: 2px 10px;
+  line-height: 1.5;
+}
+
+.adw-task-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.adw-glyph {
+  flex: none;
+  font-size: 11px;
+  width: 14px;
+  text-align: center;
+}
+
+.adw-task-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+/* Per-status colors */
+
+.adw-task--done .adw-glyph { color: var(--green, #9ece6a); }
+.adw-task--done .adw-task-text { color: var(--fg-dim, #656b8a); text-decoration: line-through; }
+
+.adw-task--pending .adw-glyph { color: var(--fg-dim, #656b8a); }
+.adw-task--pending .adw-task-text { color: var(--fg-muted, #9ba1c2); }
+
+.adw-task--blocked .adw-glyph { color: var(--magenta, #bb9af7); }
+.adw-task--blocked .adw-task-text { color: var(--magenta, #bb9af7); }
+
+.adw-task--inprogress .adw-glyph { color: var(--yellow, #e0af68); }
+.adw-task--inprogress .adw-task-text {
+  color: var(--fg, #e0e4f5);
+  font-weight: 600;
+  white-space: normal;
+}
+
+/* "next" pill */
+
+.adw-next-pill {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(122, 162, 247, 0.12);
+  border: 1px solid rgba(122, 162, 247, 0.3);
+  color: var(--accent, #7aa2f7);
+  white-space: nowrap;
+}
+
+/* In-progress subtext */
+
+.adw-task-sub {
+  font-size: 11px;
+  color: var(--fg-dim, #656b8a);
+  padding-left: 19px;
+  font-family: var(--mono-font, ui-monospace, Menlo, monospace);
+}
+
+/* Blocked reason */
+
+.adw-blocked-reason {
+  font-size: 11px;
+  color: var(--fg-dim, #656b8a);
+  padding-left: 19px;
+  font-style: italic;
+}
+
+/* Footer */
+
+.adw-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px 7px;
+  border-top: 1px solid var(--border, #2d3047);
+  font-size: 11px;
+  color: var(--fg-dim, #656b8a);
+}
+
+.adw-footer-stale { color: var(--yellow, #e0af68); }
+
+.adw-roadmap-link {
+  color: var(--accent, #7aa2f7);
+  text-decoration: none;
+  flex: none;
+}
+.adw-roadmap-link:hover { text-decoration: underline; }
+
+/* "+N more" footer */
+
+.adw-more {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--fg-dim, #656b8a);
+  border-top: 1px solid var(--border, #2d3047);
+}

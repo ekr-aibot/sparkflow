@@ -204,6 +204,16 @@ CLI / Web UI → WorkflowEngine.run()
     → onStepComplete/Failure → triggerStep(next)
 ```
 
+### Auto-develop Accordion (`src/web/auto-develop-view.ts`, `src/web/static/auto-develop-widget.*`)
+
+A live progress widget fixed in the upper-right corner of the web UI. Collapsed by default; expands on click to overlay the chat area.
+
+**Data sources:** `parseRoadmap(markdown)` extracts task lines from `<project>/ROADMAP.md` (detecting `[ ]` pending, `[x]` done, `[!]` blocked with optional `<!-- blocked: reason -->` comments). `findActiveAutoDevelop(projectDir)` scans `.sparkflow/state/jobs/*.json` for the most recently started job where `info.workflowName === "auto-develop"` and `info.state === "running"`, then tails the last 32 KB of its log file to extract the current task line from `[pick-next:meta] result: {…}` events.
+
+**Backend endpoints:** `GET /api/auto-develop` returns `{ roadmap_exists, tasks, current_job, other_running_count, generated_at }`. `GET /api/roadmap-raw` returns the raw `ROADMAP.md` as `text/markdown` (the "ROADMAP ↗" link target).
+
+**Frontend:** `auto-develop-widget.js` polls `/api/auto-develop` at 2 s (10 s when no roadmap), skips when `document.hidden`, and re-polls immediately on tab focus. Expand/collapse state is persisted per-project in `localStorage` keyed by port. Elapsed time on the in-progress row ticks client-side every second without re-polling. The widget hides itself entirely when `roadmap_exists === false`.
+
 ## Config Layering
 
 User config (`~/.sparkflow/config.json`) is the base; project config (`.sparkflow/config.json`) overlays it. Nested objects like `git` are replaced wholesale — a project `git` block drops all user `git` fields.

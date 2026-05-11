@@ -429,15 +429,33 @@ export class WorkflowEngine {
         const effectiveWorktree = step.worktree ?? this.workflow.defaults?.worktree;
         if (effectiveWorktree?.mode === "fork" && effectiveWorktree.fork_from) {
           const forkSourcePath = this.worktreeManager.getPath(effectiveWorktree.fork_from);
-          if (!forkSourcePath) {
-            throw new Error(
-              `step '${stepId}' uses fork_from='${effectiveWorktree.fork_from}' but '${effectiveWorktree.fork_from}' has not been resolved yet — check transition order`
-            );
+          if (forkSourcePath) {
+            commitish = execFileSync("git", ["rev-parse", "HEAD"], {
+              cwd: forkSourcePath,
+              stdio: "pipe",
+            }).toString().trim();
+          } else {
+            // No dedicated worktree for fork_from. Two cases:
+            //   shared mode — valid, fall back to run-level/repo HEAD.
+            //   isolated/fork mode — the step has not run yet, which is a
+            //   workflow-author error (wrong transition order).
+            const forkSourceStep = this.workflow.steps[effectiveWorktree.fork_from];
+            const forkSourceMode =
+              (forkSourceStep?.worktree ?? this.workflow.defaults?.worktree)?.mode ?? "shared";
+            if (forkSourceMode !== "shared") {
+              throw new Error(
+                `step '${stepId}' uses fork_from='${effectiveWorktree.fork_from}' but '${effectiveWorktree.fork_from}' has not been resolved yet — check transition order`
+              );
+            }
+            // Shared step: use run-level worktree HEAD (or leave commitish
+            // undefined so the fork lands at the repo's current HEAD).
+            if (this.runWorktree) {
+              commitish = execFileSync("git", ["rev-parse", "HEAD"], {
+                cwd: this.runWorktree,
+                stdio: "pipe",
+              }).toString().trim();
+            }
           }
-          commitish = execFileSync("git", ["rev-parse", "HEAD"], {
-            cwd: forkSourcePath,
-            stdio: "pipe",
-          }).toString().trim();
         } else if (this.runWorktree) {
           commitish = execFileSync("git", ["rev-parse", "HEAD"], {
             cwd: this.runWorktree,

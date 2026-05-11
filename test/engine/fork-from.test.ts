@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
-  createInterface: vi.fn(),
 }));
 
 import { execFileSync } from "node:child_process";
@@ -269,5 +268,72 @@ describe("fork_from engine integration", () => {
     const v0 = parseInt(commitishesUsedByTest[0].replace("sha-develop-v", ""));
     const v1 = parseInt(commitishesUsedByTest[1].replace("sha-develop-v", ""));
     expect(v1).toBeGreaterThan(v0);
+  });
+
+  it("gracefully falls back to repo HEAD when fork_from references a shared-mode step", async () => {
+    const engineCwd = "/fake/repo";
+    const worktreeAddArgs: string[][] = [];
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockExec.mockImplementation((...rawArgs: any[]) => {
+      const [cmd, args] = rawArgs as [string, string[]];
+      if (cmd !== "git") return Buffer.from("");
+      if (args[0] === "worktree" && args[1] === "prune") return Buffer.from("");
+      if (args[0] === "worktree" && args[1] === "remove") return Buffer.from("");
+      if (args[0] === "worktree" && args[1] === "add") {
+        worktreeAddArgs.push([...args]);
+        return Buffer.from("");
+      }
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return Buffer.from("sha-repo\n");
+      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return Buffer.from("main\n");
+      return Buffer.from("");
+    });
+
+    // develop runs in shared mode (no worktree config), test forks from it.
+    const workflow: SparkflowWorkflow = {
+      version: "1",
+      name: "shared-fork-from-test",
+      entry: "develop",
+      steps: {
+        develop: {
+          name: "Develop",
+          interactive: false,
+          runtime: { type: "shell", command: "true" },
+          // no worktree → shared mode
+          on_success: [{ step: "test" }],
+        },
+        test: {
+          name: "Test",
+          interactive: false,
+          runtime: { type: "shell", command: "true" },
+          worktree: { mode: "fork", fork_from: "develop" },
+        },
+      },
+    };
+
+    const adapters = new Map<string, RuntimeAdapter>([
+      ["shell", new MockAdapter([{ success: true, outputs: {} }])],
+    ]);
+
+    const engine = new WorkflowEngine(
+      workflow,
+      { logger: silentLogger, cwd: engineCwd },
+      adapters,
+    );
+
+    const result = await engine.run();
+
+    // Workflow must succeed — no throw for a shared-mode fork source.
+    expect(result.success).toBe(true);
+
+    // test's git worktree add should have been called. Since develop has no
+    // dedicated worktree (shared mode, no runWorktree), the fork is created
+    // without an explicit commitish (i.e. at the current repo HEAD).
+    const testAdd = worktreeAddArgs.find((a) => a.join(" ").includes("test"));
+    expect(testAdd).toBeDefined();
+    // The add call should be: ["worktree", "add", "--detach", "<path>"]
+    // with no extra commitish argument appended.
+    expect(testAdd!).toHaveLength(4);
+    expect(testAdd![2]).toBe("--detach");
   });
 });

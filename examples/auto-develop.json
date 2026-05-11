@@ -3,6 +3,7 @@
   "name": "auto-develop",
   "description": "Autonomous local task-execution loop. Takes a high-level goal, builds ROADMAP.md, and implements tasks one by one with planner, dev, test, review, land, and replan steps. No GitHub \u2014 all commits land locally. Invoke with: sparkflow-run auto-develop --plan goal.md --cwd <repo>",
   "kind": "main",
+  "dashboard": true,
   "entry": "seed-plan",
   "defaults": {
     "worktree": {
@@ -26,7 +27,7 @@
       "success_output": "initialized",
       "on_success": [
         {
-          "step": "pick-next"
+          "step": "update-dashboard"
         }
       ],
       "outputs": {
@@ -239,7 +240,7 @@
       "prompt": "./prompts/auto-develop-replan.md",
       "on_success": [
         {
-          "step": "pick-next"
+          "step": "update-dashboard"
         }
       ],
       "outputs": {
@@ -252,6 +253,28 @@
           "description": "true if ARCHITECTURE.md was updated with new decisions"
         }
       }
+    },
+    "update-dashboard": {
+      "name": "Update Dashboard",
+      "description": "Regenerates .sparkflow/dashboard.html from the current ROADMAP.md. Runs before each pick-next cycle so the web UI stays current. Dashboard failures are non-fatal — the workflow routes to pick-next regardless.",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "shell",
+        "command": "sparkflow-dashboard"
+      },
+      "on_success": [
+        {
+          "step": "pick-next"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "pick-next"
+        }
+      ]
     },
     "mark-blocked": {
       "name": "Mark Blocked",

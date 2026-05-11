@@ -31,6 +31,10 @@
       "minLength": 1,
       "description": "The step ID where execution begins. Must be a key in steps."
     },
+    "dashboard": {
+      "type": "boolean",
+      "description": "When true, the sparkflow web UI shows a live Dashboard panel for this workflow's jobs. A step in the workflow is responsible for writing .sparkflow/dashboard.html; the panel serves that file. Use sparkflow-dashboard to generate the HTML."
+    },
     "defaults": { "$ref": "#/$defs/StepDefaults" },
     "steps": {
       "type": "object",

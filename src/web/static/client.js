@@ -339,7 +339,7 @@ const mainFit = new FitAddon();
 mainTerm.loadAddon(mainFit);
 mainTerm.open(mainChatBody);
 mainFit.fit();
-chatTerminals.set("chat", { term: mainTerm, fit: mainFit, ws: null, retryDelay: 250, suppress: false });
+chatTerminals.set("chat", { term: mainTerm, fit: mainFit, ws: null, retryDelay: 250, suppress: false, needsRefresh: false });
 mainTerm.onData((data) => sendBytesForTab("chat", data));
 installPasteHandler("chat", mainTerm);
 setupPasteStrip("chat", els.chat);
@@ -377,7 +377,14 @@ function connectChatWs(tabId, repoId, chatId) {
   const url = `${WS_BASE}?${qs.toString()}`;
   const ws = new WebSocket(url);
   entry.ws = ws;
-  ws.onopen = () => { entry.retryDelay = 250; sendResizeForTab(tabId); };
+  ws.onopen = () => {
+    entry.retryDelay = 250;
+    sendResizeForTab(tabId);
+    if (entry.needsRefresh) {
+      entry.needsRefresh = false;
+      sendBytesForTab(tabId, "\x0c");
+    }
+  };
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
@@ -423,7 +430,7 @@ function switchChatToRepo(repoId) {
   if (!repoId || repoId === wsRepoId) return;
   closeChatWs("chat");
   const entry = chatTerminals.get("chat");
-  if (entry) { entry.retryDelay = 250; entry.term.reset(); }
+  if (entry) { entry.retryDelay = 250; entry.term.reset(); entry.needsRefresh = true; }
   connectChat(repoId);
 }
 
@@ -466,7 +473,7 @@ function openSideChat(chatId) {
   els.main.appendChild(pane);
 
   const { term, fit } = makeChatTerminal(pane);
-  chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
+  chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false, needsRefresh: false });
   term.onData((data) => sendBytesForTab(chatId, data));
   installPasteHandler(chatId, term);
   setupPasteStrip(chatId, pane);
@@ -516,7 +523,7 @@ async function restoreSideChats() {
       pane.setAttribute("role", "tabpanel");
       els.main.appendChild(pane);
       const { term, fit } = makeChatTerminal(pane);
-      chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false });
+      chatTerminals.set(chatId, { term, fit, ws: null, retryDelay: 250, suppress: false, needsRefresh: false });
       term.onData((data) => sendBytesForTab(chatId, data));
       installPasteHandler(chatId, term);
       setupPasteStrip(chatId, pane);

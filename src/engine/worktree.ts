@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Step, SparkflowWorkflow } from "../schema/types.js";
@@ -38,8 +39,13 @@ export class WorktreeManager {
         stdio: "pipe",
       });
     } else {
-      // "isolated": new directory, new named branch
-      const branch = worktreeConfig.branch ?? `sparkflow/${stepId}-${this.runId}`;
+      // "isolated": new directory, new named branch.
+      // Auto-generated names include a random suffix so that the same step
+      // can be retried in the same workflow run without hitting a
+      // "branch already exists" error (the branch persists after worktree
+      // removal; a fresh suffix avoids the collision).
+      const randSuffix = randomBytes(4).toString("hex");
+      const branch = worktreeConfig.branch ?? `sparkflow/${stepId}-${this.runId}-${randSuffix}`;
       execFileSync("git", ["worktree", "add", worktreePath, "-b", branch], {
         cwd: this.repoRoot,
         stdio: "pipe",

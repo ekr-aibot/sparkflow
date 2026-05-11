@@ -152,7 +152,7 @@ describe("WorktreeManager", () => {
   });
 
   describe("isolated mode branch naming", () => {
-    it("uses sparkflow/<stepId>-<runId> as the default branch name", () => {
+    it("uses sparkflow/<stepId>-<runId>-<rand> as the default branch name", () => {
       const manager = new WorktreeManager("/repo", "abcd1234");
       manager.resolve("build", makeIsolatedStep(), makeWorkflow());
 
@@ -162,7 +162,8 @@ describe("WorktreeManager", () => {
       expect(addCall).toBeDefined();
       const args = addCall![1] as string[];
       const branchIdx = args.indexOf("-b");
-      expect(args[branchIdx + 1]).toBe("sparkflow/build-abcd1234");
+      // Random 8-hex suffix is appended to avoid collision on retry
+      expect(args[branchIdx + 1]).toMatch(/^sparkflow\/build-abcd1234-[0-9a-f]{8}$/);
     });
 
     it("passes explicit branch verbatim without suffix", () => {
@@ -186,6 +187,38 @@ describe("WorktreeManager", () => {
         (c) => (c[1] as string[])[0] === "rev-parse"
       );
       expect(revParseCalls).toHaveLength(0);
+    });
+
+    // Regression for Bug 2: when the same step runs twice in one workflow run
+    // (retry via on_failure), the second isolated worktree creation must not
+    // fail with "branch already exists". The random suffix guarantees each
+    // creation uses a distinct branch name.
+    it("generates a unique branch name on each isolated worktree creation for the same step", () => {
+      const manager = new WorktreeManager("/repo", "abcd1234");
+
+      manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      const addCall1 = mockExec.mock.calls.find(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      );
+      const args1 = addCall1![1] as string[];
+      const branch1 = args1[args1.indexOf("-b") + 1];
+
+      vi.clearAllMocks();
+      mockExec.mockReturnValue(Buffer.from(""));
+
+      // Second resolve of the same stepId in the same run (simulates retry)
+      manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      const addCall2 = mockExec.mock.calls.find(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      );
+      const args2 = addCall2![1] as string[];
+      const branch2 = args2[args2.indexOf("-b") + 1];
+
+      // Both must match the pattern…
+      expect(branch1).toMatch(/^sparkflow\/develop-abcd1234-[0-9a-f]{8}$/);
+      expect(branch2).toMatch(/^sparkflow\/develop-abcd1234-[0-9a-f]{8}$/);
+      // …but be different so no "branch already exists" error on retry
+      expect(branch1).not.toBe(branch2);
     });
   });
 });

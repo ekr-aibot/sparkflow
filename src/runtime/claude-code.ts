@@ -252,30 +252,33 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
         const quotaHit = !success && !tokenLimitHit && this.isQuotaError(parsed, stderr, stdout);
 
-        if (success && parsed) {
-          // For json-typed outputs, parse the result text as JSON and extract
-          // named fields. For other typed outputs, look up named fields in the
-          // event object directly (legacy path for callers that embed structured
-          // data at the top level of the result event).
+        // Extract declared outputs from the result event regardless of whether
+        // the step succeeded or failed. success_output gating is a routing
+        // signal only — on_failure templates must be able to reference these
+        // outputs (e.g. ${steps.pick-next.output.task}).
+        if (parsed) {
           const resultText = (parsed as Record<string, unknown>).result;
           const parsedResultJson = typeof resultText === "string"
             ? this.extractJsonFromResult(resultText)
             : null;
 
           if (ctx.step.outputs) {
-            for (const [name, decl] of Object.entries(ctx.step.outputs)) {
-              if (decl.type === "json" && parsedResultJson !== null) {
-                if (parsedResultJson[name] !== undefined) {
-                  outputs[name] = parsedResultJson[name];
-                }
+            for (const [name] of Object.entries(ctx.step.outputs)) {
+              // Prefer the result-text JSON (handles both "json" and "text"
+              // declared types — the LLM embeds all structured output there).
+              if (parsedResultJson !== null && parsedResultJson[name] !== undefined) {
+                outputs[name] = parsedResultJson[name];
               } else if ((parsed as Record<string, unknown>)[name] !== undefined) {
+                // Fallback: top-level field on the result event (legacy path).
                 outputs[name] = (parsed as Record<string, unknown>)[name];
               }
             }
           }
-          outputs._response = parsed;
+          if (success) {
+            outputs._response = parsed;
+          }
         } else if (success && stdout.trim() && ctx.step.outputs) {
-          // Fallback: store raw output for text outputs
+          // Fallback: no result event was captured, but stdout is available.
           for (const [name, decl] of Object.entries(ctx.step.outputs)) {
             if (decl.type === "text") {
               outputs[name] = stdout.trim();

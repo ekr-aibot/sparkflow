@@ -65,6 +65,9 @@ export function resolveTemplate(
       return `(step "${stepId}" did not run)`;
     }
     if (!(field in outputs)) {
+      process.stderr.write(
+        `[sparkflow] warn: \${steps.${stepId}.output.${field}} — field "${field}" not found in outputs of step "${stepId}"\n`
+      );
       return `(no \`${field}\` output from step "${stepId}")`;
     }
     return stringify(outputs[field]);

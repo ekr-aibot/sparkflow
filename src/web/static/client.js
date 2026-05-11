@@ -65,21 +65,49 @@ function stepColorIndex(name) {
 }
 
 // --------------------------- log line transform ---------------------------
-function transformLogLine(line, verbose) {
+
+// Timestamp separator: SOH character unlikely to appear in real log output.
+const TS_SEP = "\x01";
+
+// Format a Date as HH:MM:SS (local time, 24-hour, zero-padded).
+function formatTime(d) {
+  return d.getHours().toString().padStart(2, "0") + ":" +
+    d.getMinutes().toString().padStart(2, "0") + ":" +
+    d.getSeconds().toString().padStart(2, "0");
+}
+
+// Tag a raw log line with a timestamp: "HH:MM:SS\x01<line>".
+function tagLine(line, ts) {
+  return ts + TS_SEP + line;
+}
+
+function transformLogLine(rawLine, verbose) {
+  // Extract leading timestamp tag added by pollJobLog for new output.
+  // Format: "HH:MM:SS\x01<rest>" where HH:MM:SS is 8 chars.
+  let line = rawLine;
+  let tsPrefix = "";
+  if (rawLine.length >= 9 && rawLine[8] === TS_SEP) {
+    const ts = rawLine.slice(0, 8);
+    if (/^\d{2}:\d{2}:\d{2}$/.test(ts)) {
+      tsPrefix = `${ANSI_DIM}${ts}${ANSI_RESET} `;
+      line = rawLine.slice(9);
+    }
+  }
+
   if (line.startsWith("{") && line.endsWith("}")) {
     try {
       const ev = JSON.parse(line);
       if (!verbose) return null;
       if (ev.type === "step_status" && typeof ev.step === "string") {
         const ansi = STEP_PALETTE_ANSI[stepColorIndex(ev.step)];
-        return `${ANSI_DIM}${ansi}[${ev.step}]${ANSI_RESET}${ANSI_DIM} ${ev.state ?? ""}${ANSI_RESET}`;
+        return `${tsPrefix}${ANSI_DIM}${ansi}[${ev.step}]${ANSI_RESET}${ANSI_DIM} ${ev.state ?? ""}${ANSI_RESET}`;
       }
-      if (ev.type === "workflow_start") return `${ANSI_DIM}[sparkflow] workflow started${ANSI_RESET}`;
+      if (ev.type === "workflow_start") return `${tsPrefix}${ANSI_DIM}[sparkflow] workflow started${ANSI_RESET}`;
       if (ev.type === "workflow_complete") {
-        return `${ANSI_DIM}[sparkflow] workflow ${ev.success ? "succeeded" : "failed"}${ANSI_RESET}`;
+        return `${tsPrefix}${ANSI_DIM}[sparkflow] workflow ${ev.success ? "succeeded" : "failed"}${ANSI_RESET}`;
       }
-      if (ev.type === "ask_user") return `${ANSI_DIM}[sparkflow] ask_user: ${ev.question ?? ""}${ANSI_RESET}`;
-      return `${ANSI_DIM}${line}${ANSI_RESET}`;
+      if (ev.type === "ask_user") return `${tsPrefix}${ANSI_DIM}[sparkflow] ask_user: ${ev.question ?? ""}${ANSI_RESET}`;
+      return `${tsPrefix}${ANSI_DIM}${line}${ANSI_RESET}`;
     } catch { /* not JSON — fall through */ }
   }
 
@@ -96,11 +124,11 @@ function transformLogLine(line, verbose) {
     }
     const ansi = STEP_PALETTE_ANSI[stepColorIndex(step)];
     const label = `${ansi}[${step}${suffix ? ":" + suffix : ""}]${ANSI_RESET}`;
-    return `${label} ${content}`;
+    return `${tsPrefix}${label} ${content}`;
   }
 
   if (!verbose) return null;
-  return `${ANSI_DIM}${line}${ANSI_RESET}`;
+  return `${tsPrefix}${ANSI_DIM}${line}${ANSI_RESET}`;
 }
 
 // Floating toast host, injected once.
@@ -804,6 +832,7 @@ function openJobTab(jobId) {
     repoId: job?.repoId ?? "",
     rawLines: [],
     lineLength: 0,
+    hasPolled: false,
     verbose: false,
     verboseCheckbox,
     nudgeEl: nudgeDiv,
@@ -912,6 +941,9 @@ async function pollJobLog(jobId) {
   const view = state.jobViews.get(jobId);
   if (!view || view.stopped) return;
   const repoId = view.repoId || jobRepoId(jobId);
+  // isInitial: first fetch loads historical lines — don't timestamp those
+  // since we don't know when they were originally produced.
+  const isInitial = !view.hasPolled;
   try {
     const res = await fetch(
       jobActionUrl(repoId, jobId, `log?since=${view.lineLength}`),
@@ -920,9 +952,11 @@ async function pollJobLog(jobId) {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.lines) && data.lines.length > 0) {
+        const batchTs = isInitial ? null : formatTime(new Date());
         for (const line of data.lines) {
-          view.rawLines.push(line);
-          const out = transformLogLine(line, view.verbose);
+          const tagged = batchTs !== null ? tagLine(line, batchTs) : line;
+          view.rawLines.push(tagged);
+          const out = transformLogLine(tagged, view.verbose);
           if (out !== null) view.term.write(out + "\r\n");
         }
         if (view.rawLines.length > RAW_LINES_CAP) {
@@ -930,6 +964,7 @@ async function pollJobLog(jobId) {
         }
       }
       if (typeof data.length === "number") view.lineLength = data.length;
+      view.hasPolled = true;
       const terminal = data.state === "succeeded" || data.state === "failed";
       const nextDelay = terminal ? 3000 : 750;
       if (!view.stopped) view.pollTimer = setTimeout(() => pollJobLog(jobId), nextDelay);

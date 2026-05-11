@@ -323,6 +323,46 @@ describe("WorkflowEngine", () => {
     expect(receivedMessages[1]).toBe("Got: 42");
   });
 
+  // Regression: when a step fails (e.g. via success_output gate), its outputs
+  // must still be visible to on_failure template interpolation. Previously the
+  // engine stored outputs on failure correctly but the claude-code adapter only
+  // extracted them on the success path, leaving them empty in the gate case.
+  it("on_failure template message can reference outputs from a failed step", async () => {
+    const receivedMessages: (string | undefined)[] = [];
+    const workflow = makeWorkflow({
+      steps: {
+        picker: {
+          name: "Picker",
+          interactive: false,
+          outputs: { done: { type: "json" }, task: { type: "text" } },
+          on_failure: [
+            { step: "developer", message: "Task: ${steps.picker.output.task}" },
+          ],
+        },
+        developer: {
+          name: "Developer",
+          interactive: false,
+        },
+      },
+      entry: "picker",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      receivedMessages.push(ctx.transitionMessage);
+      if (ctx.stepId === "picker") {
+        // Simulates a success_output gate flip: adapter returns failure with outputs
+        return { success: false, outputs: { done: false, task: "Fix the login bug" } };
+      }
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+    await engine.run();
+
+    // developer receives the interpolated task from picker's outputs
+    expect(receivedMessages[1]).toBe("Task: Fix the login bug");
+  });
+
   it("concurrent failure queuing (B and C both fail → A)", async () => {
     let aRunCount = 0;
     const workflow = makeWorkflow({

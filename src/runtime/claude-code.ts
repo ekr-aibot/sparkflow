@@ -9,6 +9,21 @@ import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { ClaudeCodeRuntime } from "../schema/types.js";
 import { suffixFor, formatClaudeEvent } from "./log-block.js";
 
+/**
+ * Returns a system reminder instructing the agent to stay inside its worktree.
+ * Returns empty string when the step is not running in an isolated worktree
+ * (i.e., cwd equals the repo root or repoRoot is not set).
+ */
+export function buildWorktreeReminder(ctx: RuntimeContext): string {
+  if (!ctx.repoRoot || ctx.cwd === ctx.repoRoot) return "";
+  return [
+    `Your working directory is \`${ctx.cwd}\`. Treat it as the repo root for all file operations.`,
+    `- Do not use absolute paths to \`${ctx.repoRoot}\` or any path outside this directory.`,
+    `- Do not \`cd\` out of this directory in Bash tool calls.`,
+    `- All \`git\` operations must run inside the worktree (do not use \`git -C\` to target the parent repo).`,
+  ].join("\n");
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -129,9 +144,14 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       args.push("--mcp-config", mcpConfigPath);
     }
 
-    // Build prompt: step prompt + transition message.
+    // Build prompt: worktree confinement reminder + step prompt + transition message.
     // When resuming, skip the original prompt — the conversation already has it.
+    const worktreeReminder = buildWorktreeReminder(ctx);
+    if (worktreeReminder) {
+      ctx.logger?.info(`[${ctx.stepId}] injected worktree confinement reminder (cwd=${ctx.cwd})`);
+    }
     const parts: string[] = [];
+    if (worktreeReminder) parts.push(worktreeReminder);
     if (!resuming && ctx.prompt) parts.push(ctx.prompt);
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
     const fullPrompt = parts.join("\n\n");
@@ -252,30 +272,33 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
         const quotaHit = !success && !tokenLimitHit && this.isQuotaError(parsed, stderr, stdout);
 
-        if (success && parsed) {
-          // For json-typed outputs, parse the result text as JSON and extract
-          // named fields. For other typed outputs, look up named fields in the
-          // event object directly (legacy path for callers that embed structured
-          // data at the top level of the result event).
+        // Extract declared outputs from the result event regardless of whether
+        // the step succeeded or failed. success_output gating is a routing
+        // signal only — on_failure templates must be able to reference these
+        // outputs (e.g. ${steps.pick-next.output.task}).
+        if (parsed) {
           const resultText = (parsed as Record<string, unknown>).result;
           const parsedResultJson = typeof resultText === "string"
             ? this.extractJsonFromResult(resultText)
             : null;
 
           if (ctx.step.outputs) {
-            for (const [name, decl] of Object.entries(ctx.step.outputs)) {
-              if (decl.type === "json" && parsedResultJson !== null) {
-                if (parsedResultJson[name] !== undefined) {
-                  outputs[name] = parsedResultJson[name];
-                }
+            for (const [name] of Object.entries(ctx.step.outputs)) {
+              // Prefer the result-text JSON (handles both "json" and "text"
+              // declared types — the LLM embeds all structured output there).
+              if (parsedResultJson !== null && parsedResultJson[name] !== undefined) {
+                outputs[name] = parsedResultJson[name];
               } else if ((parsed as Record<string, unknown>)[name] !== undefined) {
+                // Fallback: top-level field on the result event (legacy path).
                 outputs[name] = (parsed as Record<string, unknown>)[name];
               }
             }
           }
-          outputs._response = parsed;
+          if (success) {
+            outputs._response = parsed;
+          }
         } else if (success && stdout.trim() && ctx.step.outputs) {
-          // Fallback: store raw output for text outputs
+          // Fallback: no result event was captured, but stdout is available.
           for (const [name, decl] of Object.entries(ctx.step.outputs)) {
             if (decl.type === "text") {
               outputs[name] = stdout.trim();

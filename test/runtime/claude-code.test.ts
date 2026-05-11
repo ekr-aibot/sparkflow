@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { writeFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeCodeAdapter } from "../../src/runtime/claude-code.js";
+import { ClaudeCodeAdapter, buildWorktreeReminder } from "../../src/runtime/claude-code.js";
 import { NudgeQueue } from "../../src/runtime/types.js";
 import type { RuntimeContext } from "../../src/runtime/types.js";
 
@@ -418,6 +418,84 @@ describe("ClaudeCodeAdapter self-nudge", () => {
     expect(selfNudgeLogs).toHaveLength(0);
   }, 15000);
 
+  // Regression for Bug 1: text-type outputs embedded in the result JSON must be
+  // extracted even when the success_output gate fails. Previously only "json"-typed
+  // outputs were pulled from parsedResultJson; "text" type fell through to the
+  // event top-level lookup and missed fields that only appear in the result text.
+  it("extracts text-type output from result JSON even when success_output gate fails", async () => {
+    const result = await withFakeClaude(
+      ['{"done": false, "task": "Fix the login bug"}'],
+      () =>
+        adapter.run(
+          makeCtx({
+            step: {
+              name: "Pick next",
+              interactive: false,
+              success_output: "done",
+              outputs: {
+                done: { type: "json" },
+                task: { type: "text" },
+              },
+            },
+            prompt: "Pick a task",
+          })
+        )
+    );
+    // Gate failed because done is false
+    expect(result.success).toBe(false);
+    // But both outputs must still be extracted for on_failure interpolation
+    expect(result.outputs.done).toBe(false);
+    expect(result.outputs.task).toBe("Fix the login bug");
+  }, 15000);
+
+  // Regression: outputs must be extracted even when the step genuinely fails
+  // (non-zero exit), as long as a result event was captured.
+  it("extracts outputs from a result event even on non-zero exit", async () => {
+    // Build a fake claude that emits a result event with is_error: true
+    const dir = mkdtempSync(join(tmpdir(), "fake-claude-error-"));
+    const scriptPath = join(dir, "claude");
+    writeFileSync(
+      scriptPath,
+      `#!/usr/bin/env node
+const rl = require('readline').createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  try {
+    const msg = JSON.parse(line);
+    if (msg.type === 'user') {
+      process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error', is_error: true, result: '{"task": "Build auth", "reason": "tool failed"}' }) + '\\n');
+    }
+  } catch {}
+});
+rl.on('close', () => process.exit(1));
+`,
+      { mode: 0o755 }
+    );
+    const origPath = process.env.PATH;
+    process.env.PATH = `${dir}:${origPath ?? ""}`;
+    try {
+      const result = await adapter.run(
+        makeCtx({
+          step: {
+            name: "Worker",
+            interactive: false,
+            outputs: {
+              task: { type: "text" },
+              reason: { type: "text" },
+            },
+          },
+          prompt: "Do work",
+        })
+      );
+      expect(result.success).toBe(false);
+      // Outputs must be extracted from the result event even on failure
+      expect(result.outputs.task).toBe("Build auth");
+      expect(result.outputs.reason).toBe("tool failed");
+    } finally {
+      process.env.PATH = origPath;
+      rmSync(dir, { recursive: true });
+    }
+  }, 15000);
+
   it("self-nudges at most once even if turn 2 also misses the output", async () => {
     const selfNudgeLogs: string[] = [];
     const result = await withFakeClaude(
@@ -497,5 +575,81 @@ describe("ClaudeCodeAdapter self-nudge", () => {
     expect(result.success).toBe(true);
     expect(result.outputs.approved).toBe(true);
     expect(selfNudgeLogs).toHaveLength(1);
+  }, 15000);
+});
+
+describe("buildWorktreeReminder", () => {
+  it("returns empty string when repoRoot is not set", () => {
+    const ctx = makeCtx({ cwd: "/repo/worktree" });
+    expect(buildWorktreeReminder(ctx)).toBe("");
+  });
+
+  it("returns empty string when cwd equals repoRoot", () => {
+    const ctx = makeCtx({ cwd: "/repo", repoRoot: "/repo" });
+    expect(buildWorktreeReminder(ctx)).toBe("");
+  });
+
+  it("returns reminder text when cwd differs from repoRoot", () => {
+    const ctx = makeCtx({ cwd: "/repo/.sparkflow-worktrees/abc/develop", repoRoot: "/repo" });
+    const reminder = buildWorktreeReminder(ctx);
+    expect(reminder).toContain("/repo/.sparkflow-worktrees/abc/develop");
+    expect(reminder).toContain("/repo");
+    expect(reminder).toBeTruthy();
+  });
+
+  it("reminder mentions not to cd outside the worktree", () => {
+    const ctx = makeCtx({ cwd: "/repo/wt", repoRoot: "/repo" });
+    const reminder = buildWorktreeReminder(ctx);
+    expect(reminder).toMatch(/cd/i);
+  });
+});
+
+describe("ClaudeCodeAdapter worktree reminder injection", () => {
+  const adapter = new ClaudeCodeAdapter();
+
+  it("logs reminder injection when cwd differs from repoRoot", async () => {
+    const infoLogs: string[] = [];
+    const cwd = process.cwd();
+    const repoRoot = "/some/other/root";
+    await withFakeClaude(["done"], () =>
+      adapter.run(
+        makeCtx({
+          prompt: "do something",
+          cwd,
+          repoRoot,
+          logger: { info: (msg: string) => infoLogs.push(msg) } as any,
+        })
+      )
+    );
+    expect(infoLogs.some((m) => m.includes("injected worktree confinement reminder"))).toBe(true);
+  }, 15000);
+
+  it("does NOT log reminder injection when cwd equals repoRoot", async () => {
+    const infoLogs: string[] = [];
+    const cwd = process.cwd();
+    await withFakeClaude(["done"], () =>
+      adapter.run(
+        makeCtx({
+          prompt: "do something",
+          cwd,
+          repoRoot: cwd,
+          logger: { info: (msg: string) => infoLogs.push(msg) } as any,
+        })
+      )
+    );
+    expect(infoLogs.some((m) => m.includes("injected worktree confinement reminder"))).toBe(false);
+  }, 15000);
+
+  it("does NOT log reminder injection when repoRoot is absent", async () => {
+    const infoLogs: string[] = [];
+    await withFakeClaude(["done"], () =>
+      adapter.run(
+        makeCtx({
+          prompt: "do something",
+          logger: { info: (msg: string) => infoLogs.push(msg) } as any,
+        })
+      )
+    );
+    expect(infoLogs.some((m) => m.includes("injected worktree confinement reminder"))).toBe(false);
   }, 15000);
 });

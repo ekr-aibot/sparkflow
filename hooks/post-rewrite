@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Fired after `git rebase` (including `git pull --rebase`).
+# Only act for the rebase command, not amend.
+if [[ "${1:-}" != "rebase" ]]; then
+  exit 0
+fi
+
+# stdin: lines of "<old-sha> <new-sha>"; collect the oldest old and newest new.
+OLDEST_OLD=""
+NEWEST_NEW=""
+while read -r old new _rest; do
+  [[ -z "$OLDEST_OLD" ]] && OLDEST_OLD="$old"
+  NEWEST_NEW="$new"
+done
+
+if [[ -z "$OLDEST_OLD" || -z "$NEWEST_NEW" ]]; then
+  exit 0
+fi
+
+export SPARKFLOW_DIFF_OLD="$OLDEST_OLD"
+export SPARKFLOW_DIFF_NEW="$NEWEST_NEW"
+exec "$(dirname "$0")/_run-build.sh"

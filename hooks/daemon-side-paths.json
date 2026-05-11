@@ -1,0 +1,11 @@
+[
+  "src/tui/job-manager.ts",
+  "src/tui/ipc-handler.ts",
+  "src/tui/state-store.ts",
+  "src/tui/log-tailer.ts",
+  "src/tui/supervisor.ts",
+  "src/tui/index.ts",
+  "src/tui/chat-tool.ts",
+  "src/dashboard/",
+  "src/mcp/ipc.ts"
+]

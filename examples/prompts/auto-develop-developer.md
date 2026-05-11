@@ -49,18 +49,28 @@ git commit -m "<verb>: <what and why>"
 
 Do not leave uncommitted changes. Do not push. Commit all modified files including `ARCHITECTURE.md` if you updated it.
 
+## Capturing the branch name
+
+You are running in an isolated git worktree on a branch sparkflow created for you. Capture its name with:
+
+```bash
+git branch --show-current
+```
+
+Include the result in the `branch` field of your output JSON. Downstream steps (land, mark-blocked) need this exact branch name — they will not guess it. If you are giving up before any commits exist, return an empty string for `branch`.
+
 ## Output format
 
 Emit exactly one JSON object as your final response — no prose before or after it.
 
 When ready for testing (current attempt ≤ 3):
 ```json
-{"implementation_ready": true, "attempt_count": 2, "summary": "Fixed email regex to require non-empty local part and TLD."}
+{"implementation_ready": true, "attempt_count": 2, "summary": "Fixed email regex to require non-empty local part and TLD.", "branch": "sparkflow/develop-a1b2c3d4"}
 ```
 
 When giving up (current attempt > 3):
 ```json
-{"implementation_ready": false, "attempt_count": 4, "summary": "Cannot complete: npm test hangs indefinitely regardless of implementation — likely a test environment issue, not a code problem."}
+{"implementation_ready": false, "attempt_count": 4, "summary": "Cannot complete: npm test hangs indefinitely regardless of implementation — likely a test environment issue, not a code problem.", "branch": "sparkflow/develop-a1b2c3d4"}
 ```
 
-The `summary` field is used in the blocked-task comment in `ROADMAP.md`, so be specific about the root cause when giving up.
+The `summary` field is used in the blocked-task comment in `ROADMAP.md`, so be specific about the root cause when giving up. The `branch` field is required even when giving up, so long as you made any commits, so downstream cleanup can delete it.

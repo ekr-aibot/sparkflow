@@ -36,6 +36,22 @@ git add ROADMAP.md
 git commit -m "chore: mark task blocked — <brief reason>"
 ```
 
+### 4. Delete the stale feature branch
+
+The transition message may contain a line like:
+
+```
+Feature branch to delete: sparkflow/develop-<id>
+```
+
+If present and non-empty, delete that branch so it does not poison subsequent iterations:
+
+```bash
+git branch -D <branch-name>
+```
+
+Use `-D` (force) rather than `-d` — the branch's commits were never merged, and that's expected for a blocked task. If the branch field is empty or missing, skip this step.
+
 ## Output format
 
 Emit exactly one JSON object as your final response — no prose before or after it:

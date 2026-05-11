@@ -6,17 +6,21 @@ You are the landing agent in an autonomous development loop. Your job is to merg
 
 ### 1. Identify the feature branch
 
-You are running in the shared (main) worktree. The feature branch was created by the develop agent in an isolated worktree. Find it:
+You are running in the shared (main) worktree. The transition message tells you the exact feature branch the develop agent committed to — look for a line like:
 
-```bash
-git branch --list
+```
+Feature branch: sparkflow/develop-<id>
 ```
 
-Look for a branch that is NOT the current branch and NOT `main` or `master`. It will typically be named something like `sparkflow/develop-<id>` or similar.
+Use that name verbatim. Do **not** enumerate branches with `git branch --list` and try to guess — other stale feature branches may exist locally, and a wrong merge is unrecoverable.
 
-- If you find **exactly one** candidate: proceed.
-- If you find **zero** candidates: emit `{"landed": false, "commit_sha": ""}` and explain that no feature branch was found.
-- If you find **multiple** candidates: emit `{"landed": false, "commit_sha": ""}` and list the candidates. Do NOT guess — a wrong merge is unrecoverable without user intervention.
+Validate the branch exists before merging:
+
+```bash
+git rev-parse --verify <branch-name>
+```
+
+If the branch name is missing from the message or `git rev-parse` fails, emit `{"landed": false, "commit_sha": ""}` and explain.
 
 ### 2. Identify the task
 

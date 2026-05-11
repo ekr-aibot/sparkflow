@@ -8,7 +8,8 @@
   "bin": {
     "sparkflow": "dist/src/tui/index.js",
     "sparkflow-run": "dist/src/cli/index.js",
-    "sparkflow-kill": "dist/src/cli/kill-bin.js"
+    "sparkflow-kill": "dist/src/cli/kill-bin.js",
+    "sparkflow-dashboard": "dist/src/cli/dashboard.js"
   },
   "scripts": {
     "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/ && mkdir -p dist/src/web/static && cp src/web/static/* dist/src/web/static/",

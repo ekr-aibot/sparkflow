@@ -178,15 +178,17 @@ CLI / Web UI → WorkflowEngine.run()
     → onStepComplete/Failure → triggerStep(next)
 ```
 
-### Auto-develop Accordion (`src/web/auto-develop-view.ts`, `src/web/static/auto-develop-widget.*`)
+### Step-publishable HTML Dashboard (`src/web/static/dashboard-widget.*`, `src/cli/dashboard.ts`)
 
-A live progress widget fixed in the upper-right corner of the web UI. Collapsed by default; expands on click to overlay the chat area.
+A generic live dashboard panel fixed in the upper-right corner of the web UI. Any workflow can opt in by setting `"dashboard": true` in its JSON and including a step that writes `.sparkflow/dashboard.html`. The web UI polls `GET /api/dashboard`, which serves that file verbatim as `text/html`. The panel appears when the file exists and hides when it doesn't; the iframe reloads when the file changes (detected via ETag/timestamp).
 
-**Data sources:** `parseRoadmap(markdown)` extracts task lines from `<project>/ROADMAP.md` (detecting `[ ]` pending, `[x]` done, `[!]` blocked with optional `<!-- blocked: reason -->` comments). `findActiveAutoDevelop(projectDir)` scans `.sparkflow/state/jobs/*.json` for the most recently started job where `info.workflowName === "auto-develop"` and `info.state === "running"`, then tails the last 32 KB of its log file to extract the current task line from `[pick-next:meta] result: {…}` events.
+**Workflow opt-in:** Add `"dashboard": true` to the workflow JSON (top-level field, schema-validated). Add a step that calls `sparkflow-dashboard` (or any other tool) to write `.sparkflow/dashboard.html`.
 
-**Backend endpoints:** `GET /api/auto-develop` returns `{ roadmap_exists, tasks, current_job, other_running_count, generated_at }`. `GET /api/roadmap-raw` returns the raw `ROADMAP.md` as `text/markdown` (the "ROADMAP ↗" link target).
+**`sparkflow-dashboard` CLI (`src/cli/dashboard.ts`):** Reads `ROADMAP.md` from the project root, parses task lines (`[ ]` pending, `[x]` done, `[!]` blocked with optional `<!-- blocked: reason -->` inline comments), and generates a self-contained HTML dashboard at `.sparkflow/dashboard.html`. Called by the `update-dashboard` step in `examples/auto-develop.json` before each `pick-next` cycle; step failure is non-fatal (routes to `pick-next` regardless).
 
-**Frontend:** `auto-develop-widget.js` polls `/api/auto-develop` at 2 s (10 s when no roadmap), skips when `document.hidden`, and re-polls immediately on tab focus. Expand/collapse state is persisted per-project in `localStorage` keyed by port. Elapsed time on the in-progress row ticks client-side every second without re-polling. The widget hides itself entirely when `roadmap_exists === false`.
+**Backend endpoint:** `GET /api/dashboard` reads `.sparkflow/dashboard.html` and serves it as `text/html; no-store`. Returns 404 when the file is absent.
+
+**Frontend:** `dashboard-widget.js` polls `/api/dashboard` every 2 s, skips when `document.hidden`, re-polls on tab focus. Displays the HTML in an iframe; reloads when the ETag changes. Expand/collapse state persisted in `localStorage` keyed by port.
 
 ## Config Layering
 

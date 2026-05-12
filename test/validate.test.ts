@@ -21,6 +21,15 @@ describe("validate", () => {
     });
   });
 
+  describe("codex-feature-development.json example", () => {
+    it("passes schema and semantic validation", () => {
+      const workflow = loadExample("codex-feature-development.json");
+      const result = validate(workflow);
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    });
+  });
+
   describe("JSON Schema validation", () => {
     it("rejects missing required fields", () => {
       const result = validate({});
@@ -74,7 +83,7 @@ describe("validate", () => {
       expect(result.valid).toBe(false);
     });
 
-    it("accepts all three runtime types", () => {
+    it("accepts claude-code, shell, and custom runtime types", () => {
       const result = validate({
         version: "1",
         name: "test",
@@ -97,6 +106,40 @@ describe("validate", () => {
             interactive: false,
             runtime: { type: "custom", adapter: "./my-adapter" },
             join: ["a", "b"],
+          },
+        },
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    });
+
+    it("accepts codex runtime type", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "codex", model: "o4-mini" },
+          },
+        },
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    });
+
+    it("accepts codex runtime with args and mcp_servers", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "codex", args: ["--verbose"], mcp_servers: ["mcp-server-1"] },
           },
         },
       });

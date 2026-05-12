@@ -688,8 +688,8 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       readJsonBody(req)
         .then((body): Promise<Record<string, unknown> | null> | null => {
           const { tool } = body as { tool?: string };
-          if (tool !== "claude" && tool !== "gemini") {
-            sendJson(res, 400, { error: "tool must be 'claude' or 'gemini'" });
+          if (tool !== "claude" && tool !== "gemini" && tool !== "codex") {
+            sendJson(res, 400, { error: "tool must be 'claude', 'gemini', or 'codex'" });
             return null;
           }
           return registry.sendCommand(repoId, {
@@ -704,7 +704,7 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
             sendJson(res, 400, { error: (r as { error?: string }).error });
           } else {
             const tool = (r as { jobTool?: string }).jobTool;
-            if (tool === "claude" || tool === "gemini") {
+            if (tool === "claude" || tool === "gemini" || tool === "codex") {
               registry.updateJobTool(repoId, tool);
             }
             sendJson(res, 200, { ok: true });

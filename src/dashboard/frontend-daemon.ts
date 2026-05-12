@@ -154,6 +154,10 @@ const IMAGE_MIME_EXT: Record<string, string> = {
 // PTY bridge proxy (connects to the primary engine's PTY bridge socket)
 // ---------------------------------------------------------------------------
 
+function isToolKind(v: unknown): v is ToolKind {
+  return v === "claude" || v === "gemini" || v === "codex";
+}
+
 interface PtyBridge {
   onChatData(cb: (chatId: string, chunk: Buffer) => void): void;
   onChatList(cb: (chats: Array<{ chatId: string; kind: string; tool: ToolKind }>) => void): void;
@@ -246,9 +250,9 @@ function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
             const b = Buffer.from(msg.bytes, "base64");
             if (chatDataCbs.length === 0) pendingChatData.push([msg.chatId, b]);
             else for (const cb of chatDataCbs) cb(msg.chatId, b);
-          } else if (msg.type === "chat_tool" && typeof msg.chatId === "string" && (msg.tool === "claude" || msg.tool === "gemini")) {
+          } else if (msg.type === "chat_tool" && typeof msg.chatId === "string" && isToolKind(msg.tool)) {
             for (const cb of chatToolCbs) cb(msg.chatId, msg.tool);
-          } else if (msg.type === "chat_created" && typeof msg.clientReqId === "string" && typeof msg.chatId === "string" && (msg.tool === "claude" || msg.tool === "gemini")) {
+          } else if (msg.type === "chat_created" && typeof msg.clientReqId === "string" && typeof msg.chatId === "string" && isToolKind(msg.tool)) {
             for (const cb of chatCreatedCbs) cb(msg.clientReqId, msg.chatId, msg.tool);
           } else if (msg.type === "chat_create_failed" && typeof msg.clientReqId === "string" && typeof msg.error === "string") {
             for (const cb of chatCreateFailedCbs) cb(msg.clientReqId, msg.error);
@@ -896,7 +900,7 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
         try { current.bridge.writeTo(chatId, Buffer.from(msg.bytes, "base64")); } catch { /* ignore */ }
       } else if (msg.type === "resize" && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {
         try { current.bridge.resizeTo(chatId, Math.max(1, msg.cols!), Math.max(1, msg.rows!)); } catch { /* ignore */ }
-      } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini") && chatId === "main") {
+      } else if (msg.type === "set_chat_tool" && isToolKind(msg.tool) && chatId === "main") {
         try { current.bridge.setChatTool(msg.tool); } catch { /* ignore */ }
       }
     });

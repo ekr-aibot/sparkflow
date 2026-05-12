@@ -435,54 +435,15 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     });
   }
 
-  /**
-   * Parses a result text string as a flat JSON object.
-   * Returns the parsed object, or null if no JSON object can be found.
-   *
-   * Fast path: the whole trimmed text parses as a JSON object.
-   * Fallback: scan for `{...}` blocks embedded in prose and parse the first
-   * one that yields a plain object. This tolerates preambles ("Here's my
-   * decision: {...}") and trailing prose ("{...}\n\nLet me know if..."),
-   * which models emit despite instructions to the contrary.
-   */
   extractJsonFromResult(resultText: string): Record<string, unknown> | null {
-    const trimmed = resultText.trim();
-    try {
-      const val = JSON.parse(trimmed);
-      if (typeof val === "object" && val !== null && !Array.isArray(val)) {
-        return val as Record<string, unknown>;
-      }
-    } catch { /* fall through */ }
-
-    for (let i = 0; i < trimmed.length; i++) {
-      if (trimmed[i] !== "{") continue;
-      const end = findMatchingBrace(trimmed, i);
-      if (end === -1) continue;
-      const slice = trimmed.slice(i, end + 1);
-      try {
-        const val = JSON.parse(slice);
-        if (typeof val === "object" && val !== null && !Array.isArray(val)) {
-          return val as Record<string, unknown>;
-        }
-      } catch { /* try next candidate */ }
-    }
-    return null;
+    return extractJsonFromResult(resultText);
   }
 
-  /**
-   * Checks whether the named gate output is strictly true.
-   * Returns success: true when it passes, or success: false with an error message when not.
-   */
   applySuccessGate(
     outputs: Record<string, unknown>,
     gateName: string,
   ): { success: boolean; error?: string } {
-    const gateValue = outputs[gateName];
-    if (gateValue === true) return { success: true };
-    return {
-      success: false,
-      error: `step gated on output \`${gateName}\` which was ${JSON.stringify(gateValue)}`,
-    };
+    return applySuccessGate(outputs, gateName);
   }
 
   /**
@@ -529,4 +490,48 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     }
     return false;
   }
+}
+
+/**
+ * Parses a result text string as a flat JSON object. Exported for reuse in other adapters.
+ * Fast path: whole trimmed text is a JSON object.
+ * Fallback: scan for `{...}` blocks embedded in prose (tolerates preambles and trailing text).
+ */
+export function extractJsonFromResult(resultText: string): Record<string, unknown> | null {
+  const trimmed = resultText.trim();
+  try {
+    const val = JSON.parse(trimmed);
+    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+      return val as Record<string, unknown>;
+    }
+  } catch { /* fall through */ }
+
+  for (let i = 0; i < trimmed.length; i++) {
+    if (trimmed[i] !== "{") continue;
+    const end = findMatchingBrace(trimmed, i);
+    if (end === -1) continue;
+    const slice = trimmed.slice(i, end + 1);
+    try {
+      const val = JSON.parse(slice);
+      if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+        return val as Record<string, unknown>;
+      }
+    } catch { /* try next candidate */ }
+  }
+  return null;
+}
+
+/**
+ * Checks whether the named gate output is strictly true. Exported for reuse in other adapters.
+ */
+export function applySuccessGate(
+  outputs: Record<string, unknown>,
+  gateName: string,
+): { success: boolean; error?: string } {
+  const gateValue = outputs[gateName];
+  if (gateValue === true) return { success: true };
+  return {
+    success: false,
+    error: `step gated on output \`${gateName}\` which was ${JSON.stringify(gateValue)}`,
+  };
 }

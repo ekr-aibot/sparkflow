@@ -12,11 +12,9 @@ import {
   isCodexTokenLimitError,
   codexUserMessage,
 } from "./codex-flags.js";
-import { ClaudeCodeAdapter } from "./claude-code.js";
+import { extractJsonFromResult, applySuccessGate } from "./claude-code.js";
 
 export class CodexAdapter implements RuntimeAdapter {
-  // Reuse the fence-tolerant JSON extractor and success gate from ClaudeCodeAdapter.
-  private readonly claudeHelper = new ClaudeCodeAdapter();
 
   async run(ctx: RuntimeContext): Promise<RuntimeResult> {
     const runtime = ctx.runtime as CodexRuntime;

@@ -212,7 +212,7 @@ export class CodexAdapter implements RuntimeAdapter {
         const outputs: Record<string, unknown> = {};
         const resultText = lastAssistantText || allAssistantText || stdout.trim();
         const parsedJson = resultText
-          ? this.claudeHelper.extractJsonFromResult(resultText)
+          ? extractJsonFromResult(resultText)
           : null;
 
         if (ctx.step.outputs) {
@@ -231,7 +231,7 @@ export class CodexAdapter implements RuntimeAdapter {
         // Success gate
         let gateError: string | undefined;
         if (success && ctx.step.success_output) {
-          const gate = this.claudeHelper.applySuccessGate(outputs, ctx.step.success_output);
+          const gate = applySuccessGate(outputs, ctx.step.success_output);
           if (!gate.success) {
             success = false;
             gateError = gate.error;
@@ -284,7 +284,7 @@ export class CodexAdapter implements RuntimeAdapter {
             !selfNudgeUsed &&
             lastAssistantText
           ) {
-            const parsedCurrent = this.claudeHelper.extractJsonFromResult(lastAssistantText);
+            const parsedCurrent = extractJsonFromResult(lastAssistantText);
             const gatePresent = parsedCurrent !== null && ctx.step.success_output in parsedCurrent;
             if (!gatePresent) {
               const declaredNames = ctx.step.outputs

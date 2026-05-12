@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock child_process before any imports that use it
 vi.mock("node:child_process", () => ({
@@ -13,7 +13,24 @@ import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "../../src/ru
 
 const mockExec = vi.mocked(execFileSync);
 
-// Extract the cwd string from an execFileSync options argument regardless of
+const silentLogger = { info: () => {}, error: () => {} };
+
+let prevLlm: string | undefined;
+let prevTrust: string | undefined;
+
+beforeEach(() => {
+  prevLlm = process.env.SPARKFLOW_LLM;
+  delete process.env.SPARKFLOW_LLM;
+  prevTrust = process.env.GEMINI_CLI_TRUST_WORKSPACE;
+  process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
+});
+
+afterEach(() => {
+  if (prevLlm === undefined) delete process.env.SPARKFLOW_LLM;
+  else process.env.SPARKFLOW_LLM = prevLlm;
+  if (prevTrust === undefined) delete process.env.GEMINI_CLI_TRUST_WORKSPACE;
+  else process.env.GEMINI_CLI_TRUST_WORKSPACE = prevTrust;
+});
 // whether it is a plain object or a full ExecFileSyncOptions (cwd: string | URL).
 function cwdOf(opts: unknown): string {
   if (!opts || typeof opts !== "object") return "";
@@ -22,8 +39,6 @@ function cwdOf(opts: unknown): string {
   if (typeof raw === "string") return raw;
   return "";
 }
-
-const silentLogger = { info: () => {}, error: () => {} };
 
 class MockAdapter implements RuntimeAdapter {
   constructor(private readonly result: RuntimeResult = { success: true, outputs: {} }) {}

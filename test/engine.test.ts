@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { WorkflowEngine } from "../src/engine/engine.js";
 import type { SparkflowWorkflow } from "../src/schema/types.js";
 import { NudgeQueue } from "../src/runtime/types.js";
@@ -30,6 +30,7 @@ function makeAdapters(
     ["shell", adapter],
     ["claude-code", adapter],
     ["custom", adapter],
+    ["gemini", adapter],
   ]);
 }
 
@@ -51,6 +52,16 @@ function makeWorkflow(overrides: Partial<SparkflowWorkflow> = {}): SparkflowWork
     ...overrides,
   };
 }
+
+// Ensure tests are robust against environment variables
+beforeEach(() => {
+  vi.stubEnv("SPARKFLOW_LLM", "");
+  vi.stubEnv("GEMINI_CLI_TRUST_WORKSPACE", "true");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("WorkflowEngine", () => {
   it("runs a single step workflow", async () => {
@@ -1362,8 +1373,11 @@ describe("WorkflowEngine.pushNudge", () => {
     const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
     const runPromise = engine.run();
 
-    // Wait briefly for the step to start executing
-    await new Promise((r) => setTimeout(r, 20));
+    // Wait for the step to start executing and capture the nudgeQueue
+    const start = Date.now();
+    while (!nudgeQueueRef && Date.now() - start < 2000) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
 
     // pushNudge while running — should push into the nudgeQueue
     const result = engine.pushNudge("start", "redirect!");

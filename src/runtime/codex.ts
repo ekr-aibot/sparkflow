@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, statSync, unlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
@@ -40,15 +40,15 @@ export class CodexAdapter implements RuntimeAdapter {
       ? ["exec", "resume", ctx.sessionId!]
       : ["exec"];
 
-    const extraArgs = buildCodexArgs(runtime, {});
-
     // Interactive step → write temp config with sparkflow MCP entry.
+    // Create the file first so buildCodexArgs can include --config-file alongside
+    // the other flags in the right order.
     let mcpConfigPath: string | undefined;
     if (ctx.interactive && ctx.ipcSocketPath) {
       mcpConfigPath = writeCodexMcpConfig(tmpDir, ctx.ipcSocketPath);
       tempFiles.push(mcpConfigPath);
-      extraArgs.push("--config-file", mcpConfigPath);
     }
+    const extraArgs = buildCodexArgs(runtime, { mcpConfigPath });
 
     // Build the prompt to send as first stdin message. On resume, the prompt
     // is the transition message only; the original prompt is already in the
@@ -177,7 +177,7 @@ export class CodexAdapter implements RuntimeAdapter {
         for (const f of tempFiles) {
           try { unlinkSync(f); } catch { /* ignore */ }
         }
-        try { import("node:fs").then(m => m.rmSync(tmpDir, { recursive: true, force: true })).catch(() => {}); } catch { /* ignore */ }
+        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
         // Unblock turn loop if waiting.
         turnEnded = true;

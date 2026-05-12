@@ -184,11 +184,6 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Names of MCP servers to enable for this session."
-        },
-        "sandbox": {
-          "type": "string",
-          "enum": ["read-only", "workspace-write", "danger-full-access"],
-          "description": "Sandbox level. Defaults to \"danger-full-access\"."
         }
       }
     },

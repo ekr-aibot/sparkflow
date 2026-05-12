@@ -112,8 +112,6 @@ export interface CodexRuntime {
   args?: string[];
   /** Names of MCP servers to enable for this session. */
   mcp_servers?: string[];
-  /** Sandbox level. Defaults to "danger-full-access". */
-  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
 }
 
 export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime | WorkflowRuntime | GeminiRuntime | CodexRuntime;

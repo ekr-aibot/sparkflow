@@ -13,6 +13,7 @@ import { PrWatcherAdapter } from "../runtime/pr-watcher.js";
 import { PrCreatorAdapter } from "../runtime/pr-creator.js";
 import { WorkflowAdapter } from "../runtime/workflow.js";
 import { GeminiAdapter } from "../runtime/gemini.js";
+import { CodexAdapter } from "../runtime/codex.js";
 import { resolveTemplate, resolvePrompt } from "./template.js";
 import { WorktreeManager } from "./worktree.js";
 import { IpcServer, type IpcMessage } from "../mcp/ipc.js";
@@ -139,6 +140,7 @@ export class WorkflowEngine {
       ["pr-creator", new PrCreatorAdapter()],
       ["workflow", new WorkflowAdapter()],
       ["gemini", new GeminiAdapter()],
+      ["codex", new CodexAdapter()],
     ]);
 
     // Initialize step statuses
@@ -1065,8 +1067,11 @@ function findSuccessAncestors(workflow: SparkflowWorkflow, targetStep: string): 
  */
 function applyLlmOverride(runtime: Runtime): Runtime {
   const override = process.env.SPARKFLOW_LLM;
-  if (override !== "claude" && override !== "gemini") return runtime;
-  if (override === "claude" && runtime.type === "gemini") return { type: "claude-code" };
-  if (override === "gemini" && runtime.type === "claude-code") return { type: "gemini" };
+  if (override !== "claude" && override !== "gemini" && override !== "codex") return runtime;
+  const isLlmStep = runtime.type === "claude-code" || runtime.type === "gemini" || runtime.type === "codex";
+  if (!isLlmStep) return runtime;
+  if (override === "claude") return { type: "claude-code" };
+  if (override === "gemini") return { type: "gemini" };
+  if (override === "codex") return { type: "codex" };
   return runtime;
 }

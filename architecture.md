@@ -36,6 +36,7 @@ Executes workflow steps, resolves worktrees, injects env vars. Passes `config` t
 ### Runtimes
 - `claude-code` — spawns `claude` CLI with a prompt, supports nudges and session resumption
 - `gemini` — spawns `gemini` CLI
+- `codex` — spawns OpenAI `codex exec --json` for NDJSON streaming; session ID captured from events for resume; multi-turn nudge via `user_input` events on stdin; MCP wired via a temp `--config-file` TOML; helper code in `src/runtime/codex-flags.ts`
 - `shell` — runs arbitrary shell commands; applies `resolveTemplate` to `command` and each `arg` before spawning, so `${config.X}` and `${steps.X.output.Y}` work in shell args; fails fast with a clear error if a config path resolves to missing
 - `pr-watcher` — polls GitHub for CI results and review activity
 - `workflow` — dispatches child workflows (supports `foreach`)
@@ -86,6 +87,17 @@ Each `nudge_job` call is tracked end-to-end through three phases: **received →
 **MCP tool blocking:** `nudge_job` in the IPC handler awaits `jobManager.waitForNudgeAck(nudgeId, timeoutMs)` before returning, so the MCP tool call blocks until the LLM has responded. On timeout it returns `{ok:false, status:"pending", nudgeId}`.
 
 **Status pane** shows `nudge:pending(Xs)` while in flight and `nudge:ack Xs (Y turns)` for ~5 s after ack.
+
+### Codex Chat Surface (`src/tui/codex-chat.ts`)
+
+The `codex` chat tool uses a different configuration mechanism than Claude and Gemini:
+- **MCP:** installs a marker-bounded `[mcp_servers.sparkflow]` block in `~/.codex/config.toml` on chat start, removed on exit.
+- **System prompt:** merges a marker-bounded block into `AGENTS.md` in the project cwd (Codex's equivalent of `CLAUDE.md`).
+- **Slash commands:** writes `~/.codex/prompts/sf-*.md` files; cleaned up on exit.
+
+`buildChatSpawn("codex")` and `buildBareChatSpawn("codex")` in `src/tui/chat-tool.ts` delegate to these helpers.
+
+`SPARKFLOW_LLM=codex` swaps `claude-code` and `gemini` steps to `codex` (same mechanics as the existing gemini swap). `ToolKind` in `src/dashboard/ipc-protocol.ts` includes `"codex"` alongside `"claude"` and `"gemini"`.
 
 ### Quota / Rate-Limit Handling
 

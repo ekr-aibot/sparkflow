@@ -55,11 +55,11 @@ function usage(): never {
   console.log(`Usage: sparkflow [options]
 
 Options:
-  --chat-tool <name>     Chat tool: "claude" (default) or "gemini"
+  --chat-tool <name>     Chat tool: "claude" (default), "gemini", or "codex"
   --chat-command <cmd>   Chat tool binary override. Default: matches --chat-tool
-                         (claude → "claude", gemini → "npx"). When gemini runs
-                         via npx, the package spec @google/gemini-cli@latest is
-                         injected automatically.
+                         (claude → "claude", gemini → "npx", codex → "codex").
+                         When gemini runs via npx, the package spec
+                         @google/gemini-cli@latest is injected automatically.
   --chat-args <args>     Extra args for chat tool (comma-separated)
   --cwd <dir>            Working directory (default: current directory)
   --workflow <path>      Default workflow for /project:sf-dispatch (default: none)
@@ -75,7 +75,7 @@ Options:
 }
 
 function parseArgs(argv: string[]): {
-  chatTool: "claude" | "gemini";
+  chatTool: "claude" | "gemini" | "codex";
   chatCommand: string;
   chatCommandSet: boolean;
   chatArgs: string[];
@@ -86,7 +86,7 @@ function parseArgs(argv: string[]): {
   web: boolean;
   port: number;
 } {
-  let chatTool: "claude" | "gemini" = "claude";
+  let chatTool: "claude" | "gemini" | "codex" = "claude";
   let chatCommand = "";
   let chatCommandSet = false;
   let chatArgs: string[] = [];
@@ -107,8 +107,8 @@ function parseArgs(argv: string[]): {
         break;
       case "--chat-tool": {
         const v = argv[++i];
-        if (v !== "claude" && v !== "gemini") {
-          console.error(`Error: --chat-tool must be "claude" or "gemini", got: ${v}`);
+        if (v !== "claude" && v !== "gemini" && v !== "codex") {
+          console.error(`Error: --chat-tool must be "claude", "gemini", or "codex", got: ${v}`);
           process.exit(1);
         }
         chatTool = v;
@@ -177,7 +177,9 @@ function parseArgs(argv: string[]): {
 
   // Default chat command based on the chosen chat tool.
   if (!chatCommandSet) {
-    chatCommand = chatTool === "gemini" ? "npx" : "claude";
+    if (chatTool === "gemini") chatCommand = "npx";
+    else if (chatTool === "codex") chatCommand = "codex";
+    else chatCommand = "claude";
   }
 
   return { chatTool, chatCommand, chatCommandSet, chatArgs, cwd, workflow, statusLines, dev, web, port };

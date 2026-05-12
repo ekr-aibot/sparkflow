@@ -15,7 +15,7 @@ import type { JobInfo, NudgeRecord } from "../tui/types.js";
 // ---------------------------------------------------------------------------
 
 /** LLM backend in use for chat and for claude-code job steps. */
-export type ToolKind = "claude" | "gemini";
+export type ToolKind = "claude" | "gemini" | "codex";
 
 /** First message from the engine. Binds the repoId for this connection. */
 export interface AttachMessage {

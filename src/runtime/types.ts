@@ -75,6 +75,8 @@ export interface RuntimeResult {
   tokenLimitHit?: boolean;
   /** True when the run failed due to hitting a quota/rate limit, signalling the engine to wait and retry. */
   quotaHit?: boolean;
+  /** Seconds to wait before retrying after a quota hit, parsed from the error message. When absent, the engine falls back to exponential backoff. */
+  quotaResetSeconds?: number;
 }
 
 export interface RuntimeAdapter {

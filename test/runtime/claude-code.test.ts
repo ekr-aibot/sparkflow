@@ -145,6 +145,47 @@ describe("ClaudeCodeAdapter", () => {
     });
   });
 
+  describe("extractQuotaResetSeconds", () => {
+    it("parses retry after N seconds", () => {
+      expect(adapter.extractQuotaResetSeconds("Rate limit exceeded. Retry after 30 seconds.")).toBe(30);
+    });
+
+    it("parses retry after N minutes", () => {
+      expect(adapter.extractQuotaResetSeconds("Too many requests. Retry after 5 minutes.")).toBe(300);
+    });
+
+    it("returns null for messages with no reset info", () => {
+      expect(adapter.extractQuotaResetSeconds("You've hit your limit")).toBeNull();
+    });
+
+    it("returns null for empty string", () => {
+      expect(adapter.extractQuotaResetSeconds("")).toBeNull();
+    });
+
+    it("parses resets time with timezone", () => {
+      // The reset time is in the future: we fake the current time to 10:00am UTC
+      // and check that "resets 11:30am (UTC)" returns roughly 5400s.
+      // We test the timezone-aware path by picking UTC so there's no offset ambiguity.
+      const nowUTC = new Date("2024-01-15T10:00:00Z");
+      vi.setSystemTime(nowUTC);
+      const seconds = adapter.extractQuotaResetSeconds("You've hit your limit · resets 11:30am (UTC)");
+      // Should be ~5400s (1h30m). Allow ±5s for timing.
+      expect(seconds).toBeGreaterThanOrEqual(5395);
+      expect(seconds).toBeLessThanOrEqual(5405);
+      vi.useRealTimers();
+    });
+
+    it("wraps to next day when reset time is in the past", () => {
+      // Current time 11:00am UTC, reset at 10:00am UTC → should be ~23h from now
+      const nowUTC = new Date("2024-01-15T11:00:00Z");
+      vi.setSystemTime(nowUTC);
+      const seconds = adapter.extractQuotaResetSeconds("resets 10:00am (UTC)");
+      expect(seconds).toBeGreaterThanOrEqual(82795);
+      expect(seconds).toBeLessThanOrEqual(82805);
+      vi.useRealTimers();
+    });
+  });
+
   describe("isTokenLimitError", () => {
     it("detects error_max_turns subtype", () => {
       const parsed = { is_error: true, subtype: "error_max_turns", result: "" };

@@ -271,6 +271,11 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         const parsed = resultEvent;
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
         const quotaHit = !success && !tokenLimitHit && this.isQuotaError(parsed, stderr, stdout);
+        const quotaResetSeconds = quotaHit
+          ? this.extractQuotaResetSeconds(
+              [String(parsed?.result ?? ""), stderr, stdout].join("\n")
+            )
+          : undefined;
 
         // Extract declared outputs from the result event regardless of whether
         // the step succeeded or failed. success_output gating is a routing
@@ -325,6 +330,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           sessionId,
           tokenLimitHit,
           quotaHit,
+          quotaResetSeconds: quotaResetSeconds ?? undefined,
         });
       });
 
@@ -506,6 +512,68 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (QUOTA_RE.test(stderr)) return true;
     if (QUOTA_RE.test(stdout)) return true;
     return false;
+  }
+
+  /**
+   * Parses the quota reset delay from a Claude error message.
+   * Handles:
+   *   - "retry after N seconds" / "retry after N minutes"
+   *   - "resets HH:MMam (America/Los_Angeles)" — Claude dev-plan limit message
+   * Returns seconds to wait, or null if no reset time is found.
+   */
+  extractQuotaResetSeconds(text: string): number | null {
+    // "retry after N seconds"
+    const secMatch = text.match(/retry after (\d+) seconds?/i);
+    if (secMatch) return parseInt(secMatch[1], 10);
+
+    // "retry after N minutes"
+    const minMatch = text.match(/retry after (\d+) minutes?/i);
+    if (minMatch) return parseInt(minMatch[1], 10) * 60;
+
+    // "resets H:MMam (Timezone)" or "resets H:MMpm (Timezone)"
+    const resetMatch = text.match(/resets\s+(\d{1,2}:\d{2}(?:am|pm))\s*(?:\(([^)]+)\))?/i);
+    if (resetMatch) {
+      const timeStr = resetMatch[1];
+      const tz = resetMatch[2] ?? "UTC";
+      return this._secondsUntilTimeInTZ(timeStr, tz);
+    }
+
+    return null;
+  }
+
+  private _secondsUntilTimeInTZ(timeStr: string, tz: string): number | null {
+    const m = timeStr.match(/^(\d{1,2}):(\d{2})(am|pm)$/i);
+    if (!m) return null;
+
+    let hours = parseInt(m[1], 10);
+    const minutes = parseInt(m[2], 10);
+    const ampm = m[3].toLowerCase();
+    if (ampm === "pm" && hours !== 12) hours += 12;
+    if (ampm === "am" && hours === 12) hours = 0;
+
+    try {
+      const now = new Date();
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour: "numeric",
+        minute: "numeric",
+        second: "numeric",
+        hour12: false,
+      }).formatToParts(now);
+
+      const get = (type: string) => parseInt(parts.find((p) => p.type === type)!.value, 10);
+      const tzHour = get("hour");
+      const tzMinute = get("minute");
+      const tzSecond = get("second");
+
+      const currentSec = tzHour * 3600 + tzMinute * 60 + tzSecond;
+      const targetSec = hours * 3600 + minutes * 60;
+      let diffSec = targetSec - currentSec;
+      if (diffSec <= 0) diffSec += 24 * 3600;
+      return diffSec;
+    } catch {
+      return null;
+    }
   }
 
   /**

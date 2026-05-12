@@ -704,7 +704,7 @@ export class WorkflowEngine {
           }
         }
         if (result.quotaHit) {
-          await this.waitForQuotaReset(stepId);
+          await this.waitForQuotaReset(stepId, result.quotaResetSeconds);
           status.state = "running";
           await this.executeStep(stepId, message);
           return;
@@ -874,23 +874,33 @@ export class WorkflowEngine {
 
   private static readonly QUOTA_BACKOFF_SECONDS = [60, 120, 300, 600, 1800, 3600];
 
-  private async waitForQuotaReset(stepId: string): Promise<void> {
+  private async waitForQuotaReset(stepId: string, resetSeconds?: number): Promise<void> {
     const status = this.stepStatuses.get(stepId)!;
     status.quotaWaitAttempts++;
-    const backoffIdx = Math.min(
-      status.quotaWaitAttempts - 1,
-      WorkflowEngine.QUOTA_BACKOFF_SECONDS.length - 1
-    );
-    const backoff = WorkflowEngine.QUOTA_BACKOFF_SECONDS[backoffIdx];
-    this.logger.info(
-      `[${stepId}] quota limit hit — waiting ${backoff}s before retry (attempt ${status.quotaWaitAttempts})`
-    );
-    if (this.statusJson) {
-      process.stderr.write(
-        JSON.stringify({ type: "quota_wait", step: stepId, wait_seconds: backoff, attempt: status.quotaWaitAttempts }) + "\n"
+
+    let waitSeconds: number;
+    if (resetSeconds !== undefined && resetSeconds > 0) {
+      waitSeconds = resetSeconds;
+      this.logger.info(
+        `[${stepId}] quota limit hit — waiting ${waitSeconds}s until reset (attempt ${status.quotaWaitAttempts})`
+      );
+    } else {
+      const backoffIdx = Math.min(
+        status.quotaWaitAttempts - 1,
+        WorkflowEngine.QUOTA_BACKOFF_SECONDS.length - 1
+      );
+      waitSeconds = WorkflowEngine.QUOTA_BACKOFF_SECONDS[backoffIdx];
+      this.logger.info(
+        `[${stepId}] quota limit hit — waiting ${waitSeconds}s before retry (attempt ${status.quotaWaitAttempts})`
       );
     }
-    await this.sleep(backoff * 1000);
+
+    if (this.statusJson) {
+      process.stderr.write(
+        JSON.stringify({ type: "quota_wait", step: stepId, wait_seconds: waitSeconds, attempt: status.quotaWaitAttempts }) + "\n"
+      );
+    }
+    await this.sleep(waitSeconds * 1000);
   }
 
   private static readonly MAX_TOKEN_LIMIT_RESUMES = 10;

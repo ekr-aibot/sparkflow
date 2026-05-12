@@ -121,9 +121,13 @@ Interactive CLI interview that runs before the dashboard launches when `.sparkfl
 ### Worktree Manager (`src/engine/worktree.ts`)
 Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout. Auto-generated branch names for `isolated` mode include a random 8-hex suffix (`sparkflow/<stepId>-<runId>-<rand>`).
 
-**Isolated worktree persistence**: `isolated` worktrees persist for the lifetime of the workflow run. `resolve(stepId, …)` caches the path on first call; subsequent calls for the same `stepId` return the cached path immediately without touching disk. This means retries via `on_failure` resume the same branch and see all prior commits. Cleanup (`cleanupRunDir`) removes them at workflow end.
+**Isolated worktree persistence**: `isolated` worktrees persist for the lifetime of a single step invocation. `resolve(stepId, …)` caches the path on first call; subsequent calls for the same `stepId` return the cached path immediately without touching disk. This means failure-edge retries resume the same branch and see all prior commits.
+
+**`invalidate(stepId)`**: Removes the cached worktree (best-effort `git worktree remove --force`) and deletes the cache entry so the next `resolve()` allocates a fresh worktree with a new random branch suffix. Called by the engine when a step is re-entered after success (new loop iteration). `wasEverRegistered(path)` returns true for any path that was ever allocated by `resolve()`, even after invalidation; used to attach diagnostic hints to "cwd does not exist" adapter errors.
 
 **`fork_from`**: A `fork` worktree may set `fork_from: <stepId>` to use the HEAD of another step's `isolated` worktree as its base commit. The engine calls `worktreeManager.getPath(fork_from)` and runs `git rev-parse HEAD` there on each invocation, so re-runs of the fork step automatically see the latest commits from the source step. Throws a clear `Error` if the source step's worktree has not been resolved yet (wrong transition order). The engine skips the per-success cleanup for `isolated` worktrees so they remain accessible to downstream `fork_from` steps.
+
+**Re-entry after success = new invocation**: When `triggerStep` fires for a step whose current state is `"succeeded"`, the engine treats it as a completely fresh invocation rather than a retry. It resets `retryCount`, `tokenLimitResumes`, `sessionId`, `lastError`, `inPlaceAttempt`, and `outputs`, and calls `worktreeManager.invalidate(stepId)` for `isolated` worktrees. This makes multi-task loops (e.g. `auto-develop`) correct: each iteration gets a fresh claude session and a fresh branch, while genuine failure-edge retries (state `"failed"` → re-trigger) still keep the session and worktree intact.
 
 ### Worktree Confinement Guardrails
 Two complementary mechanisms prevent agents from accidentally committing to the parent repo instead of their isolated worktree:

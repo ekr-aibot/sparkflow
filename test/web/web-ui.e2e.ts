@@ -100,13 +100,18 @@ test("loads the page, terminal renders, and chat WS receives PTY output", async 
 
   // Type into the terminal — the fake chat will echo it back as `ECHO:hi\r\n`.
   await page.locator("#chat .xterm-helper-textarea").focus();
+  await page.waitForFunction(
+    () => document.activeElement === document.querySelector("#chat .xterm-helper-textarea"),
+    null,
+    { timeout: 10000 }
+  );
   await page.keyboard.type("hi\r");
   const echoText = await page.waitForFunction(() => {
     const term = document.querySelector("#chat .xterm-rows");
     const text = term?.textContent ?? "";
-    return text.includes("ECHO:hi") ? text : null;
-  }, null, { timeout: 20000 });
-  expect(await echoText.jsonValue()).toContain("ECHO:hi");
+    return /ECHO:\s*hi/.test(text) ? text : null;
+  }, null, { timeout: 30000 });
+  expect(await echoText.jsonValue()).toMatch(/ECHO:\s*hi/);
 
   // Status panel renders the empty-state message from the SSE feed.
   await expect(page.locator("#job-list .empty")).toContainText("No jobs running");

@@ -39,11 +39,23 @@ function makeWorkflow(overrides: Partial<SparkflowWorkflow> = {}): SparkflowWork
   };
 }
 
-/** Direct-call the private handleStatusLine on a JobManager, same as LogTailer does. */
+// Direct-call the private handleStatusLine on a JobManager, same as LogTailer does.
 function injectLogLine(manager: JobManager, jobId: string, event: object): void {
   (manager as unknown as { handleStatusLine: (id: string, line: string) => void })
     .handleStatusLine(jobId, JSON.stringify(event));
 }
+
+let prevLlm: string | undefined;
+
+beforeEach(() => {
+  prevLlm = process.env.SPARKFLOW_LLM;
+  delete process.env.SPARKFLOW_LLM;
+});
+
+afterEach(() => {
+  if (prevLlm === undefined) delete process.env.SPARKFLOW_LLM;
+  else process.env.SPARKFLOW_LLM = prevLlm;
+});
 
 // ---------------------------------------------------------------------------
 // 1. NudgeQueue — updated API stores {id, message} items

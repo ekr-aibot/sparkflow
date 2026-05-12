@@ -6,6 +6,23 @@ import { execSync } from "node:child_process";
 import { WorkflowEngine } from "../../src/engine/engine.js";
 import type { SparkflowWorkflow } from "../../src/schema/types.js";
 
+let prevLlm: string | undefined;
+let prevTrust: string | undefined;
+
+beforeEach(() => {
+  prevLlm = process.env.SPARKFLOW_LLM;
+  delete process.env.SPARKFLOW_LLM;
+  prevTrust = process.env.GEMINI_CLI_TRUST_WORKSPACE;
+  process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
+});
+
+afterEach(() => {
+  if (prevLlm === undefined) delete process.env.SPARKFLOW_LLM;
+  else process.env.SPARKFLOW_LLM = prevLlm;
+  if (prevTrust === undefined) delete process.env.GEMINI_CLI_TRUST_WORKSPACE;
+  else process.env.GEMINI_CLI_TRUST_WORKSPACE = prevTrust;
+});
+
 // Skip if claude is not available
 let hasClaude = false;
 try {

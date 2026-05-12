@@ -378,8 +378,27 @@ export class WorkflowEngine {
       }
     }
 
+    // Re-entry after success = new logical invocation (e.g. the next iteration of
+    // an auto-develop loop). Reset session and worktree so the step starts fresh
+    // rather than resuming the prior run's claude session or reusing its branch.
+    if (status.state === "succeeded") {
+      status.retryCount = 0;
+      status.tokenLimitResumes = 0;
+      status.sessionId = undefined;
+      status.lastError = undefined;
+      status.inPlaceAttempt = 0;
+      status.outputs = {};
+      const effectiveMode = (step.worktree ?? this.workflow.defaults?.worktree)?.mode;
+      if (effectiveMode === "isolated") {
+        this.worktreeManager.invalidate(stepId);
+      }
+      this.logger.info(`[${stepId}] new invocation (prior run succeeded; resetting state)`);
+    }
+
     // Increment retry count only on re-entry via a failure edge.
-    if (viaFailure && status.state !== "pending" && status.state !== "waiting") {
+    // Exclude "succeeded" because the reset above already cleared retryCount;
+    // incrementing it again here would make the new invocation appear as a retry.
+    if (viaFailure && status.state !== "pending" && status.state !== "waiting" && status.state !== "succeeded") {
       status.retryCount++;
     }
 
@@ -668,6 +687,21 @@ export class WorkflowEngine {
           this.logger.error(`[${stepId}] worktree escape detected: ${escapeMsg}`);
           result = { success: false, outputs: result.outputs, error: escapeMsg };
         }
+      }
+
+      // Append a diagnostic hint when the adapter reports that cwd is gone and
+      // the path was a registered isolated worktree from an earlier iteration.
+      // This surfaces the "worktree was removed between loop iterations" failure
+      // mode clearly in logs rather than as a cryptic filesystem error.
+      if (!result.success &&
+          result.error?.startsWith("cwd does not exist or is not a directory:") &&
+          this.worktreeManager.wasEverRegistered(cwd)) {
+        result = {
+          ...result,
+          error: result.error +
+            " (was a registered isolated worktree from earlier in this run" +
+            " — did the agent or a prior step remove it?)",
+        };
       }
 
       // Remember the session id whether the step succeeded or failed —

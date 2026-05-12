@@ -767,13 +767,14 @@ describe("WorkflowEngine", () => {
       expect(reviewerRuns[1].sessionId).toBeUndefined();
       expect(reviewerRuns[1].resume).toBe(false);
 
-      // The author step, in contrast, IS re-entered via on_failure — so after
-      // its first run it should resume its prior session on the retry.
+      // The author step is re-entered via on_failure from gate, but author was
+      // in state "succeeded" at that point. A "succeeded → re-triggered" re-entry
+      // is a new loop iteration, so author must also start fresh (no session resume).
       const authorRuns = invocations.filter((i) => i.stepId === "author");
       expect(authorRuns.length).toBeGreaterThanOrEqual(2);
       expect(authorRuns[0].resume).toBe(false);
-      expect(authorRuns[1].resume).toBe(true);
-      expect(authorRuns[1].sessionId).toBe("session-author-1");
+      expect(authorRuns[1].resume).toBe(false);
+      expect(authorRuns[1].sessionId).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.SPARKFLOW_LLM;
       else process.env.SPARKFLOW_LLM = prev;

@@ -10,6 +10,8 @@ export class WorktreeManager {
   private repoRoot: string;
   private runId: string;
   private worktrees = new Map<string, string>();
+  /** All paths ever registered via resolve(), even after invalidation or cleanup. */
+  private everRegistered = new Set<string>();
 
   constructor(repoRoot: string, runId: string) {
     this.repoRoot = repoRoot;
@@ -59,7 +61,41 @@ export class WorktreeManager {
     }
 
     this.worktrees.set(stepId, worktreePath);
+    this.everRegistered.add(worktreePath);
     return worktreePath;
+  }
+
+  /**
+   * Remove a cached isolated worktree so the next resolve() allocates a fresh
+   * one. Used when a step is re-entered after success (new loop iteration).
+   * Best-effort: a failed git worktree remove is logged at debug level and the
+   * cache entry is still cleared.
+   */
+  invalidate(stepId: string): void {
+    const worktreePath = this.worktrees.get(stepId);
+    if (!worktreePath) return;
+
+    try {
+      execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
+        cwd: this.repoRoot,
+        stdio: "pipe",
+      });
+    } catch {
+      // Best-effort; prepareWorktreePath will handle any leftovers on re-resolve
+    }
+
+    this.worktrees.delete(stepId);
+    // everRegistered is intentionally NOT cleared: wasEverRegistered(path) must
+    // remain true so the diagnostic hint fires if the cwd-not-exist error shows up.
+  }
+
+  /**
+   * Returns true if this path was ever successfully allocated by resolve(),
+   * even if it was subsequently cleaned up or invalidated.
+   * Used to attach a diagnostic hint to "cwd does not exist" adapter errors.
+   */
+  wasEverRegistered(path: string): boolean {
+    return this.everRegistered.has(path);
   }
 
   cleanup(stepId: string): void {

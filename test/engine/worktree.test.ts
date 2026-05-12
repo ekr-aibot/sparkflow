@@ -151,6 +151,110 @@ describe("WorktreeManager", () => {
     });
   });
 
+  describe("invalidate", () => {
+    it("removes the cache entry so subsequent resolve creates a new worktree", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+
+      const path1 = manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      expect(manager.hasWorktree("develop")).toBe(true);
+
+      vi.clearAllMocks();
+      mockExec.mockReturnValue(Buffer.from(""));
+
+      manager.invalidate("develop");
+      expect(manager.hasWorktree("develop")).toBe(false);
+
+      // After invalidation, resolve should create a brand-new worktree
+      const path2 = manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+
+      // Same physical path (same runId/stepId) but a new git worktree add was called
+      expect(path2).toBe(path1);
+      const addCalls = mockExec.mock.calls.filter(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      );
+      expect(addCalls).toHaveLength(1);
+    });
+
+    it("is a no-op when the stepId has no cached worktree", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+      expect(() => manager.invalidate("develop")).not.toThrow();
+      expect(mockExec).not.toHaveBeenCalled();
+    });
+
+    it("still clears the cache even when git worktree remove fails", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+      manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+
+      vi.clearAllMocks();
+      mockExec.mockImplementation(() => { throw new Error("not a worktree"); });
+
+      manager.invalidate("develop");
+      expect(manager.hasWorktree("develop")).toBe(false);
+    });
+
+    it("allocates a fresh branch name on re-resolve after invalidation", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+
+      manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      const firstAddCall = mockExec.mock.calls.find(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      )!;
+      const branch1 = (firstAddCall[1] as string[])[(firstAddCall[1] as string[]).indexOf("-b") + 1];
+
+      vi.clearAllMocks();
+      mockExec.mockReturnValue(Buffer.from(""));
+
+      manager.invalidate("develop");
+      manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+
+      const secondAddCall = mockExec.mock.calls.find(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      )!;
+      const branch2 = (secondAddCall[1] as string[])[(secondAddCall[1] as string[]).indexOf("-b") + 1];
+
+      // Both branches match the naming pattern but have different random suffixes
+      expect(branch1).toMatch(/^sparkflow\/develop-abc12345-[0-9a-f]{8}$/);
+      expect(branch2).toMatch(/^sparkflow\/develop-abc12345-[0-9a-f]{8}$/);
+      // The random suffix should differ (statistically impossible to collide on 8-hex)
+      expect(branch1).not.toBe(branch2);
+    });
+  });
+
+  describe("wasEverRegistered", () => {
+    it("returns false for a path that was never resolved", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+      expect(manager.wasEverRegistered("/repo/.sparkflow-worktrees/abc12345/develop")).toBe(false);
+    });
+
+    it("returns true after resolve", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+      const path = manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      expect(manager.wasEverRegistered(path)).toBe(true);
+    });
+
+    it("remains true after cleanup", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+      const path = manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      manager.cleanup("develop");
+      expect(manager.wasEverRegistered(path)).toBe(true);
+    });
+
+    it("remains true after invalidate", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+      vi.clearAllMocks();
+      mockExec.mockReturnValue(Buffer.from(""));
+      const path = manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      manager.invalidate("develop");
+      expect(manager.wasEverRegistered(path)).toBe(true);
+    });
+
+    it("returns false for shared-mode steps (no worktree allocated)", () => {
+      const manager = new WorktreeManager("/repo", "abc12345");
+      manager.resolve("develop", makeSharedStep(), makeWorkflow());
+      expect(manager.wasEverRegistered("/repo")).toBe(false);
+    });
+  });
+
   describe("isolated mode branch naming", () => {
     it("uses sparkflow/<stepId>-<runId>-<rand> as the default branch name", () => {
       const manager = new WorktreeManager("/repo", "abcd1234");

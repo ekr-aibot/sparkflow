@@ -383,5 +383,89 @@ describe("validate", () => {
       });
       expect(result.valid).toBe(true);
     });
+
+    it("errors when fork_from is set on a non-fork worktree mode", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            worktree: { mode: "isolated", fork_from: "a" },
+          },
+        },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ message: expect.stringContaining("fork_from") })
+      );
+    });
+
+    it("errors when fork_from references a non-existent step", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            worktree: { mode: "fork", fork_from: "ghost" },
+          },
+        },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ message: expect.stringContaining("ghost") })
+      );
+    });
+
+    it("accepts fork_from pointing at an existing step with mode fork", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        steps: {
+          a: {
+            name: "A",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            worktree: { mode: "isolated" },
+            on_success: [{ step: "b" }],
+          },
+          b: {
+            name: "B",
+            interactive: false,
+            runtime: { type: "shell", command: "echo" },
+            worktree: { mode: "fork", fork_from: "a" },
+          },
+        },
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.valid).toBe(true);
+    });
+
+    it("errors when defaults.worktree has fork_from on non-fork mode", () => {
+      const result = validate({
+        version: "1",
+        name: "test",
+        entry: "a",
+        defaults: {
+          runtime: { type: "shell", command: "echo" },
+          worktree: { mode: "isolated", fork_from: "a" },
+        },
+        steps: {
+          a: { name: "A", interactive: false },
+        },
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ message: expect.stringContaining("fork_from") })
+      );
+    });
   });
 });

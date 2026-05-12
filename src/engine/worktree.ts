@@ -27,6 +27,12 @@ export class WorktreeManager {
       return this.repoRoot;
     }
 
+    // Isolated worktrees persist for the lifetime of a run.
+    // Return the cached path on re-entry instead of recreating the worktree.
+    if (worktreeConfig.mode === "isolated" && this.worktrees.has(stepId)) {
+      return this.worktrees.get(stepId)!;
+    }
+
     const worktreePath = resolve(this.repoRoot, WORKTREE_DIR, this.runId, stepId);
     this.prepareWorktreePath(worktreePath);
 
@@ -74,6 +80,10 @@ export class WorktreeManager {
 
   hasWorktree(stepId: string): boolean {
     return this.worktrees.has(stepId);
+  }
+
+  getPath(stepId: string): string | undefined {
+    return this.worktrees.get(stepId);
   }
 
   cleanupRunDir(): void {

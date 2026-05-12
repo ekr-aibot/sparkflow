@@ -311,11 +311,16 @@
         "mode": {
           "type": "string",
           "enum": ["shared", "fork", "isolated"],
-          "description": "\"shared\": main worktree. \"fork\": new worktree, detached HEAD. \"isolated\": new worktree, new branch."
+          "description": "\"shared\": main worktree. \"fork\": new worktree, detached HEAD. \"isolated\": new worktree, new branch. Isolated worktrees persist for the lifetime of the workflow run."
         },
         "branch": {
           "type": "string",
           "description": "Branch name for isolated worktrees."
+        },
+        "fork_from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Step ID whose worktree HEAD is used as the base commit for this fork worktree. Only valid when mode is \"fork\"."
         }
       }
     },

@@ -119,7 +119,11 @@ Interactive CLI interview that runs before the dashboard launches when `.sparkfl
 **Workflow listing:** Concatenates `.sparkflow/workflows/` (project) and `~/.sparkflow/flows/` (user) with project shadowing user on name conflicts. Aborts with an error if both are empty. The default-workflow select only shows workflows with `"kind": "main"` in their JSON; the monitors checkbox only shows workflows with `"kind": "monitor"`. Workflows with `"kind": "helper"` are excluded from both — they are invocation-only and must not be auto-started without inputs.
 
 ### Worktree Manager (`src/engine/worktree.ts`)
-Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout. Auto-generated branch names for `isolated` mode include a random 8-hex suffix (`sparkflow/<stepId>-<runId>-<rand>`) so that retrying a failed step in the same run creates a fresh branch rather than colliding with the previous attempt's branch (which persists after `git worktree remove`).
+Creates isolated git worktrees per step or per run. Mode `isolated` creates a named branch (for PRs); mode `fork` creates a detached HEAD checkout. Auto-generated branch names for `isolated` mode include a random 8-hex suffix (`sparkflow/<stepId>-<runId>-<rand>`).
+
+**Isolated worktree persistence**: `isolated` worktrees persist for the lifetime of the workflow run. `resolve(stepId, …)` caches the path on first call; subsequent calls for the same `stepId` return the cached path immediately without touching disk. This means retries via `on_failure` resume the same branch and see all prior commits. Cleanup (`cleanupRunDir`) removes them at workflow end.
+
+**`fork_from`**: A `fork` worktree may set `fork_from: <stepId>` to use the HEAD of another step's `isolated` worktree as its base commit. The engine calls `worktreeManager.getPath(fork_from)` and runs `git rev-parse HEAD` there on each invocation, so re-runs of the fork step automatically see the latest commits from the source step. Throws a clear `Error` if the source step's worktree has not been resolved yet (wrong transition order). The engine skips the per-success cleanup for `isolated` worktrees so they remain accessible to downstream `fork_from` steps.
 
 ### Worktree Confinement Guardrails
 Two complementary mechanisms prevent agents from accidentally committing to the parent repo instead of their isolated worktree:

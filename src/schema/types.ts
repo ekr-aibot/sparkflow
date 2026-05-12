@@ -14,10 +14,21 @@ export interface WorktreeConfig {
    * "shared"   — runs in the main worktree (or run-level worktree).
    * "fork"     — new worktree directory, detached HEAD at current commit.
    * "isolated" — new worktree directory with a new named branch.
+   *              Isolated worktrees persist for the lifetime of the workflow run:
+   *              re-entries of the same step (e.g., via on_failure retry) resume
+   *              the same worktree and branch rather than creating a new one.
    */
   mode: "shared" | "fork" | "isolated";
   /** Branch name for isolated worktrees. Ignored for shared/fork modes. */
   branch?: string;
+  /**
+   * Step ID whose resolved worktree HEAD is used as the base commit for this
+   * fork worktree. Only valid when mode is "fork". On each invocation the
+   * engine re-resolves the HEAD of the named step's worktree, so re-runs of
+   * this step pick up new commits from the source step automatically.
+   * Throws a clear error at runtime if the source step has not been resolved yet.
+   */
+  fork_from?: string;
 }
 
 // ── Runtimes (discriminated union on `type`) ────────────────────────

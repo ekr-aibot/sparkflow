@@ -106,8 +106,26 @@ Invocation: `<command> -p "" -y [-m <model>] -o text|stream-json [...args]`. The
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `mode` | `"isolated" \| "shared"` | yes | `"shared"`: main worktree. `"isolated"`: own temporary git worktree. |
-| `branch` | `string` | no | Branch name for isolated worktrees. Defaults to auto-generated. |
+| `mode` | `"shared" \| "fork" \| "isolated"` | yes | `"shared"`: main worktree. `"fork"`: new worktree, detached HEAD (transient). `"isolated"`: new worktree with a named branch, **persists for the lifetime of the workflow run** — re-entries of the same step resume the same worktree rather than creating a new one. |
+| `branch` | `string` | no | Branch name for isolated worktrees. Defaults to `sparkflow/<stepId>-<runId>-<rand>`. |
+| `fork_from` | `string` | no | Step ID whose isolated worktree HEAD is used as the base commit for this fork worktree. Only valid when `mode` is `"fork"`. On each invocation the engine re-resolves the HEAD so re-runs pick up new commits automatically. Throws a clear error if the referenced step has not run yet. |
+
+**Isolated worktree persistence example** — `develop` runs in an isolated worktree that persists across retries, so commits from attempt N are visible on attempt N+1:
+
+```json
+{
+  "develop": { "worktree": { "mode": "isolated" }, "on_failure": [{ "step": "develop" }] }
+}
+```
+
+**`fork_from` example** — `test` forks from `develop`'s worktree so it sees exactly the commits that `develop` produced:
+
+```json
+{
+  "develop": { "worktree": { "mode": "isolated" }, "on_success": [{ "step": "test" }] },
+  "test":    { "worktree": { "mode": "fork", "fork_from": "develop" }, "on_failure": [{ "step": "develop" }] }
+}
+```
 
 ### `OutputDeclaration`
 

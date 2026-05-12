@@ -5,8 +5,9 @@ if [[ "${1:-}" != "rebase" ]]; then
   exit 0
 fi
 
-# ORIG_HEAD is the branch tip before the rebase, covering both upstream
-# changes and local replays — the same pattern post-merge uses.
-export SPARKFLOW_DIFF_OLD="${ORIG_HEAD:-}"
+# ORIG_HEAD is the branch tip before the rebase, stored as a git ref
+# (not an environment variable), so we resolve it via `git rev-parse`
+# rather than `${ORIG_HEAD:-}`.
+export SPARKFLOW_DIFF_OLD="$(git rev-parse --verify ORIG_HEAD 2>/dev/null || echo '')"
 export SPARKFLOW_DIFF_NEW="$(git rev-parse HEAD)"
 exec "$(dirname "$0")/_run-build.sh"

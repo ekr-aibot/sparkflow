@@ -182,7 +182,7 @@ export class FrontendIpcServer extends EventEmitter {
 
       const jobs = new Map<string, JobInfo>();
       const readTool = (v: unknown): ToolKind | undefined =>
-        v === "claude" || v === "gemini" ? v : undefined;
+        v === "claude" || v === "gemini" || v === "codex" ? v : undefined;
 
       const conn: EngineConnection = {
         repoId,

@@ -103,14 +103,16 @@ function readChatIngredients(): ChatIngredients | null {
   catch { /* keep empty */ }
 
   const chatToolRaw = process.env.SPARKFLOW_WEB_CHAT_TOOL;
-  const chatTool: ChatTool = chatToolRaw === "gemini" ? "gemini" : "claude";
+  const chatTool: ChatTool = chatToolRaw === "gemini" ? "gemini" : chatToolRaw === "codex" ? "codex" : "claude";
 
   return { chatTool, chatArgs, mcpServerName, mcpServerSpec, mcpConfigPath, systemPromptText, systemPromptPath, commandOverride, slashCommands };
 }
 
 function defaultCommandFor(tool: ChatTool, override: string | null): string {
   if (override) return override;
-  return tool === "gemini" ? "npx" : "claude";
+  if (tool === "gemini") return "npx";
+  if (tool === "codex") return "codex";
+  return "claude";
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +144,7 @@ async function main(): Promise<void> {
 
   // --- Chat/jobs tool state (mutable: switched at runtime via IPC or bridge). ---
   const initialJobToolRaw = process.env.SPARKFLOW_LLM;
-  let currentJobTool: ToolKind = initialJobToolRaw === "gemini" ? "gemini" : "claude";
+  let currentJobTool: ToolKind = initialJobToolRaw === "gemini" ? "gemini" : initialJobToolRaw === "codex" ? "codex" : "claude";
   // currentChatTool is assigned once ingredients are read (below). Exposed
   // through the ipcClient so the frontend sees it in AttachMessage.
   let currentChatTool: ToolKind | null = null;
@@ -225,7 +227,7 @@ async function main(): Promise<void> {
       }
 
       case "setJobTool": {
-        if (msg.tool !== "claude" && msg.tool !== "gemini") {
+        if (msg.tool !== "claude" && msg.tool !== "gemini" && msg.tool !== "codex") {
           ipcClient.sendError(msg.id, `invalid tool: ${String(msg.tool)}`);
           break;
         }
@@ -234,6 +236,7 @@ async function main(): Promise<void> {
         // the new preference. Claude is the hardcoded default in engine.ts, so
         // we actively unset the env var rather than writing "claude".
         if (msg.tool === "gemini") process.env.SPARKFLOW_LLM = "gemini";
+        else if (msg.tool === "codex") process.env.SPARKFLOW_LLM = "codex";
         else delete process.env.SPARKFLOW_LLM;
         ipcClient.sendResponse(msg.id, { jobTool: msg.tool });
         break;
@@ -495,9 +498,9 @@ async function main(): Promise<void> {
               chats.get(msg.chatId)?.pty?.write(Buffer.from(msg.bytes, "base64").toString("utf-8"));
             } else if (msg.type === "pty_resize" && typeof msg.chatId === "string" && typeof msg.cols === "number" && typeof msg.rows === "number") {
               chats.get(msg.chatId)?.pty?.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
-            } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+            } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini" || msg.tool === "codex")) {
               switchChatTool(msg.tool);
-            } else if (msg.type === "chat_create" && typeof msg.clientReqId === "string" && (msg.tool === "claude" || msg.tool === "gemini")) {
+            } else if (msg.type === "chat_create" && typeof msg.clientReqId === "string" && (msg.tool === "claude" || msg.tool === "gemini" || msg.tool === "codex")) {
               spawnSideChat(msg.tool, msg.clientReqId);
             } else if (msg.type === "chat_close" && typeof msg.chatId === "string" && typeof msg.clientReqId === "string") {
               closeChat(msg.chatId, msg.clientReqId);

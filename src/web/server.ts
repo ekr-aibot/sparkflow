@@ -147,11 +147,11 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
 // time. The `chat` pref is stored for future use (a switch requires the web
 // supervisor to respawn the PTY, which lands in a follow-up commit).
 
-type LlmKind = "claude" | "gemini";
+type LlmKind = "claude" | "gemini" | "codex";
 interface AppPreferences { chat: LlmKind; jobs: LlmKind; }
 
 function initialLlmKind(envValue: string | undefined, fallback: LlmKind): LlmKind {
-  return envValue === "claude" || envValue === "gemini" ? envValue : fallback;
+  return envValue === "claude" || envValue === "gemini" || envValue === "codex" ? envValue : fallback;
 }
 
 const preferences: AppPreferences = {
@@ -162,6 +162,7 @@ const preferences: AppPreferences = {
 // Keep the jobs env in sync on init too, so the first spawned sparkflow-run
 // already sees the right override even before any UI pref change.
 if (preferences.jobs === "gemini") process.env.SPARKFLOW_LLM = "gemini";
+else if (preferences.jobs === "codex") process.env.SPARKFLOW_LLM = "codex";
 else delete process.env.SPARKFLOW_LLM;
 
 // Set once the PTY bridge is connected. Lets updatePreferences ask the
@@ -176,19 +177,20 @@ function updatePreferences(body: unknown): AppPreferences {
   if (typeof body !== "object" || body === null) throw new Error("expected JSON object");
   const patch = body as Record<string, unknown>;
   if (patch.chat !== undefined) {
-    if (patch.chat !== "claude" && patch.chat !== "gemini") throw new Error(`invalid chat: ${String(patch.chat)}`);
+    if (patch.chat !== "claude" && patch.chat !== "gemini" && patch.chat !== "codex") throw new Error(`invalid chat: ${String(patch.chat)}`);
     preferences.chat = patch.chat;
     // Tell the supervisor to kill the current PTY and respawn under the new
     // tool. The `chat_tool` echo frame will confirm.
     currentBridge?.setChatTool(patch.chat);
   }
   if (patch.jobs !== undefined) {
-    if (patch.jobs !== "claude" && patch.jobs !== "gemini") throw new Error(`invalid jobs: ${String(patch.jobs)}`);
+    if (patch.jobs !== "claude" && patch.jobs !== "gemini" && patch.jobs !== "codex") throw new Error(`invalid jobs: ${String(patch.jobs)}`);
     preferences.jobs = patch.jobs;
     // Claude is the default so we remove the env var rather than setting it
     // — keeps `process.env.SPARKFLOW_LLM === undefined` as the "no override"
     // signal in the engine.
     if (preferences.jobs === "gemini") process.env.SPARKFLOW_LLM = "gemini";
+    else if (preferences.jobs === "codex") process.env.SPARKFLOW_LLM = "codex";
     else delete process.env.SPARKFLOW_LLM;
   }
   return { ...preferences };
@@ -331,7 +333,7 @@ function connectPtyBridge(socketPath: string): Promise<PtyBridge> {
             const b = Buffer.from(msg.bytes, "base64");
             if (dataCbs.length === 0) pendingData.push(b);
             else for (const cb of dataCbs) cb(b);
-          } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
+          } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini" || msg.tool === "codex")) {
             if (toolCbs.length === 0) pendingTools.push(msg.tool);
             else for (const cb of toolCbs) cb(msg.tool);
           }

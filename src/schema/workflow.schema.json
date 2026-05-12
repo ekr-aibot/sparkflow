@@ -164,8 +164,28 @@
         { "$ref": "#/$defs/PrWatcherRuntime" },
         { "$ref": "#/$defs/PrCreatorRuntime" },
         { "$ref": "#/$defs/WorkflowRuntime" },
-        { "$ref": "#/$defs/GeminiRuntime" }
+        { "$ref": "#/$defs/GeminiRuntime" },
+        { "$ref": "#/$defs/CodexRuntime" }
       ]
+    },
+    "CodexRuntime": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "codex" },
+        "model": { "type": "string", "description": "Model to use (e.g. \"gpt-4o-codex\", \"o4-mini\")." },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional CLI flags passed to `codex exec`."
+        },
+        "mcp_servers": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of MCP servers to enable for this session."
+        }
+      }
     },
     "GeminiRuntime": {
       "type": "object",

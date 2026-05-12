@@ -10,9 +10,15 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildCodexSpawn as _buildCodexSpawn, buildBareCodexSpawn } from "./codex-chat.js";
 
-export type ChatTool = "claude" | "gemini";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const CODEX_MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
+
+export type ChatTool = "claude" | "gemini" | "codex";
 
 export interface McpServerSpec {
   command: string;
@@ -96,6 +102,10 @@ export function buildBareChatSpawn(opts: BuildBareChatSpawnOpts): ChatSpawn {
     const shellCmd = [sq(opts.command), ...args.map(sq)].join(" ");
     return { cmd: opts.command, args, shellCmd, cleanup: () => {} };
   }
+  if (opts.tool === "codex") {
+    const bare = buildBareCodexSpawn({ command: opts.command, chatArgs: opts.chatArgs });
+    return bare;
+  }
   throw new Error(`Unknown chat tool: ${String(opts.tool)}`);
 }
 
@@ -105,6 +115,9 @@ export function buildChatSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
   }
   if (opts.tool === "gemini") {
     return buildGeminiSpawn(opts);
+  }
+  if (opts.tool === "codex") {
+    return buildCodexChatSpawn(opts);
   }
   throw new Error(`Unknown chat tool: ${String(opts.tool)}`);
 }
@@ -271,4 +284,17 @@ function buildGeminiSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
   };
 
   return { cmd: opts.command, args, shellCmd, cleanup };
+}
+
+function buildCodexChatSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
+  const result = _buildCodexSpawn({
+    command: opts.command,
+    chatArgs: opts.chatArgs,
+    mcpServerPath: CODEX_MCP_SERVER_PATH,
+    ipcSocketPath: opts.mcpServerSpec.env.SPARKFLOW_SOCKET ?? opts.mcpServerSpec.env.SPARKFLOW_DASHBOARD_SOCKET ?? "",
+    systemPromptText: opts.systemPromptText,
+    cwd: opts.cwd,
+    slashCommands: opts.slashCommands,
+  });
+  return result;
 }

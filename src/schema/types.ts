@@ -104,7 +104,17 @@ export interface GeminiRuntime {
   mcp_servers?: string[];
 }
 
-export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime | WorkflowRuntime | GeminiRuntime;
+export interface CodexRuntime {
+  type: "codex";
+  /** Model to use (e.g. "gpt-4o-codex", "o4-mini"). */
+  model?: string;
+  /** Additional CLI flags passed to `codex exec`. */
+  args?: string[];
+  /** Names of MCP servers to enable for this session. */
+  mcp_servers?: string[];
+}
+
+export type Runtime = ClaudeCodeRuntime | ShellRuntime | CustomRuntime | PrWatcherRuntime | PrCreatorRuntime | WorkflowRuntime | GeminiRuntime | CodexRuntime;
 
 // ── Transition ──────────────────────────────────────────────────────
 

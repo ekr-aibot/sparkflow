@@ -166,23 +166,23 @@ describe("ClaudeCodeAdapter", () => {
       // The reset time is in the future: we fake the current time to 10:00am UTC
       // and check that "resets 11:30am (UTC)" returns roughly 5400s.
       // We test the timezone-aware path by picking UTC so there's no offset ambiguity.
-      const nowUTC = new Date("2024-01-15T10:00:00Z");
-      vi.setSystemTime(nowUTC);
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2024-01-15T10:00:00Z"));
       const seconds = adapter.extractQuotaResetSeconds("You've hit your limit · resets 11:30am (UTC)");
+      vi.useRealTimers();
       // Should be ~5400s (1h30m). Allow ±5s for timing.
       expect(seconds).toBeGreaterThanOrEqual(5395);
       expect(seconds).toBeLessThanOrEqual(5405);
-      vi.useRealTimers();
     });
 
     it("wraps to next day when reset time is in the past", () => {
       // Current time 11:00am UTC, reset at 10:00am UTC → should be ~23h from now
-      const nowUTC = new Date("2024-01-15T11:00:00Z");
-      vi.setSystemTime(nowUTC);
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2024-01-15T11:00:00Z"));
       const seconds = adapter.extractQuotaResetSeconds("resets 10:00am (UTC)");
+      vi.useRealTimers();
       expect(seconds).toBeGreaterThanOrEqual(82795);
       expect(seconds).toBeLessThanOrEqual(82805);
-      vi.useRealTimers();
     });
   });
 

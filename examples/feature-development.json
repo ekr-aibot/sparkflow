@@ -180,6 +180,29 @@
           "${config.git.pull_remote}",
           "${config.git.base}"
         ]
+      },
+      "on_failure": [
+        {
+          "step": "git-rebase"
+        }
+      ]
+    },
+    "git-rebase": {
+      "name": "Rebase onto base branch",
+      "description": "Fall back to rebase when a fast-forward pull is not possible (e.g. local commits exist on the base branch).",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "shell",
+        "command": "git",
+        "args": [
+          "pull",
+          "--rebase",
+          "${config.git.pull_remote}",
+          "${config.git.base}"
+        ]
       }
     }
   }

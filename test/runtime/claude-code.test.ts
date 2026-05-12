@@ -184,6 +184,10 @@ describe("ClaudeCodeAdapter", () => {
       expect(seconds).toBeGreaterThanOrEqual(82795);
       expect(seconds).toBeLessThanOrEqual(82805);
     });
+
+    it("returns null when timezone is unrecognized", () => {
+      expect(adapter.extractQuotaResetSeconds("resets 11:30am (Not/A/Real/Zone)")).toBeNull();
+    });
   });
 
   describe("isTokenLimitError", () => {

@@ -109,12 +109,16 @@ function readChatIngredients(cwd: string): ChatIngredients {
 
 function defaultCommandFor(tool: ChatTool, override: string | null): string {
   if (override) return override;
-  return tool === "gemini" ? "npx" : "claude";
+  if (tool === "gemini") return "npx";
+  if (tool === "codex") return "codex";
+  return "claude";
 }
 
 function validInitialTool(): ChatTool {
   const v = process.env.SPARKFLOW_WEB_CHAT_TOOL;
-  return v === "gemini" ? "gemini" : "claude";
+  if (v === "gemini") return "gemini";
+  if (v === "codex") return "codex";
+  return "claude";
 }
 
 /**
@@ -253,8 +257,8 @@ async function main(): Promise<void> {
             pty?.write(Buffer.from(msg.bytes, "base64").toString("utf-8"));
           } else if (msg.type === "pty_resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
             pty?.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
-          } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini")) {
-            switchChatTool(msg.tool);
+          } else if (msg.type === "set_chat_tool" && (msg.tool === "claude" || msg.tool === "gemini" || msg.tool === "codex")) {
+            switchChatTool(msg.tool as ChatTool);
           }
         } catch { /* ignore bad frame */ }
       }

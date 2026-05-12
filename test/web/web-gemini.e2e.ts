@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import WebSocket from "ws";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { startWebServer } from "./server-fixture.js";
 
@@ -66,5 +66,28 @@ test("chat-tool gemini: writes .gemini/settings.json + GEMINI.md; no Claude flag
     // After shutdown, our temp files are cleaned up by the TUI's finally block.
     expect(existsSync(join(server.cwd, ".gemini", "settings.json"))).toBe(false);
     expect(existsSync(join(server.cwd, "GEMINI.md"))).toBe(false);
+  }
+});
+
+test("chat-tool codex: writes AGENTS.md with marker; no Claude/Gemini markers leak through", async () => {
+  const server = await startWebServer({ chatTool: "codex" });
+  try {
+    const agentsPath = join(server.cwd, "AGENTS.md");
+    expect(existsSync(agentsPath)).toBe(true);
+    expect(readFileSync(agentsPath, "utf-8")).toContain("<!-- sparkflow context start -->");
+
+    const bytes = await collectBytes(server.port, server.token);
+    expect(bytes).toContain("SF_SAW_CODEX_FILES=1");
+    expect(bytes).not.toContain("SF_SAW_CLAUDE_FLAGS=1");
+    expect(bytes).not.toContain("SF_SAW_GEMINI_FILES=1");
+    expect(bytes).toContain("SF_TEST_READY");
+  } finally {
+    await server.stop();
+    // After shutdown, the block should be removed. Since AGENTS.md was
+    // empty before, it might be deleted entirely or just truncated.
+    const agentsPath = join(server.cwd, "AGENTS.md");
+    if (existsSync(agentsPath)) {
+      expect(readFileSync(agentsPath, "utf-8")).not.toContain("<!-- sparkflow context start -->");
+    }
   }
 });

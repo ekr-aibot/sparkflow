@@ -392,7 +392,7 @@ function connectChatWs(tabId, repoId, chatId) {
     try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === "data" && typeof msg.bytes === "string") {
       entry.term.write(b64decode(msg.bytes));
-    } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini") && tabId === "chat") {
+    } else if (msg.type === "chat_tool" && (msg.tool === "claude" || msg.tool === "gemini" || msg.tool === "codex") && tabId === "chat") {
       syncChatToolSelect(msg.tool);
     } else if (msg.type === "chat_ended") {
       entry.suppress = true;

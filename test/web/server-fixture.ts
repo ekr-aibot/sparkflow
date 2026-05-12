@@ -57,7 +57,7 @@ async function waitForEngine(port: number, token: string, timeoutMs = 15_000): P
 
 /** Spawns `sparkflow --web` with fake-chat as the chat command and waits for the ready banner. */
 export async function startWebServer(
-  opts: { extraArgs?: string[]; extraEnv?: Record<string, string>; chatTool?: "claude" | "gemini" } = {},
+  opts: { extraArgs?: string[]; extraEnv?: Record<string, string>; chatTool?: "claude" | "gemini" | "codex" } = {},
 ): Promise<WebServerHandle> {
   const repoRoot = resolve(__dirname, "..", "..");
   const sparkflowEntry = join(repoRoot, "dist", "src", "tui", "index.js");

@@ -9,7 +9,7 @@
 //   - SF_SAW_CLAUDE_FLAGS=1 if --mcp-config or --append-system-prompt are in argv
 //   - SF_SAW_GEMINI_FILES=1 if .gemini/settings.json and GEMINI.md exist in cwd
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const argv = process.argv;
@@ -17,8 +17,20 @@ const sawClaudeFlags = argv.includes("--mcp-config") || argv.includes("--append-
 const sawGeminiFiles = existsSync(join(process.cwd(), ".gemini", "settings.json"))
   && existsSync(join(process.cwd(), "GEMINI.md"));
 
+let sawCodexFiles = false;
+try {
+  const agentsPath = join(process.cwd(), "AGENTS.md");
+  if (existsSync(agentsPath)) {
+    const content = readFileSync(agentsPath, "utf-8");
+    if (content.includes("<!-- sparkflow context start -->")) {
+      sawCodexFiles = true;
+    }
+  }
+} catch { /* ignore */ }
+
 if (sawClaudeFlags) process.stdout.write("SF_SAW_CLAUDE_FLAGS=1\r\n");
 if (sawGeminiFiles) process.stdout.write("SF_SAW_GEMINI_FILES=1\r\n");
+if (sawCodexFiles) process.stdout.write("SF_SAW_CODEX_FILES=1\r\n");
 
 process.stdout.write("SF_TEST_READY\r\n");
 

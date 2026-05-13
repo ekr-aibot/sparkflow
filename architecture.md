@@ -204,6 +204,18 @@ CLI / Web UI → WorkflowEngine.run()
     → onStepComplete/Failure → triggerStep(next)
 ```
 
+### Step-publishable HTML Dashboard (`src/web/static/dashboard-widget.*`, `src/cli/dashboard.ts`)
+
+A generic live dashboard panel fixed in the upper-right corner of the web UI. Any workflow can opt in by setting `"dashboard": true` in its JSON and including a step that writes `.sparkflow/dashboard.html`. The web UI polls `GET /api/dashboard`, which serves that file verbatim as `text/html`. The panel appears when the file exists and hides when it doesn't; the iframe reloads when the file changes (detected via ETag/timestamp).
+
+**Workflow opt-in:** Add `"dashboard": true` to the workflow JSON (top-level field, schema-validated). Add a step that calls `sparkflow-dashboard` (or any other tool) to write `.sparkflow/dashboard.html`.
+
+**`sparkflow-dashboard` CLI (`src/cli/dashboard.ts`):** Reads `ROADMAP.md` from the project root, parses task lines (`[ ]` pending, `[x]` done, `[!]` blocked with optional `<!-- blocked: reason -->` inline comments), and generates a self-contained HTML dashboard at `.sparkflow/dashboard.html`. Called by the `update-dashboard` step in `examples/auto-develop.json` before each `pick-next` cycle; step failure is non-fatal (routes to `pick-next` regardless).
+
+**Backend endpoint:** `GET /api/dashboard` reads `.sparkflow/dashboard.html` and serves it as `text/html; no-store`. Returns 404 when the file is absent.
+
+**Frontend:** `dashboard-widget.js` polls `/api/dashboard` every 2 s, skips when `document.hidden`, re-polls on tab focus. Displays the HTML in an iframe; reloads when the ETag changes. Expand/collapse state persisted in `localStorage` keyed by port.
+
 ## Config Layering
 
 User config (`~/.sparkflow/config.json`) is the base; project config (`.sparkflow/config.json`) overlays it. Nested objects like `git` are replaced wholesale — a project `git` block drops all user `git` fields.

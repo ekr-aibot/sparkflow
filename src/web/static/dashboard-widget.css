@@ -1,0 +1,67 @@
+/* Generic step-publishable HTML dashboard widget — fixed upper-right overlay */
+
+.dw {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 280px;
+  z-index: 50;
+  font-family: var(--ui-font, -apple-system, BlinkMacSystemFont, "Inter", sans-serif);
+  font-size: 13px;
+  color: var(--fg, #e0e4f5);
+  border-left: 1px solid var(--border, #2d3047);
+  border-bottom: 1px solid var(--border, #2d3047);
+  border-bottom-left-radius: var(--radius-sm, 5px);
+  background: rgba(30, 31, 43, 0.96);
+  backdrop-filter: blur(4px);
+  box-shadow: -2px 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+/* Header */
+
+.dw-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted, #9ba1c2);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  letter-spacing: 0.03em;
+}
+
+.dw-header:hover { color: var(--fg, #e0e4f5); }
+.dw-header:focus-visible { outline: 2px solid var(--accent, #7aa2f7); outline-offset: -2px; }
+
+.dw-chevron::before { content: "▸"; display: inline-block; transition: transform 150ms ease; }
+.dw--expanded .dw-chevron::before { transform: rotate(90deg); }
+
+/* Body */
+
+.dw-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 150ms ease;
+}
+
+.dw--expanded .dw-body {
+  max-height: min(70vh, 600px);
+  border-top: 1px solid var(--border, #2d3047);
+}
+
+/* Iframe fills the body */
+
+.dw-iframe {
+  display: block;
+  width: 100%;
+  height: min(70vh, 600px);
+  border: none;
+  background: transparent;
+}

@@ -8,6 +8,7 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("node:fs", () => ({
   rmSync: vi.fn(),
+  existsSync: vi.fn(() => true),
 }));
 
 import { execFileSync } from "node:child_process";

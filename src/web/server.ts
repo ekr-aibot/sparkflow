@@ -233,7 +233,7 @@ function serveFile(res: ServerResponse, absPath: string): void {
   }
 }
 
-const APP_FILES = new Set(["index.html", "client.js", "style.css"]);
+const APP_FILES = new Set(["index.html", "client.js", "style.css", "dashboard-widget.js", "dashboard-widget.css"]);
 const VENDOR_FILES: Record<string, string> = {
   "xterm.css": join(NODE_MODULES, "@xterm", "xterm", "css", "xterm.css"),
   "xterm.mjs": join(NODE_MODULES, "@xterm", "xterm", "lib", "xterm.mjs"),
@@ -499,6 +499,23 @@ async function main(): Promise<void> {
     if (pathname === "/api/chat/summary" && req.method === "GET") {
       const text = stripAnsi(ring.toString("utf-8"));
       return sendJson(res, 200, { summary: text });
+    }
+
+    if (pathname === "/api/dashboard" && req.method === "GET") {
+      const dashPath = join(args.cwd, ".sparkflow", "dashboard.html");
+      try {
+        const body = readFileSync(dashPath);
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": body.byteLength,
+          "cache-control": "no-store",
+        });
+        res.end(body);
+      } catch {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("no dashboard");
+      }
+      return;
     }
 
     res.writeHead(404, { "content-type": "text/plain" });

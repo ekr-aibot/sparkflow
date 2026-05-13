@@ -8,6 +8,12 @@ Your transition message contains:
 - The **task** description that is being blocked
 - The **reason** it could not be completed
 
+The `Feature branch to delete: …` line in the transition message is for
+historical context only — do **not** run `git branch -D` or `git worktree
+remove`. Sparkflow owns the isolated develop worktree and will reset it for
+the next task automatically. Manual cleanup here corrupts the run's worktree
+state.
+
 ## What to do
 
 ### 1. Find the task in ROADMAP.md
@@ -35,22 +41,6 @@ Use `sed` or the Edit tool to rewrite the exact line. Do not touch any other lin
 git add ROADMAP.md
 git commit -m "chore: mark task blocked — <brief reason>"
 ```
-
-### 4. Delete the stale feature branch
-
-The transition message may contain a line like:
-
-```
-Feature branch to delete: sparkflow/develop-<id>
-```
-
-If present and non-empty, delete that branch so it does not poison subsequent iterations:
-
-```bash
-git branch -D <branch-name>
-```
-
-Use `-D` (force) rather than `-d` — the branch's commits were never merged, and that's expected for a blocked task. If the branch field is empty or missing, skip this step.
 
 ## Output format
 

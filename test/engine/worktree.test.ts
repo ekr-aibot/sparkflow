@@ -9,13 +9,15 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("node:fs", () => ({
   rmSync: vi.fn(),
+  existsSync: vi.fn(),
 }));
 
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rmSync, existsSync } from "node:fs";
 
 const mockExec = vi.mocked(execFileSync);
 const mockRmSync = vi.mocked(rmSync);
+const mockExistsSync = vi.mocked(existsSync);
 
 function makeSharedStep(): Step {
   return { name: "step", interactive: false, worktree: { mode: "shared" } };
@@ -42,6 +44,9 @@ describe("WorktreeManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExec.mockReturnValue(Buffer.from(""));
+    // Default to "directory exists" so cached isolated worktrees are returned
+    // as-is in tests that don't care about the existence check.
+    mockExistsSync.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -308,6 +313,7 @@ describe("WorktreeManager", () => {
 
       vi.clearAllMocks();
       mockExec.mockReturnValue(Buffer.from(""));
+      mockExistsSync.mockReturnValue(true);
 
       // Second resolve of the same stepId in the same run (simulates retry).
       // Persistence: returns the same path, no new git worktree add call.
@@ -318,6 +324,43 @@ describe("WorktreeManager", () => {
         (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
       );
       expect(addCalls).toHaveLength(0);
+    });
+
+    // Guards against the auto-develop failure mode where mark-blocked's agent
+    // ran `git worktree remove --force` on the cached develop worktree: every
+    // subsequent develop step returned the stale path and failed with
+    // "cwd does not exist". With the disk-existence check, the cache entry is
+    // dropped and a fresh worktree (new branch suffix) is allocated.
+    it("re-allocates a fresh worktree when the cached path is gone from disk", () => {
+      const manager = new WorktreeManager("/repo", "abcd1234");
+
+      const path1 = manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+      const addCall1 = mockExec.mock.calls.find(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      );
+      const branch1 = (addCall1![1] as string[])[
+        (addCall1![1] as string[]).indexOf("-b") + 1
+      ];
+
+      vi.clearAllMocks();
+      mockExec.mockReturnValue(Buffer.from(""));
+      // Simulate an external removal: directory no longer exists.
+      mockExistsSync.mockReturnValue(false);
+
+      const path2 = manager.resolve("develop", makeIsolatedStep(), makeWorkflow());
+
+      // Same logical path (runId + stepId), but a fresh `git worktree add` was
+      // issued with a new random-suffix branch (the old one may have been
+      // deleted by whatever removed the directory).
+      expect(path2).toBe(path1);
+      const addCalls = mockExec.mock.calls.filter(
+        (c) => (c[1] as string[]).includes("add") && (c[1] as string[]).includes("-b")
+      );
+      expect(addCalls).toHaveLength(1);
+      const args2 = addCalls[0][1] as string[];
+      const branch2 = args2[args2.indexOf("-b") + 1];
+      expect(branch2).toMatch(/^sparkflow\/develop-abcd1234-[0-9a-f]{8}$/);
+      expect(branch2).not.toBe(branch1);
     });
   });
 });

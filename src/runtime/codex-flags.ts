@@ -53,6 +53,7 @@ export function writeCodexMcpConfig(tmpDir: string, ipcSocketPath: string): stri
 export function extractCodexSessionId(event: Record<string, unknown>): string | undefined {
   if (typeof event.session_id === "string" && event.session_id) return event.session_id;
   if (typeof event.sessionId === "string" && event.sessionId) return event.sessionId;
+  if (typeof event.thread_id === "string" && event.thread_id) return event.thread_id;
   // Some versions embed it nested
   const meta = event.meta;
   if (meta && typeof meta === "object") {

@@ -81,6 +81,10 @@ describe("extractCodexSessionId", () => {
     expect(extractCodexSessionId({ type: "result", meta: { session_id: "ghi-789" } })).toBe("ghi-789");
   });
 
+  it("extracts thread_id field", () => {
+    expect(extractCodexSessionId({ type: "thread.started", thread_id: "jkl-012" })).toBe("jkl-012");
+  });
+
   it("returns undefined when no session id is present", () => {
     expect(extractCodexSessionId({ type: "result" })).toBeUndefined();
   });

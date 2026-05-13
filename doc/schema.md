@@ -96,6 +96,22 @@ A discriminated union on the `type` field.
 
 Invocation: `<command> -p "" -y [-m <model>] -o text|stream-json [...args]`. The step prompt is piped on stdin (Gemini appends stdin to its `-p` value, so we pass an empty `-p` to trigger headless mode and stream the real prompt through stdin).
 
+#### `CodexRuntime` (`type: "codex"`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"codex"` | yes | Discriminator. |
+| `model` | `string` | no | Model to use (e.g. `"gpt-4o-codex"`, `"o4-mini"`). |
+| `args` | `string[]` | no | Additional CLI flags passed to `codex exec`. |
+| `mcp_servers` | `string[]` | no | Names of MCP servers to enable for this session. |
+
+Invocation: `codex [exec|exec resume <id>] --json --dangerously-bypass-approvals-and-sandbox [-m <model>] [...args]`. The step prompt is piped on stdin.
+
+**Differences from `claude-code`:**
+
+- **Single-turn only.** Like `gemini`, `codex` is invoked once per turn; it reads the entire stdin until EOF before starting. Multi-turn nudges (including `success_output` self-nudges) are not supported in a single step execution.
+- **Output extraction.** Sparkflow extracts text from `item.completed` events where `item.type` is `agent_message`. If the text contains JSON, it is parsed for named outputs.
+
 **Differences from `claude-code`:**
 
 - **No session resume.** Gemini's `--resume` uses per-project numeric indexes rather than UUIDs; sparkflow's retry machinery replays the full prompt + transition message instead. Costs extra tokens on retry but works.

@@ -14,8 +14,8 @@ sparkflow [options]
 
 | Flag | Description |
 | --- | --- |
-| `--chat-tool <name>` | Which LLM CLI powers the chat pane: `claude` (default) or `gemini`. Drives the spawn shape: Claude gets `--mcp-config`/`--append-system-prompt` flags; Gemini gets `.gemini/settings.json` + `GEMINI.md` written to `cwd` and cleaned up on exit. |
-| `--chat-command <cmd>` | Chat tool binary override. Default follows `--chat-tool` (claude → `claude`; gemini → `npx`, with `@google/gemini-cli@latest -y` prepended automatically). |
+| `--chat-tool <name>` | Which LLM CLI powers the chat pane: `claude` (default), `gemini`, or `codex`. Drives the spawn shape: Claude gets `--mcp-config`/`--append-system-prompt` flags; Gemini gets `.gemini/settings.json` + `GEMINI.md` written to `cwd`; Codex gets `~/.codex/config.toml` wiring + `AGENTS.md` system prompt. |
+| `--chat-command <cmd>` | Chat tool binary override. Default follows `--chat-tool` (claude → `claude`; gemini → `npx`, with `@google/gemini-cli@latest -y` prepended automatically; codex → `codex`). |
 | `--chat-args <args>` | Extra args for the chat tool, comma-separated. |
 | `--cwd <dir>` | Working directory. Default: current directory. |
 | `--workflow <path>` | Default workflow for `/project:sf-dispatch`. May be a path or a bare name resolved as `.sparkflow/workflows/<name>.json`. |
@@ -42,13 +42,13 @@ Same MCP tools and slash commands as tmux mode — the only difference is the su
 
 #### Chat-tool differences (`--chat-tool`)
 
-| Aspect | Claude (default) | Gemini (`--chat-tool gemini`) |
-| --- | --- | --- |
-| Default binary | `claude` | `npx` (with `@google/gemini-cli@latest -y` auto-prepended) |
-| MCP wiring | `--mcp-config <path>` CLI flag | `.gemini/settings.json` written in `cwd`, restoring any pre-existing file on exit |
-| System prompt | `--append-system-prompt <text>` CLI flag | `GEMINI.md` written in `cwd`, restoring any pre-existing file on exit |
-| Slash commands (`/project:sf-plan`, `/project:sf-dispatch`) | Supported via `.claude/commands/` | Supported via `.gemini/commands/project/` |
-| Session resume across retries | UUID-based via `--session-id`/`--resume` | Not wired — retries replay the full prompt + transition message |
+| Aspect | Claude (default) | Gemini (`--chat-tool gemini`) | Codex (`--chat-tool codex`) |
+| --- | --- | --- | --- |
+| Default binary | `claude` | `npx` (with `@google/gemini-cli@latest -y` auto-prepended) | `codex` |
+| MCP wiring | `--mcp-config <path>` CLI flag | `.gemini/settings.json` written in `cwd` | `~/.codex/config.toml` modified (idempotent markers) |
+| System prompt | `--append-system-prompt <text>` CLI flag | `GEMINI.md` written in `cwd` | `AGENTS.md` written in `cwd` (idempotent markers) |
+| Slash commands (`/project:sf-plan`, `/project:sf-dispatch`) | Supported via `.claude/commands/` | Supported via `.gemini/commands/project/` | Supported via `~/.codex/prompts/sf-*.md` |
+| Session resume across retries | UUID-based via `--session-id`/`--resume` | Not wired — retries replay the full prompt + transition message | UUID-based via `exec resume <id>` |
 
 ### `sparkflow-run` — workflow runner
 

@@ -76,7 +76,7 @@ function buildMcpTomlBlock(mcpServerPath: string, ipcSocketPath: string): string
     `args = [${JSON.stringify(mcpServerPath)}]`,
     ``,
     `[mcp_servers.sparkflow.env]`,
-    `SPARKFLOW_SOCKET = ${JSON.stringify(ipcSocketPath)}`,
+    `SPARKFLOW_DASHBOARD_SOCKET = ${JSON.stringify(ipcSocketPath)}`,
     ``,
   ].join("\n");
 }

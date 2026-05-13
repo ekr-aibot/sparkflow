@@ -15,9 +15,13 @@ export const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
  */
 export function buildCodexArgs(
   runtime: CodexRuntime,
-  opts: { mcpConfigPath?: string } = {}
+  opts: { mcpConfigPath?: string; sessionId?: string } = {}
 ): string[] {
-  const args: string[] = [];
+  const args: string[] = ["exec"];
+  if (opts.sessionId) {
+    args.push("resume", opts.sessionId);
+  }
+
   if (runtime.model) args.push("--model", runtime.model);
   // Permission bypass — always required for autonomous non-interactive steps.
   args.push("--dangerously-bypass-approvals-and-sandbox");

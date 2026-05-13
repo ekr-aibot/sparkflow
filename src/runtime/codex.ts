@@ -33,56 +33,38 @@ export class CodexAdapter implements RuntimeAdapter {
     const tempFiles: string[] = [];
 
     let currentSessionId = (ctx.resume && ctx.sessionId) ? ctx.sessionId : undefined;
-    let initialPromptUsed = false;
+    let initialTurnDone = false;
     let selfNudgeUsed = false;
     let lastResult: RuntimeResult | null = null;
 
     try {
       while (true) {
-        // Determine the prompt for this turn.
         let promptText = "";
         let isNudge = false;
+        let nudgeId: string | undefined;
 
-        if (!currentSessionId && !initialPromptUsed) {
-          const parts: string[] = [];
-          if (ctx.prompt) parts.push(ctx.prompt);
-          if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
-          promptText = parts.join("\n\n");
-          initialPromptUsed = true;
+        // 1. Determine prompt for this turn
+        if (!initialTurnDone) {
+          if (!currentSessionId) {
+            // Fresh run: use prompt + transition
+            const parts: string[] = [];
+            if (ctx.prompt) parts.push(ctx.prompt);
+            if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
+            promptText = parts.join("\n\n");
+          } else {
+            // Resuming existing session: only use transition message if any
+            promptText = ctx.transitionMessage || "";
+          }
+          initialTurnDone = true;
         } else {
-          // Check for manual nudge first.
+          // Check for manual nudge
           const nudgeItem = ctx.nudgeQueue?.shift();
           if (nudgeItem) {
             promptText = nudgeItem.message;
+            nudgeId = nudgeItem.id;
             isNudge = true;
-            const nudgeId = nudgeItem.id;
-            process.stderr.write(
-              JSON.stringify({
-                type: "nudge_event", nudge_id: nudgeId, phase: "delivered",
-                step: ctx.stepId, at: Date.now(),
-              }) + "\n"
-            );
-            ctx.logger?.info(`[${ctx.stepId}:nudge:delivered] ${nudgeId}`);
-            // We'll ack this after the turn finishes.
-            const nudgeAck = (turnCount: number) => {
-              const now = Date.now();
-              process.stderr.write(
-                JSON.stringify({
-                  type: "nudge_event", nudge_id: nudgeId, phase: "acked",
-                  step: ctx.stepId, at: now, duration_ms: 100, // Approximate
-                  turn_count: turnCount,
-                }) + "\n"
-              );
-            };
-            const turnResult = await this.executeTurn(ctx, runtime, currentSessionId, promptText, tmpDir, tempFiles);
-            currentSessionId = turnResult.sessionId || currentSessionId;
-            nudgeAck(1);
-            lastResult = turnResult;
-            if (!turnResult.success) break;
-            continue; // Re-evaluate for more nudges
           } else if (lastResult && ctx.step.success_output && !selfNudgeUsed) {
-            // Check if we need a self-nudge.
-            // We use the raw response text for the gate check if possible.
+            // Check for self-nudge (missing success gate)
             const resultText = typeof lastResult.outputs._response === "string"
               ? lastResult.outputs._response
               : JSON.stringify(lastResult.outputs._response);
@@ -104,18 +86,41 @@ export class CodexAdapter implements RuntimeAdapter {
           }
         }
 
-        if (promptText || !initialPromptUsed) {
+        // 2. Execute turn if we have a prompt or it's the very first turn (which might be empty resume)
+        const isFirstTurn = !lastResult;
+        if (promptText || isFirstTurn) {
+          if (nudgeId) {
+            process.stderr.write(
+              JSON.stringify({
+                type: "nudge_event", nudge_id: nudgeId, phase: "delivered",
+                step: ctx.stepId, at: Date.now(),
+              }) + "\n"
+            );
+            ctx.logger?.info(`[${ctx.stepId}:nudge:delivered] ${nudgeId}`);
+          }
+
           const turnResult = await this.executeTurn(ctx, runtime, currentSessionId, promptText, tmpDir, tempFiles);
           currentSessionId = turnResult.sessionId || currentSessionId;
           lastResult = turnResult;
-          if (!turnResult.success && !isNudge) {
-            // If it's the initial turn and it failed, we might still want to self-nudge
-            // if it was just a gate failure.
-            const isGateFailure = turnResult.exitCode === 0 && ctx.step.success_output;
-            if (!isGateFailure) break;
+
+          if (nudgeId) {
+            process.stderr.write(
+              JSON.stringify({
+                type: "nudge_event", nudge_id: nudgeId, phase: "acked",
+                step: ctx.stepId, at: Date.now(), duration_ms: 100,
+                turn_count: 1,
+              }) + "\n"
+            );
           }
-          // If we just did a nudge and it still failed, we break.
-          if (!turnResult.success && isNudge) break;
+
+          if (!turnResult.success) {
+            // Stop on failure unless it's a gate failure (exitCode 0) on the initial turn,
+            // which might be fixable by self-nudge in the next iteration.
+            const isGateFailure = turnResult.exitCode === 0 && ctx.step.success_output;
+            if (isNudge || !isGateFailure) break;
+          }
+          
+          // If it was a nudge, we continue to check for more nudges or self-nudge.
         } else {
           break;
         }
@@ -138,18 +143,12 @@ export class CodexAdapter implements RuntimeAdapter {
     tmpDir: string,
     tempFiles: string[]
   ): Promise<RuntimeResult> {
-    const resuming = Boolean(sessionId);
-    const subcommand: string[] = resuming
-      ? ["exec", "resume", sessionId!]
-      : ["exec"];
-
     let mcpConfigPath: string | undefined;
     if (ctx.interactive && ctx.ipcSocketPath) {
       mcpConfigPath = writeCodexMcpConfig(tmpDir, ctx.ipcSocketPath);
       if (!tempFiles.includes(mcpConfigPath)) tempFiles.push(mcpConfigPath);
     }
-    const extraArgs = buildCodexArgs(runtime, { mcpConfigPath });
-    const args = [...subcommand, ...extraArgs];
+    const args = buildCodexArgs(runtime, { mcpConfigPath, sessionId });
 
     return new Promise<RuntimeResult>((resolve) => {
       const child = spawn("codex", args, {

@@ -169,6 +169,20 @@ describe("CodexAdapter with fake binary", () => {
     expect(result.success).toBe(true);
     expect(result.outputs._response).toBe("Nudged response");
   }, 15000);
+
+  it("resumes an existing session when sessionId is provided", async () => {
+    const result = await withFakeCodex(
+      ["Resumed response"],
+      () => adapter.run(makeCtx({
+        resume: true,
+        sessionId: "existing-session-123",
+        prompt: "Continue work",
+      }))
+    );
+    expect(result.success).toBe(true);
+    expect(result.sessionId).toBe("existing-session-123");
+    expect(result.outputs._response).toBe("Resumed response");
+  }, 15000);
 });
 
 describe("CodexAdapter quota reset parsing", () => {

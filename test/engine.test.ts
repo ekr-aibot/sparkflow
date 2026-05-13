@@ -1625,18 +1625,22 @@ describe("WorkflowEngine Join & Merge", () => {
       steps: {
         a: {
           name: "Start",
+          interactive: false,
           on_success: [{ step: "b" }, { step: "c" }],
         },
         b: {
           name: "Parent 1",
+          interactive: false,
           on_success: [{ step: "d", message: "msg from b" }],
         },
         c: {
           name: "Parent 2",
+          interactive: false,
           on_success: [{ step: "d", message: "msg from c" }],
         },
         d: {
           name: "Joined Child",
+          interactive: false,
           join: ["b", "c"],
         },
       },
@@ -1669,18 +1673,22 @@ describe("WorkflowEngine Join & Merge", () => {
       steps: {
         a: {
           name: "Start",
+          interactive: false,
           on_success: [{ step: "b" }, { step: "c" }],
         },
         b: {
           name: "Parent 1",
+          interactive: false,
           on_success: [{ step: "d", message: "identical msg" }],
         },
         c: {
           name: "Parent 2",
+          interactive: false,
           on_success: [{ step: "d", message: "identical msg" }],
         },
         d: {
           name: "Joined Child",
+          interactive: false,
           join: ["b", "c"],
         },
       },

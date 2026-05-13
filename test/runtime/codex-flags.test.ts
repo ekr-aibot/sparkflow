@@ -12,6 +12,18 @@ import {
 } from "../../src/runtime/codex-flags.js";
 
 describe("buildCodexArgs", () => {
+  it("starts with 'exec'", () => {
+    const args = buildCodexArgs({ type: "codex" });
+    expect(args[0]).toBe("exec");
+  });
+
+  it("includes 'resume' and sessionId when provided", () => {
+    const args = buildCodexArgs({ type: "codex" }, { sessionId: "sess-123" });
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toBe("resume");
+    expect(args[2]).toBe("sess-123");
+  });
+
   it("includes --dangerously-bypass-approvals-and-sandbox and --json", () => {
     const args = buildCodexArgs({ type: "codex" });
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");

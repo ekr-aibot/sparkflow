@@ -3,7 +3,7 @@
   "name": "feature-development",
   "description": "Develop code, then fan out to automated review and tests. On failure, loop back to developer with feedback. On success, create and watch a PR.",
   "kind": "main",
-  "entry": "developer",
+  "entry": "adopt-pr",
   "defaults": {
     "max_retries": 5,
     "worktree": {
@@ -11,6 +11,28 @@
     }
   },
   "steps": {
+    "adopt-pr": {
+      "name": "Adopt existing PR (optional)",
+      "description": "If the plan text contains '<!-- adopt-pr: N -->', swap this worktree to PR N's head branch so downstream steps (developer, reviewer, test, pr-create) operate on the right branch and pr-create's existing 'PR already exists' path adopts the real PR. Otherwise no-op.",
+      "interactive": false,
+      "prompt": "Adopt an existing PR if the plan opts in.",
+      "runtime": {
+        "type": "shell",
+        "command": "bash",
+        "args": ["~/.sparkflow/flows/scripts/adopt-pr.sh"]
+      },
+      "on_success": [
+        {
+          "step": "developer"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "developer",
+          "message": "adopt-pr failed; continuing on the fresh workflow branch. If the plan intended to update an existing PR, the developer should manually `git fetch origin <branch> && git checkout -B <branch> origin/<branch>` before making changes."
+        }
+      ]
+    },
     "developer": {
       "name": "Developer Agent",
       "description": "Write or revise code based on user instructions or feedback from reviewers/tests.",

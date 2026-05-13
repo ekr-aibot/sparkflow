@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Step, SparkflowWorkflow } from "../schema/types.js";
 
@@ -30,9 +30,16 @@ export class WorktreeManager {
     }
 
     // Isolated worktrees persist for the lifetime of a run.
-    // Return the cached path on re-entry instead of recreating the worktree.
+    // Return the cached path on re-entry instead of recreating the worktree —
+    // but only if the directory is still on disk. An agent or external process
+    // can `git worktree remove` it between iterations; if that happened, drop
+    // the stale cache entry and fall through to recreate.
     if (worktreeConfig.mode === "isolated" && this.worktrees.has(stepId)) {
-      return this.worktrees.get(stepId)!;
+      const cached = this.worktrees.get(stepId)!;
+      if (existsSync(cached)) {
+        return cached;
+      }
+      this.worktrees.delete(stepId);
     }
 
     const worktreePath = resolve(this.repoRoot, WORKTREE_DIR, this.runId, stepId);

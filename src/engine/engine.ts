@@ -380,10 +380,20 @@ export class WorkflowEngine {
       }
     }
 
-    // Re-entry after success = new logical invocation (e.g. the next iteration of
+    // Re-entry that begins a new logical invocation (e.g. the next iteration of
     // an auto-develop loop). Reset session and worktree so the step starts fresh
     // rather than resuming the prior run's claude session or reusing its branch.
-    if (status.state === "succeeded") {
+    //
+    // Two cases qualify as "new invocation":
+    //  - prior state was "succeeded": the next loop iteration after a clean pass.
+    //  - prior state was "failed" AND we re-entered via on_success (not via a
+    //    failure edge): the prior task was given up on (e.g. mark-blocked ran),
+    //    the loop completed its replan, and pick-next has now selected a fresh
+    //    task. Without this, the cached isolated worktree/branch from the
+    //    abandoned task would be reused for the new one.
+    const newInvocation =
+      status.state === "succeeded" || (status.state === "failed" && !viaFailure);
+    if (newInvocation) {
       status.retryCount = 0;
       status.tokenLimitResumes = 0;
       status.sessionId = undefined;
@@ -394,7 +404,9 @@ export class WorkflowEngine {
       if (effectiveMode === "isolated") {
         this.worktreeManager.invalidate(stepId);
       }
-      this.logger.info(`[${stepId}] new invocation (prior run succeeded; resetting state)`);
+      this.logger.info(
+        `[${stepId}] new invocation (prior run ${status.state === "succeeded" ? "succeeded" : "failed; re-entered via on_success"}; resetting state)`
+      );
     }
 
     // Increment retry count only on re-entry via a failure edge.

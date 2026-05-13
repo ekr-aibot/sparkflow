@@ -120,7 +120,8 @@
       "description": "Runs the project's test suite. On failure, routes back to develop with output and attempt count.",
       "interactive": false,
       "worktree": {
-        "mode": "fork"
+        "mode": "fork",
+        "fork_from": "develop"
       },
       "runtime": {
         "type": "shell",
@@ -153,7 +154,8 @@
       "description": "Reviews the implementation against ARCHITECTURE.md and the task. Approves (routes to land) or rejects (routes to develop with feedback).",
       "interactive": false,
       "worktree": {
-        "mode": "fork"
+        "mode": "fork",
+        "fork_from": "develop"
       },
       "runtime": {
         "type": "claude-code",

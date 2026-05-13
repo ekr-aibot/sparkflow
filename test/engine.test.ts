@@ -792,6 +792,94 @@ describe("WorkflowEngine", () => {
     }
   });
 
+  // Models the auto-develop "failure → mark-blocked → replan → pick-next →
+  // develop" path. When develop fails, the loop walks through a few shared
+  // steps and lands back on develop via an on_success edge. That re-entry
+  // represents a NEW task, so develop must reset its session/worktree state
+  // exactly the way a successful re-entry would.
+  it("resets isolated-step state when a failed step is re-entered via on_success", async () => {
+    const prev = process.env.SPARKFLOW_LLM;
+    delete process.env.SPARKFLOW_LLM;
+    try {
+      const developInvocations: Array<{ sessionId: string | undefined; resume: boolean }> = [];
+      let developCalls = 0;
+      let pickNextCalls = 0;
+
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "develop-loop-test",
+        entry: "develop",
+        defaults: { runtime: { type: "shell", command: "echo" }, max_retries: 5 },
+        steps: {
+          develop: {
+            name: "Develop",
+            interactive: false,
+            worktree: { mode: "isolated" },
+            runtime: { type: "claude-code" },
+            on_success: [{ step: "done" }],
+            on_failure: [{ step: "mark-blocked" }],
+          },
+          "mark-blocked": {
+            name: "Mark Blocked",
+            interactive: false,
+            on_success: [{ step: "pick-next" }],
+          },
+          "pick-next": {
+            name: "Pick Next",
+            interactive: false,
+            // First time: loop back to develop (new task). Second time: stop.
+            on_success: [{ step: "develop" }],
+          },
+          done: { name: "Done", interactive: false },
+        },
+      };
+
+      const adapters = new Map<string, RuntimeAdapter>([
+        ["claude-code", new MockAdapter(async (ctx) => {
+          developCalls++;
+          developInvocations.push({
+            sessionId: ctx.sessionId,
+            resume: !!ctx.resume,
+          });
+          // First call fails (drives the mark-blocked → pick-next → develop
+          // loop). Second call succeeds (routes to "done").
+          return {
+            success: developCalls > 1,
+            outputs: {},
+            sessionId: `session-develop-${developCalls}`,
+          };
+        })],
+        ["shell", new MockAdapter(async (ctx) => {
+          if (ctx.stepId === "pick-next") {
+            pickNextCalls++;
+            // Second pick-next call fails to halt the loop after develop
+            // succeeds (otherwise we'd loop forever).
+            if (pickNextCalls > 1) {
+              return { success: false, outputs: {} };
+            }
+          }
+          return { success: true, outputs: {} };
+        })],
+      ]);
+
+      const engine = new WorkflowEngine(workflow, { logger: silentLogger }, adapters);
+      await engine.run();
+
+      // Develop ran twice: once failed, once succeeded.
+      expect(developInvocations.length).toBeGreaterThanOrEqual(2);
+      // The second invocation came in via on_success (failure → mark-blocked
+      // → pick-next → develop). It must look like a fresh task: no resumed
+      // session, no carried sessionId.
+      expect(developInvocations[0].resume).toBe(false);
+      expect(developInvocations[0].sessionId).toBeUndefined();
+      expect(developInvocations[1].resume).toBe(false);
+      expect(developInvocations[1].sessionId).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.SPARKFLOW_LLM;
+      else process.env.SPARKFLOW_LLM = prev;
+    }
+  });
+
   it("SPARKFLOW_LLM=gemini remaps claude-code runtimes at dispatch time", async () => {
     const seenTypes: string[] = [];
     const workflow: SparkflowWorkflow = {

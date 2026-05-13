@@ -147,14 +147,8 @@ describe("isCodexTokenLimitError", () => {
 });
 
 describe("codexUserMessage", () => {
-  it("produces a valid NDJSON user_input event", () => {
-    const line = codexUserMessage("hello world");
-    const parsed = JSON.parse(line.trim()) as Record<string, unknown>;
-    expect(parsed.type).toBe("user_input");
-    expect(parsed.text).toBe("hello world");
-  });
-
-  it("ends with a newline", () => {
-    expect(codexUserMessage("test")).toMatch(/\n$/);
+  it("returns plain text", () => {
+    const text = codexUserMessage("hello world");
+    expect(text).toBe("hello world");
   });
 });

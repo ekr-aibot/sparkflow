@@ -48,32 +48,42 @@ describe("CodexAdapter", () => {
 function mkFakeCodex(turns: string[]): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "fake-codex-"));
   const scriptPath = join(dir, "codex");
+  const statePath = join(dir, "state.json");
+  writeFileSync(statePath, JSON.stringify({ idx: 0 }));
+
   writeFileSync(
     scriptPath,
     `#!/usr/bin/env node
-const rl = require('readline').createInterface({ input: process.stdin });
+const fs = require('fs');
+const statePath = ${JSON.stringify(statePath)};
+// Real codex exec reads until EOF. This blocks until stdin is closed.
+const input = fs.readFileSync(0, 'utf8');
 const turns = ${JSON.stringify(turns)};
-let idx = 0;
-rl.on('line', (line) => {
-  try {
-    const text = turns[idx++] ?? '';
-    // Emit thread.started
-    process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'fake-session-001' }) + '\\n');
-    // Emit item.completed event with agent_message
-    process.stdout.write(JSON.stringify({
-      type: 'item.completed',
-      item: {
-        type: 'agent_message',
-        text: text,
-      },
-    }) + '\\n');
-    // Emit turn.completed to signal turn end
-    process.stdout.write(JSON.stringify({
-      type: 'turn.completed',
-    }) + '\\n');
-  } catch {}
-});
-rl.on('close', () => process.exit(0));
+
+let state = { idx: 0 };
+try {
+  state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+} catch {}
+
+const response = turns[state.idx] ?? '';
+state.idx++;
+fs.writeFileSync(statePath, JSON.stringify(state));
+
+// Emit thread.started
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'fake-session-001' }) + '\\n');
+
+// Emit assistant_message (or item.completed)
+process.stdout.write(JSON.stringify({
+  type: 'assistant_message',
+  content: response,
+  session_id: 'fake-session-001',
+}) + '\\n');
+
+// Emit result or turn.completed
+process.stdout.write(JSON.stringify({
+  type: 'result',
+  session_id: 'fake-session-001',
+}) + '\\n');
 `,
     { mode: 0o755 }
   );
@@ -111,7 +121,7 @@ describe("CodexAdapter with fake binary", () => {
     expect(result.outputs.answer).toBe("forty-two");
   }, 15000);
 
-  it("captures session_id from event stream (thread.started)", async () => {
+  it("captures session_id from event stream", async () => {
     const result = await withFakeCodex(
       ["hello"],
       () => adapter.run(makeCtx({ prompt: "hi" }))
@@ -127,7 +137,7 @@ describe("CodexAdapter with fake binary", () => {
     expect(info).toHaveBeenCalledWith(expect.stringContaining(`cwd=`));
   }, 15000);
 
-  it("extracts JSON outputs from agent_message", async () => {
+  it("extracts JSON outputs from assistant_message", async () => {
     const result = await withFakeCodex(
       ['{"approved": true, "review": "LGTM"}'],
       () => adapter.run(makeCtx({
@@ -145,6 +155,19 @@ describe("CodexAdapter with fake binary", () => {
     expect(result.success).toBe(true);
     expect(result.outputs.approved).toBe(true);
     expect(result.outputs.review).toBe("LGTM");
+  }, 15000);
+
+  it("handles manual nudges via nudgeQueue", async () => {
+    const nudgeQueue = [{ id: "nudge-1", message: "Keep going" }];
+    const result = await withFakeCodex(
+      ["First response", "Nudged response"],
+      () => adapter.run(makeCtx({
+        prompt: "Start",
+        nudgeQueue: nudgeQueue as any,
+      }))
+    );
+    expect(result.success).toBe(true);
+    expect(result.outputs._response).toBe("Nudged response");
   }, 15000);
 });
 
@@ -176,4 +199,3 @@ process.exit(1);
     }
   }, 10000);
 });
-

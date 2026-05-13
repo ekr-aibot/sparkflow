@@ -80,8 +80,9 @@ export function isCodexTokenLimitError(text: string): boolean {
 }
 
 /**
- * Format a user message as a codex NDJSON stdin event.
+ * Format a user message for codex. Real codex exec (v0.130.0+) reads raw text
+ * from stdin until EOF, not JSON-wrapped events.
  */
 export function codexUserMessage(text: string): string {
-  return JSON.stringify({ type: "user_input", text }) + "\n";
+  return text;
 }

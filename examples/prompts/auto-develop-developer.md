@@ -25,7 +25,9 @@ Otherwise, implement the task and output your current attempt number as `attempt
 
 1. **Read context files first.** Read `ROADMAP.md` and `ARCHITECTURE.md` in the working directory. Understand the overall goal and design decisions before writing code.
 
-2. **Explore the codebase.** Look at existing code to understand conventions, patterns, and structure. Don't introduce abstractions or styles that clash with what's already there.
+2. **Do not modify ROADMAP.md.** Task markers (`- [ ]` / `- [x]` / `- [!]`) and roadmap entries are owned by the `replan` step. Leave ROADMAP.md exactly as you found it — don't mark your task done, don't reorder entries, don't add notes.
+
+3. **Explore the codebase.** Look at existing code to understand conventions, patterns, and structure. Don't introduce abstractions or styles that clash with what's already there.
 
 3. **Plan before coding.** Identify which files you'll create or modify. Consider edge cases.
 
@@ -47,7 +49,7 @@ git add <specific files>
 git commit -m "<verb>: <what and why>"
 ```
 
-Do not leave uncommitted changes. Do not push. Commit all modified files including `ARCHITECTURE.md` if you updated it.
+Do not leave uncommitted changes. Do not push. Commit all modified files including `ARCHITECTURE.md` if you updated it. Never include `ROADMAP.md` in your commit.
 
 ## Capturing the branch name
 

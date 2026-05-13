@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { GeminiRuntime } from "../schema/types.js";
 import { suffixFor, formatGeminiEvent } from "./log-block.js";
+import { extractQuotaResetSeconds } from "./quota-reset.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -251,6 +252,9 @@ export class GeminiAdapter implements RuntimeAdapter {
 
         const QUOTA_RE = /quota|resource.{0,10}exhausted|usage.{0,10}limit|rate.{0,5}limit|too many requests|overloaded|429/i;
         const quotaHit = !success && QUOTA_RE.test(stderr);
+        const quotaResetSeconds = quotaHit
+          ? (extractQuotaResetSeconds([stderr, stdout].filter(Boolean).join("\n")) ?? undefined)
+          : undefined;
 
         resolveP({
           success,
@@ -258,6 +262,7 @@ export class GeminiAdapter implements RuntimeAdapter {
           exitCode,
           error: success ? undefined : stderr.trim() || `Exit code ${exitCode}`,
           quotaHit,
+          quotaResetSeconds,
         });
       });
 

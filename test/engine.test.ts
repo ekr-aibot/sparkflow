@@ -1615,3 +1615,92 @@ describe("WorkflowEngine resume mode (resumeFromStep)", () => {
     expect(executed.indexOf("reviewer")).toBeGreaterThan(executed.indexOf("developer"));
   });
 });
+
+describe("WorkflowEngine Join & Merge", () => {
+  it("does not re-run a joined step when multiple parents trigger it with different messages", async () => {
+    const executionCount: Record<string, number> = {};
+    const executionMessages: Record<string, string[]> = {};
+
+    const workflow = makeWorkflow({
+      steps: {
+        a: {
+          name: "Start",
+          on_success: [{ step: "b" }, { step: "c" }],
+        },
+        b: {
+          name: "Parent 1",
+          on_success: [{ step: "d", message: "msg from b" }],
+        },
+        c: {
+          name: "Parent 2",
+          on_success: [{ step: "d", message: "msg from c" }],
+        },
+        d: {
+          name: "Joined Child",
+          join: ["b", "c"],
+        },
+      },
+      entry: "a",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executionCount[ctx.stepId] = (executionCount[ctx.stepId] || 0) + 1;
+      if (!executionMessages[ctx.stepId]) executionMessages[ctx.stepId] = [];
+      if (ctx.transitionMessage) {
+        executionMessages[ctx.stepId].push(ctx.transitionMessage);
+      }
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger as any }, adapters);
+    await engine.run();
+
+    expect(executionCount["d"]).toBe(1);
+    expect(executionMessages["d"]).toHaveLength(1);
+    expect(executionMessages["d"][0]).toContain("msg from b");
+    expect(executionMessages["d"][0]).toContain("msg from c");
+  });
+
+  it("deduplicates identical messages in joined steps", async () => {
+    const executionCount: Record<string, number> = {};
+    const executionMessages: Record<string, string[]> = {};
+
+    const workflow = makeWorkflow({
+      steps: {
+        a: {
+          name: "Start",
+          on_success: [{ step: "b" }, { step: "c" }],
+        },
+        b: {
+          name: "Parent 1",
+          on_success: [{ step: "d", message: "identical msg" }],
+        },
+        c: {
+          name: "Parent 2",
+          on_success: [{ step: "d", message: "identical msg" }],
+        },
+        d: {
+          name: "Joined Child",
+          join: ["b", "c"],
+        },
+      },
+      entry: "a",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executionCount[ctx.stepId] = (executionCount[ctx.stepId] || 0) + 1;
+      if (!executionMessages[ctx.stepId]) executionMessages[ctx.stepId] = [];
+      if (ctx.transitionMessage) {
+        executionMessages[ctx.stepId].push(ctx.transitionMessage);
+      }
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger as any }, adapters);
+    await engine.run();
+
+    expect(executionCount["d"]).toBe(1);
+    expect(executionMessages["d"]).toHaveLength(1);
+    expect(executionMessages["d"][0]).toBe("identical msg");
+  });
+});

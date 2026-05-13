@@ -378,6 +378,16 @@ export class WorkflowEngine {
         }
         return;
       }
+
+      // Join satisfied: consume all pending messages from parents and merge with the current one.
+      // Deduping prevents redundant prompts in common fan-out/join patterns like auto-develop.
+      const messages = [...status.pendingMessages];
+      if (message) messages.push(message);
+      status.pendingMessages = [];
+      if (messages.length > 0) {
+        const uniqueMessages = Array.from(new Set(messages));
+        message = uniqueMessages.join("\n\n");
+      }
     }
 
     // Re-entry that begins a new logical invocation (e.g. the next iteration of

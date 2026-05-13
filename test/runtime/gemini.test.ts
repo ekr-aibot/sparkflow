@@ -214,6 +214,20 @@ describe("GeminiAdapter", () => {
     expect(result.error).toMatch(/cwd does not exist/);
   });
 
+  it("populates quotaResetSeconds from stderr 'retry after N seconds' when quotaHit", async () => {
+    const ctx = makeCtx({
+      runtime: {
+        type: "gemini",
+        command: FAKE_GEMINI,
+        args: ["--exit-code", "1", "--emit-stderr", "rate limit exceeded. Please retry after 30 seconds."],
+      },
+    });
+    const result = await adapter.run(ctx);
+    expect(result.success).toBe(false);
+    expect(result.quotaHit).toBe(true);
+    expect(result.quotaResetSeconds).toBe(30);
+  });
+
   it("passes --include-directories to the command line", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "sparkflow-gemini-argv-"));
     try {

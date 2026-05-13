@@ -13,6 +13,7 @@ import {
   codexUserMessage,
 } from "./codex-flags.js";
 import { extractJsonFromResult, applySuccessGate } from "./claude-code.js";
+import { extractQuotaResetSeconds } from "./quota-reset.js";
 
 export class CodexAdapter implements RuntimeAdapter {
 
@@ -208,6 +209,8 @@ export class CodexAdapter implements RuntimeAdapter {
         const quotaHit = !success && !tokenLimitHit && (
           isCodexQuotaError(stderr) || isCodexQuotaError(stdout)
         );
+        const quotaText = [String(lastAssistantText ?? ""), stderr, stdout].filter(Boolean).join("\n");
+        const quotaResetSeconds = quotaHit ? (extractQuotaResetSeconds(quotaText) ?? undefined) : undefined;
 
         const outputs: Record<string, unknown> = {};
         const resultText = lastAssistantText || allAssistantText || stdout.trim();
@@ -246,6 +249,7 @@ export class CodexAdapter implements RuntimeAdapter {
           sessionId: capturedSessionId,
           tokenLimitHit,
           quotaHit,
+          quotaResetSeconds,
         });
       });
 

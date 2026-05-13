@@ -190,3 +190,32 @@ describe("CodexAdapter with fake binary", () => {
   }, 15000);
 });
 
+describe("CodexAdapter quota reset parsing", () => {
+  const adapter = new CodexAdapter();
+
+  it("populates quotaResetSeconds from stderr 'retry after N seconds' when quotaHit", async () => {
+    // Build a fake codex that exits non-zero with a rate-limit message on stderr.
+    const dir = mkdtempSync(join(tmpdir(), "fake-codex-quota-"));
+    const scriptPath = join(dir, "codex");
+    writeFileSync(
+      scriptPath,
+      `#!/usr/bin/env node
+process.stderr.write("rate limit exceeded. Please retry after 60 seconds.\\n");
+process.exit(1);
+`,
+      { mode: 0o755 }
+    );
+    const origPath = process.env.PATH;
+    process.env.PATH = `${dir}:${origPath ?? ""}`;
+    try {
+      const result = await adapter.run(makeCtx({ prompt: "do work" }));
+      expect(result.success).toBe(false);
+      expect(result.quotaHit).toBe(true);
+      expect(result.quotaResetSeconds).toBe(60);
+    } finally {
+      process.env.PATH = origPath;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 10000);
+});
+

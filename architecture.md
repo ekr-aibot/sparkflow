@@ -101,10 +101,18 @@ The `codex` chat tool uses a different configuration mechanism than Claude and G
 
 ### Quota / Rate-Limit Handling
 
-When a runtime adapter returns `quotaHit: true`, the engine waits with exponential backoff (60 s → 120 s → 300 s → 600 s → 1800 s → 3600 s) and retries the step without counting the wait against `max_retries` or `retry.attempts`. This avoids treating a temporary API quota exhaustion as a permanent job failure. `StepStatus.quotaWaitAttempts` tracks how many times the step has waited. The dashboard receives a `{"type":"quota_wait", "step": …, "wait_seconds": …, "attempt": …}` event on stderr.
+When a runtime adapter returns `quotaHit: true`, the engine waits and retries the step without counting the wait against `max_retries` or `retry.attempts`. If the adapter also sets `quotaResetSeconds` (parsed from the error message), the engine waits exactly that long. Otherwise it falls back to exponential backoff (60 s → 120 s → 300 s → 600 s → 1800 s → 3600 s). `StepStatus.quotaWaitAttempts` tracks how many times the step has waited. The dashboard receives a `{"type":"quota_wait", "step": …, "wait_seconds": …, "attempt": …}` event on stderr.
 
-Detection patterns (both `ClaudeCodeAdapter.isQuotaError` and `GeminiAdapter`):
+**Shared parser (`src/runtime/quota-reset.ts`):** `extractQuotaResetSeconds(text, now?)` recognizes:
+- `retry after N seconds` → N
+- `retry after N minutes` → N × 60
+- `resets H:MMam/pm (TZ)` → seconds from `now` until that wall-clock time in the named timezone; unrecognized timezone returns `null`
+
+All three runtime adapters (Claude, Codex, Gemini) call this parser when `quotaHit` is true and attach the result as `RuntimeResult.quotaResetSeconds`.
+
+Detection patterns:
 - Claude: `is_error` result events or stderr containing "rate limit", "quota", "overloaded", "too many requests", "529"
+- Codex: stderr/stdout containing any of the above via `isCodexQuotaError` in `codex-flags.ts`
 - Gemini: stderr containing any of the above plus "RESOURCE_EXHAUSTED"
 
 ### Pasted Image Serving

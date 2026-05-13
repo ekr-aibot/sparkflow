@@ -8,6 +8,7 @@ import { dirname, resolve } from "node:path";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { ClaudeCodeRuntime } from "../schema/types.js";
 import { suffixFor, formatClaudeEvent } from "./log-block.js";
+import { extractQuotaResetSeconds } from "./quota-reset.js";
 
 /**
  * Returns a system reminder instructing the agent to stay inside its worktree.
@@ -271,6 +272,9 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         const parsed = resultEvent;
         const tokenLimitHit = !success && this.isTokenLimitError(parsed, stderr);
         const quotaHit = !success && !tokenLimitHit && this.isQuotaError(parsed, stderr, stdout);
+        const quotaResetSeconds = quotaHit
+          ? (extractQuotaResetSeconds([String(parsed?.result ?? ""), stderr, stdout].filter(Boolean).join("\n")) ?? undefined)
+          : undefined;
 
         // Extract declared outputs from the result event regardless of whether
         // the step succeeded or failed. success_output gating is a routing
@@ -325,6 +329,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           sessionId,
           tokenLimitHit,
           quotaHit,
+          quotaResetSeconds,
         });
       });
 

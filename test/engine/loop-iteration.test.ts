@@ -4,12 +4,23 @@ vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    existsSync: vi.fn().mockReturnValue(false),
+    rmSync: vi.fn(),
+  };
+});
+
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { WorkflowEngine } from "../../src/engine/engine.js";
 import type { SparkflowWorkflow } from "../../src/schema/types.js";
 import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "../../src/runtime/types.js";
 
 const mockExec = vi.mocked(execFileSync);
+const mockExistsSync = vi.mocked(existsSync);
 
 const silentLogger = { info: () => {}, error: () => {} };
 
@@ -229,6 +240,14 @@ describe("WorkflowEngine loop iteration and re-entry", () => {
   describe("loop-iteration: failure retry keeps session (regression guard)", () => {
     beforeEach(() => {
       vi.clearAllMocks();
+      // Simulate worktree directories existing so the cached path is returned on retry.
+      // Without this, existsSync returns false for the fake path and the worktree
+      // is re-allocated, causing a spurious second `git worktree add -b` call.
+      mockExistsSync.mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      mockExistsSync.mockReturnValue(false);
     });
 
     it("resumes the session when develop fails and is retried via on_failure", async () => {

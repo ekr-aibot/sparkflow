@@ -99,18 +99,31 @@ export class CodexAdapter implements RuntimeAdapter {
             ctx.logger?.info(`[${ctx.stepId}:nudge:delivered] ${nudgeId}`);
           }
 
+          const startAt = Date.now();
           const turnResult = await this.executeTurn(ctx, runtime, currentSessionId, promptText, tmpDir, tempFiles);
+          const endAt = Date.now();
           currentSessionId = turnResult.sessionId || currentSessionId;
           lastResult = turnResult;
 
           if (nudgeId) {
-            process.stderr.write(
-              JSON.stringify({
-                type: "nudge_event", nudge_id: nudgeId, phase: "acked",
-                step: ctx.stepId, at: Date.now(), duration_ms: 100,
-                turn_count: 1,
-              }) + "\n"
-            );
+            if (turnResult.success) {
+              process.stderr.write(
+                JSON.stringify({
+                  type: "nudge_event", nudge_id: nudgeId, phase: "acked",
+                  step: ctx.stepId, at: endAt, duration_ms: endAt - startAt,
+                  turn_count: 1,
+                }) + "\n"
+              );
+              ctx.logger?.info(`[${ctx.stepId}:nudge:acked] ${nudgeId} in ${endAt - startAt}ms`);
+            } else {
+              process.stderr.write(
+                JSON.stringify({
+                  type: "nudge_event", nudge_id: nudgeId, phase: "abandoned",
+                  step: ctx.stepId, at: endAt, reason: turnResult.error || "Turn failed",
+                }) + "\n"
+              );
+              ctx.logger?.info(`[${ctx.stepId}:nudge:abandoned] ${nudgeId}: ${turnResult.error}`);
+            }
           }
 
           if (!turnResult.success) {

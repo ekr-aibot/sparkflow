@@ -36,7 +36,7 @@ Executes workflow steps, resolves worktrees, injects env vars. Passes `config` t
 ### Runtimes
 - `claude-code` — spawns `claude` CLI with a prompt, supports nudges and session resumption
 - `gemini` — spawns `gemini` CLI
-- `codex` — spawns OpenAI `codex exec --json` for NDJSON streaming; session ID captured from events for resume; multi-turn nudge via `user_input` events on stdin; MCP wired via a temp `--config-file` TOML; helper code in `src/runtime/codex-flags.ts`
+- `codex` — spawns OpenAI `codex exec --json` for NDJSON streaming; session ID captured from events for resume; multi-turn nudge/self-nudge handled by spawning a new `codex exec resume <sessionId>` process for each turn (closing stdin immediately with raw prompt text); MCP wired via a temp `--config-file` TOML; helper code in `src/runtime/codex-flags.ts`
 - `shell` — runs arbitrary shell commands; applies `resolveTemplate` to `command` and each `arg` before spawning, so `${config.X}` and `${steps.X.output.Y}` work in shell args; fails fast with a clear error if a config path resolves to missing
 - `pr-watcher` — polls GitHub for CI results and review activity
 - `workflow` — dispatches child workflows (supports `foreach`)

@@ -57,8 +57,8 @@ export class CodexAdapter implements RuntimeAdapter {
     if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
     const fullPrompt = parts.join("\n\n");
 
-    // `codex exec` reads the prompt from stdin (--json mode). Pass it as first
-    // user_input event after spawning.
+    // `codex exec` reads the prompt from stdin. Pass it as raw text and end stdin
+    // so it starts processing.
     const args = [...subcommand, ...extraArgs];
 
     return new Promise<RuntimeResult>((resolve) => {
@@ -67,6 +67,11 @@ export class CodexAdapter implements RuntimeAdapter {
         env: { ...process.env as Record<string, string>, ...ctx.env },
         stdio: "pipe",
       });
+
+      if (fullPrompt) {
+        child.stdin?.write(fullPrompt);
+      }
+      child.stdin?.end();
 
       let stdout = "";
       let stderr = "";
@@ -79,15 +84,6 @@ export class CodexAdapter implements RuntimeAdapter {
       let lastAssistantText = "";
       // Accumulates all assistant text in case we need it for extraction.
       let allAssistantText = "";
-
-      // Turn-boundary detection: codex emits a "result" or "done" event when
-      // a turn completes. We track a callback to resolve the current wait.
-      let onTurnEnd: (() => void) | null = null;
-      let turnEnded = false;
-
-      // Nudge tracking
-      let deliveredNudge: { id: string; deliveredAt: number } | null = null;
-      let postNudgeTurnCount = 0;
 
       child.stdout?.on("data", (data: Buffer) => {
         const chunk = data.toString();
@@ -121,23 +117,17 @@ export class CodexAdapter implements RuntimeAdapter {
                   .filter(p => p.type === "text" || p.type === "output_text")
                   .map(p => String(p.text ?? ""))
                   .join("");
+              } else if (evType === "item.completed") {
+                const item = event.item as Record<string, unknown>;
+                if (item?.type === "agent_message" && typeof item.text === "string") {
+                  text = item.text;
+                }
               }
+
               if (text.trim()) {
                 lastAssistantText = text.trim();
                 allAssistantText += (allAssistantText ? "\n" : "") + text.trim();
               }
-            }
-
-            if (evType === "assistant" && deliveredNudge) {
-              postNudgeTurnCount++;
-            }
-
-            // Turn-end: codex signals completion via a "result" or "done" event.
-            if (evType === "result" || evType === "done" || evType === "turn_complete") {
-              turnEnded = true;
-              const cb = onTurnEnd;
-              onTurnEnd = null;
-              cb?.();
             }
 
             if (ctx.verbose && ctx.logger) {
@@ -161,7 +151,6 @@ export class CodexAdapter implements RuntimeAdapter {
         }
       });
 
-      let selfNudgeUsed = false;
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       if (ctx.timeout) {
@@ -177,23 +166,6 @@ export class CodexAdapter implements RuntimeAdapter {
           try { unlinkSync(f); } catch { /* ignore */ }
         }
         try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-
-        // Unblock turn loop if waiting.
-        turnEnded = true;
-        const cb = onTurnEnd;
-        onTurnEnd = null;
-        cb?.();
-
-        if (deliveredNudge) {
-          const dn = deliveredNudge;
-          deliveredNudge = null;
-          process.stderr.write(
-            JSON.stringify({
-              type: "nudge_event", nudge_id: dn.id, phase: "abandoned",
-              step: ctx.stepId, at: Date.now(), reason: `child exited (code=${code ?? -1})`,
-            }) + "\n"
-          );
-        }
 
         const exitCode = code ?? 1;
         let success = exitCode === 0;
@@ -262,87 +234,6 @@ export class CodexAdapter implements RuntimeAdapter {
           ? `codex CLI not found on $PATH — install from https://github.com/openai/codex`
           : err.message;
         resolve({ success: false, outputs: {}, error: message, sessionId: capturedSessionId });
-      });
-
-      // Multi-turn loop: write the initial prompt, then service nudges between turns.
-      const runTurns = async (): Promise<void> => {
-        if (!fullPrompt) {
-          // Nothing to send (e.g. resume with no continuation). Let codex exit.
-          child.stdin?.end();
-          return;
-        }
-
-        child.stdin?.write(codexUserMessage(fullPrompt));
-
-        while (true) {
-          // Wait for the current turn to end.
-          turnEnded = false;
-          await new Promise<void>((r) => {
-            if (turnEnded) { r(); return; }
-            onTurnEnd = r;
-          });
-
-          // Self-nudge if success_output gate output is absent.
-          if (
-            ctx.step.success_output &&
-            !selfNudgeUsed &&
-            lastAssistantText
-          ) {
-            const parsedCurrent = extractJsonFromResult(lastAssistantText);
-            const gatePresent = parsedCurrent !== null && ctx.step.success_output in parsedCurrent;
-            if (!gatePresent) {
-              const declaredNames = ctx.step.outputs
-                ? Object.keys(ctx.step.outputs)
-                : [ctx.step.success_output];
-              const nudgeText =
-                `Your previous response did not include the required \`${ctx.step.success_output}\`` +
-                ` field (and possibly other declared outputs). Please respond now with a valid JSON` +
-                ` object containing all of: ${declaredNames.join(", ")}. Do not include any other prose.`;
-              ctx.logger?.info(`[${ctx.stepId}:self-nudge] gate output \`${ctx.step.success_output}\` was absent, requesting re-emit`);
-              child.stdin?.write(codexUserMessage(nudgeText));
-              selfNudgeUsed = true;
-              continue;
-            }
-          }
-
-          // Emit nudge ack if one was in flight.
-          if (deliveredNudge) {
-            const now = Date.now();
-            const dn = deliveredNudge;
-            const tc = postNudgeTurnCount;
-            deliveredNudge = null;
-            process.stderr.write(
-              JSON.stringify({
-                type: "nudge_event", nudge_id: dn.id, phase: "acked",
-                step: ctx.stepId, at: now, duration_ms: now - dn.deliveredAt, turn_count: tc,
-              }) + "\n"
-            );
-            ctx.logger?.info(`[${ctx.stepId}:nudge:acked]`);
-          }
-
-          const nudgeItem = ctx.nudgeQueue?.shift();
-          if (nudgeItem) {
-            const { id: nudgeId, message: nudgeMsg } = nudgeItem;
-            process.stderr.write(
-              JSON.stringify({
-                type: "nudge_event", nudge_id: nudgeId, phase: "delivered",
-                step: ctx.stepId, at: Date.now(),
-              }) + "\n"
-            );
-            ctx.logger?.info(`[${ctx.stepId}:nudge:delivered] ${nudgeId}`);
-            deliveredNudge = { id: nudgeId, deliveredAt: Date.now() };
-            postNudgeTurnCount = 0;
-            child.stdin?.write(codexUserMessage(nudgeMsg));
-          } else {
-            child.stdin?.end();
-            break;
-          }
-        }
-      };
-
-      runTurns().catch((err) => {
-        ctx.logger?.info(`[${ctx.stepId}] turn loop error: ${err instanceof Error ? err.message : String(err)}`);
-        child.stdin?.end();
       });
     });
   }

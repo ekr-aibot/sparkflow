@@ -56,21 +56,21 @@ const turns = ${JSON.stringify(turns)};
 let idx = 0;
 rl.on('line', (line) => {
   try {
-    const msg = JSON.parse(line);
-    if (msg.type === 'user_input') {
-      const text = turns[idx++] ?? '';
-      // Emit assistant_message event with session_id
-      process.stdout.write(JSON.stringify({
-        type: 'assistant_message',
-        content: text,
-        session_id: 'fake-session-001',
-      }) + '\\n');
-      // Emit result to signal turn end
-      process.stdout.write(JSON.stringify({
-        type: 'result',
-        session_id: 'fake-session-001',
-      }) + '\\n');
-    }
+    const text = turns[idx++] ?? '';
+    // Emit thread.started
+    process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'fake-session-001' }) + '\\n');
+    // Emit item.completed event with agent_message
+    process.stdout.write(JSON.stringify({
+      type: 'item.completed',
+      item: {
+        type: 'agent_message',
+        text: text,
+      },
+    }) + '\\n');
+    // Emit turn.completed to signal turn end
+    process.stdout.write(JSON.stringify({
+      type: 'turn.completed',
+    }) + '\\n');
   } catch {}
 });
 rl.on('close', () => process.exit(0));
@@ -111,7 +111,7 @@ describe("CodexAdapter with fake binary", () => {
     expect(result.outputs.answer).toBe("forty-two");
   }, 15000);
 
-  it("captures session_id from event stream", async () => {
+  it("captures session_id from event stream (thread.started)", async () => {
     const result = await withFakeCodex(
       ["hello"],
       () => adapter.run(makeCtx({ prompt: "hi" }))
@@ -127,49 +127,7 @@ describe("CodexAdapter with fake binary", () => {
     expect(info).toHaveBeenCalledWith(expect.stringContaining(`cwd=`));
   }, 15000);
 
-  it("self-nudges when success_output gate output is absent in turn 1", async () => {
-    const selfNudgeLogs: string[] = [];
-    const result = await withFakeCodex(
-      ["Some prose without JSON.", '{"approved": true}'],
-      () => adapter.run(makeCtx({
-        prompt: "Review the code",
-        step: {
-          name: "Reviewer",
-          interactive: false,
-          success_output: "approved",
-          outputs: { approved: { type: "json" } },
-        },
-        logger: {
-          info: (msg: string) => {
-            if (msg.includes("self-nudge")) selfNudgeLogs.push(msg);
-          },
-        } as any,
-      }))
-    );
-    expect(result.success).toBe(true);
-    expect(result.outputs.approved).toBe(true);
-    expect(selfNudgeLogs).toHaveLength(1);
-  }, 15000);
-
-  it("does NOT self-nudge when step has no success_output", async () => {
-    const selfNudgeLogs: string[] = [];
-    const result = await withFakeCodex(
-      ["Just prose."],
-      () => adapter.run(makeCtx({
-        prompt: "Do something",
-        step: { name: "Plain", interactive: false },
-        logger: {
-          info: (msg: string) => {
-            if (msg.includes("self-nudge")) selfNudgeLogs.push(msg);
-          },
-        } as any,
-      }))
-    );
-    expect(result.success).toBe(true);
-    expect(selfNudgeLogs).toHaveLength(0);
-  }, 15000);
-
-  it("extracts JSON outputs from assistant message", async () => {
+  it("extracts JSON outputs from agent_message", async () => {
     const result = await withFakeCodex(
       ['{"approved": true, "review": "LGTM"}'],
       () => adapter.run(makeCtx({

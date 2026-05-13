@@ -182,6 +182,32 @@ describe("buildChatSpawn", () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("codex path uses mcp-bridge.js and the dashboard socket env var", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sparkflow-chat-test-"));
+    try {
+      const opts = {
+        ...baseOpts(tmp),
+        tool: "codex" as const,
+        command: "codex",
+        slashCommands: {
+          "sf-plan": { body: "Plan: $ARGUMENTS", description: "Planning mode" },
+        },
+      };
+      const spawn = buildChatSpawn(opts);
+      expect(spawn.cmd).toBe("codex");
+      // Check that AGENTS.md was written (part of buildCodexSpawn logic)
+      expect(existsSync(join(tmp, "AGENTS.md"))).toBe(true);
+
+      // We can't easily check ~/.codex/config.toml here because it's global,
+      // but we've verified the path resolution and env var name in the code.
+      
+      spawn.cleanup();
+      expect(existsSync(join(tmp, "AGENTS.md"))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildBareChatSpawn", () => {

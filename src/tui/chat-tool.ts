@@ -16,7 +16,7 @@ import { buildCodexSpawn as _buildCodexSpawn, buildBareCodexSpawn } from "./code
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const CODEX_MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
+const CODEX_MCP_BRIDGE_PATH = resolve(__dirname, "mcp-bridge.js");
 
 export type ChatTool = "claude" | "gemini" | "codex";
 
@@ -290,7 +290,7 @@ function buildCodexChatSpawn(opts: BuildChatSpawnOpts): ChatSpawn {
   const result = _buildCodexSpawn({
     command: opts.command,
     chatArgs: opts.chatArgs,
-    mcpServerPath: CODEX_MCP_SERVER_PATH,
+    mcpServerPath: CODEX_MCP_BRIDGE_PATH,
     ipcSocketPath: opts.mcpServerSpec.env.SPARKFLOW_SOCKET ?? opts.mcpServerSpec.env.SPARKFLOW_DASHBOARD_SOCKET ?? "",
     systemPromptText: opts.systemPromptText,
     cwd: opts.cwd,

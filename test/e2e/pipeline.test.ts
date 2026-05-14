@@ -1,16 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, rmSync, existsSync, writeFileSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { WorkflowEngine } from "../../src/engine/engine.js";
 import type { SparkflowWorkflow } from "../../src/schema/types.js";
 import { createFakeClaude, createFakeCodex } from "./fake-binaries.js";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 let prevLlm: string | undefined;
 let prevTrust: string | undefined;
 let prevPath: string | undefined;
 let fakeBinDir: string | undefined;
+
+const FAKE_CLAUDE_MJS = resolve(__dirname, "..", "runtime", "fake-claude.mjs");
 
 beforeEach(() => {
   prevLlm = process.env.SPARKFLOW_LLM;
@@ -24,6 +30,12 @@ beforeEach(() => {
   createFakeCodex(fakeBinDir);
   prevPath = process.env.PATH;
   process.env.PATH = `${fakeBinDir}:${process.env.PATH}`;
+
+  // Also set SPARKFLOW_CLAUDE_COMMAND to use the mjs version if it exists,
+  // which is more robust for some tests.
+  if (existsSync(FAKE_CLAUDE_MJS)) {
+    process.env.SPARKFLOW_CLAUDE_COMMAND = FAKE_CLAUDE_MJS;
+  }
 });
 
 afterEach(() => {
@@ -33,6 +45,7 @@ afterEach(() => {
   else process.env.GEMINI_CLI_TRUST_WORKSPACE = prevTrust;
   if (prevPath) process.env.PATH = prevPath;
   if (fakeBinDir) rmSync(fakeBinDir, { recursive: true, force: true });
+  delete process.env.SPARKFLOW_CLAUDE_COMMAND;
 });
 
 describe("e2e pipeline", () => {

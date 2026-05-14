@@ -18,7 +18,6 @@ const __dirname = dirname(__filename);
 const MCP_BRIDGE_PATH = resolve(__dirname, "mcp-bridge.js");
 const STATUS_DISPLAY_PATH = resolve(__dirname, "status-display.js");
 const SUPERVISOR_PATH = resolve(__dirname, "supervisor.js");
-const WEB_ENTRY_PATH = resolve(__dirname, "..", "web", "index.js");
 const ENGINE_DAEMON_PATH = resolve(__dirname, "..", "dashboard", "engine-daemon.js");
 const FRONTEND_DAEMON_PATH = resolve(__dirname, "..", "dashboard", "frontend-daemon.js");
 

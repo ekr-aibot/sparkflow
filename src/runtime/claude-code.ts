@@ -158,7 +158,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     const fullPrompt = parts.join("\n\n");
 
     return new Promise<RuntimeResult>((resolve) => {
-      const child = spawn("claude", args, {
+      const cmd = process.env.SPARKFLOW_CLAUDE_COMMAND || "claude";
+      const child = spawn(cmd, args, {
         cwd: ctx.cwd,
         env: { ...process.env as Record<string, string>, ...ctx.env },
         stdio: "pipe",
@@ -168,6 +169,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       let stderr = "";
       // The result event from the most recently completed turn
       let resultEvent: Record<string, unknown> | null = null;
+      let resultEventPending = false;
       let stdoutLineBuffer = "";
 
       // Resolved by the turn loop when it needs to wait for the next result event.
@@ -192,9 +194,13 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
             const event = JSON.parse(line) as Record<string, unknown>;
             if (event.type === "result") {
               resultEvent = event;
-              const cb = onResultEvent;
-              onResultEvent = null;
-              cb?.();
+              resultEventPending = true;
+              if (onResultEvent) {
+                const cb = onResultEvent;
+                onResultEvent = null;
+                resultEventPending = false;
+                cb();
+              }
             } else if (event.type === "assistant" && deliveredNudge) {
               postNudgeTurnCount++;
             }
@@ -361,7 +367,10 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
         while (true) {
           // Wait for the current turn's result event (or process close)
-          await new Promise<void>((r) => { onResultEvent = r; });
+          if (!resultEventPending) {
+            await new Promise<void>((r) => { onResultEvent = r; });
+          }
+          resultEventPending = false;
 
           // Self-nudge: if the gate output is absent from this turn's result, inject one retry.
           // Fires only when success_output is set, the turn succeeded (not is_error), and we

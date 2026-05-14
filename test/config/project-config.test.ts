@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadProjectConfig, resolveWorkflowPath, userConfigDir } from "../../src/config/project-config.js";
+import {
+  loadProjectConfig,
+  resolveWorkflowPath,
+  userConfigDir,
+  resolveMaintenanceConfig,
+  parseConfigObject,
+} from "../../src/config/project-config.js";
 
 // Each test gets its own temp HOME and project cwd so layers can't bleed across cases.
 describe("loadProjectConfig / resolveWorkflowPath — user + project layering", () => {
@@ -166,5 +172,87 @@ describe("loadProjectConfig / resolveWorkflowPath — user + project layering", 
   it("throws when issues_repo is not a string", () => {
     writeProjectConfig({ git: { issues_repo: true } });
     expect(() => loadProjectConfig(projectCwd)).toThrow(/"git.issues_repo" must be a string/);
+  });
+
+  // ── maintenance config ─────────────────────────────────────────────────
+
+  it("parses maintenance with pm and architect booleans", () => {
+    writeProjectConfig({ maintenance: { pm: true, architect: false } });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.maintenance?.pm).toBe(true);
+    expect(cfg.maintenance?.architect).toBe(false);
+  });
+
+  it("parses maintenance with queueThreshold and cycleInterval", () => {
+    writeProjectConfig({ maintenance: { pm: true, architect: true, queueThreshold: 5, cycleInterval: 10 } });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.maintenance?.queueThreshold).toBe(5);
+    expect(cfg.maintenance?.cycleInterval).toBe(10);
+  });
+
+  it("maintenance config absent when not set", () => {
+    writeProjectConfig({ defaultWorkflow: "wf" });
+    const cfg = loadProjectConfig(projectCwd);
+    expect(cfg.maintenance).toBeUndefined();
+  });
+
+  it("throws when maintenance is not an object", () => {
+    writeProjectConfig({ maintenance: "yes" });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"maintenance" must be an object/);
+  });
+
+  it("throws when maintenance.pm is not a boolean", () => {
+    writeProjectConfig({ maintenance: { pm: "yes" } });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"maintenance.pm" must be a boolean/);
+  });
+
+  it("throws when maintenance.architect is not a boolean", () => {
+    writeProjectConfig({ maintenance: { architect: 1 } });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"maintenance.architect" must be a boolean/);
+  });
+
+  it("throws when maintenance.queueThreshold is not a non-negative integer", () => {
+    writeProjectConfig({ maintenance: { queueThreshold: -1 } });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"maintenance.queueThreshold" must be a non-negative integer/);
+  });
+
+  it("throws when maintenance.cycleInterval is not a positive integer", () => {
+    writeProjectConfig({ maintenance: { cycleInterval: 0 } });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"maintenance.cycleInterval" must be a positive integer/);
+  });
+
+  it("throws on unknown maintenance fields", () => {
+    writeProjectConfig({ maintenance: { pm: true, bogus: "field" } });
+    expect(() => loadProjectConfig(projectCwd)).toThrow(/"maintenance.bogus" is not a recognized field/);
+  });
+});
+
+// ── resolveMaintenanceConfig defaults ─────────────────────────────────────
+
+describe("resolveMaintenanceConfig", () => {
+  it("returns all defaults when maintenance is undefined", () => {
+    const resolved = resolveMaintenanceConfig({});
+    expect(resolved.pm).toBe(false);
+    expect(resolved.architect).toBe(false);
+    expect(resolved.queueThreshold).toBe(3);
+    expect(resolved.cycleInterval).toBe(5);
+  });
+
+  it("applies explicit values over defaults", () => {
+    const resolved = resolveMaintenanceConfig({
+      maintenance: { pm: true, architect: true, queueThreshold: 7, cycleInterval: 10 },
+    });
+    expect(resolved.pm).toBe(true);
+    expect(resolved.architect).toBe(true);
+    expect(resolved.queueThreshold).toBe(7);
+    expect(resolved.cycleInterval).toBe(10);
+  });
+
+  it("partial override: only pm set", () => {
+    const resolved = resolveMaintenanceConfig({ maintenance: { pm: true } });
+    expect(resolved.pm).toBe(true);
+    expect(resolved.architect).toBe(false);
+    expect(resolved.queueThreshold).toBe(3);
+    expect(resolved.cycleInterval).toBe(5);
   });
 });

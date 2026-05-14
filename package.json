@@ -9,7 +9,8 @@
     "sparkflow": "dist/src/tui/index.js",
     "sparkflow-run": "dist/src/cli/index.js",
     "sparkflow-kill": "dist/src/cli/kill-bin.js",
-    "sparkflow-dashboard": "dist/src/cli/dashboard.js"
+    "sparkflow-dashboard": "dist/src/cli/dashboard.js",
+    "sparkflow-maintenance": "dist/src/cli/maintenance.js"
   },
   "files": [
     "dist",

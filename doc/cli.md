@@ -50,6 +50,26 @@ Same MCP tools and slash commands as tmux mode — the only difference is the su
 | Slash commands (`/project:sf-plan`, `/project:sf-dispatch`) | Supported via `.claude/commands/` | Supported via `.gemini/commands/project/` | Supported via `~/.codex/prompts/sf-*.md` |
 | Session resume across retries | UUID-based via `--session-id`/`--resume` | Not wired — retries replay the full prompt + transition message | UUID-based via `exec resume <id>` |
 
+### `sparkflow-maintenance` — auto-develop maintenance state
+
+Manages the maintenance cycle counter and config for the `auto-develop` workflow. Called by workflow steps internally; can also be used directly for debugging.
+
+```
+sparkflow-maintenance decide [--cwd <dir>]
+sparkflow-maintenance record-task-completed [--cwd <dir>]
+sparkflow-maintenance record-maintenance-done [--cwd <dir>] [--pm-added N] [--architect-added N]
+sparkflow-maintenance is-enabled <pm|architect> [--cwd <dir>]
+```
+
+| Subcommand | Exit | Description |
+| --- | --- | --- |
+| `decide` | 0 = run maintenance, 1 = skip | Reads config + state, prints `{ run, reason, pmEnabled, architectEnabled }` JSON to stdout. Exits 0 when a maintenance pass is due (queue low or cycle interval met); exits 1 otherwise. |
+| `record-task-completed` | 0 | Increments `tasksCompletedSinceLastMaintenance` in `.sparkflow/state/auto-develop-maintenance.json`. Idempotent on missing file. |
+| `record-maintenance-done` | 0 | Resets the cycle counter, updates `lastMaintenanceAt`, records per-agent task-added counts, and commits `ROADMAP.md` if it has changes. |
+| `is-enabled <pm\|architect>` | 0 = enabled, 1 = disabled | Checks `.sparkflow/config.json` and exits 0 if the named agent is enabled. Used as a guard inside agent prompts. |
+
+State file: `<cwd>/.sparkflow/state/auto-develop-maintenance.json`
+
 ### `sparkflow-run` — workflow runner
 
 Executes a single workflow. The dashboard's `start_workflow` MCP tool spawns this under the hood, but you can also invoke it directly.
@@ -76,6 +96,24 @@ Sparkflow reads configuration and workflows from two layers. The user-level laye
 | --- | --- | --- |
 | User | `~/.sparkflow/config.json` | `~/.sparkflow/flows/<name>.json` |
 | Project | `<cwd>/.sparkflow/config.json` | `<cwd>/.sparkflow/workflows/<name>.json` |
+
+**`maintenance` config (auto-develop only).** Controls the PM and architect maintenance agents. Only meaningful when `defaultWorkflow` is `auto-develop`.
+
+```json
+"maintenance": {
+  "pm": true,
+  "architect": true,
+  "queueThreshold": 3,
+  "cycleInterval": 5
+}
+```
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `pm` | `false` | Enable the PM agent (proposes features under `## Proposed features (PM)` in ROADMAP.md). |
+| `architect` | `false` | Enable the architect agent (proposes refactors under `## Proposed refactors (architect)`). |
+| `queueThreshold` | `3` | Trigger a maintenance pass when fewer than this many pending tasks remain in ROADMAP.md. |
+| `cycleInterval` | `5` | Also trigger a maintenance pass after this many tasks have been completed or blocked since the last pass. |
 
 **Config merge.** Project fields win over user fields; the merge is shallow — nested objects (`git`) are replaced whole rather than deep-merged. So if your user config sets `git.pr_repo` and the project sets `git.base`, the result has only `git.base` (not both). Re-specify the fields you need at the project level.
 

@@ -15,11 +15,24 @@ export interface GitConfig {
   base?: string;
 }
 
+export interface MaintenanceConfig {
+  /** Enable the PM agent that proposes new features to ROADMAP.md. Defaults to false. */
+  pm?: boolean;
+  /** Enable the architect agent that proposes refactors to ROADMAP.md. Defaults to false. */
+  architect?: boolean;
+  /** Trigger maintenance when pending tasks fall below this count. Defaults to 3. */
+  queueThreshold?: number;
+  /** Trigger maintenance after this many completed tasks since the last run. Defaults to 5. */
+  cycleInterval?: number;
+}
+
 export interface ProjectConfig {
   defaultWorkflow?: string;
   git?: GitConfig;
   /** Workflow names or paths to start automatically when the dashboard launches. */
   monitors?: string[];
+  /** Maintenance agent configuration for the auto-develop workflow. */
+  maintenance?: MaintenanceConfig;
 }
 
 const PROJECT_CONFIG_PATH = ".sparkflow/config.json";
@@ -50,6 +63,40 @@ export function parseConfigObject(obj: Record<string, unknown>, label: string): 
       throw new Error(`${label}: "monitors" must be an array of strings`);
     }
     config.monitors = obj.monitors as string[];
+  }
+  if (obj.maintenance !== undefined) {
+    if (typeof obj.maintenance !== "object" || obj.maintenance === null || Array.isArray(obj.maintenance)) {
+      throw new Error(`${label}: "maintenance" must be an object`);
+    }
+    const m = obj.maintenance as Record<string, unknown>;
+    const known = new Set(["pm", "architect", "queueThreshold", "cycleInterval"]);
+    for (const key of Object.keys(m)) {
+      if (!known.has(key)) {
+        throw new Error(`${label}: "maintenance.${key}" is not a recognized field`);
+      }
+    }
+    const maintenance: MaintenanceConfig = {};
+    if (m.pm !== undefined) {
+      if (typeof m.pm !== "boolean") throw new Error(`${label}: "maintenance.pm" must be a boolean`);
+      maintenance.pm = m.pm;
+    }
+    if (m.architect !== undefined) {
+      if (typeof m.architect !== "boolean") throw new Error(`${label}: "maintenance.architect" must be a boolean`);
+      maintenance.architect = m.architect;
+    }
+    if (m.queueThreshold !== undefined) {
+      if (typeof m.queueThreshold !== "number" || !Number.isInteger(m.queueThreshold) || m.queueThreshold < 0) {
+        throw new Error(`${label}: "maintenance.queueThreshold" must be a non-negative integer`);
+      }
+      maintenance.queueThreshold = m.queueThreshold;
+    }
+    if (m.cycleInterval !== undefined) {
+      if (typeof m.cycleInterval !== "number" || !Number.isInteger(m.cycleInterval) || m.cycleInterval < 1) {
+        throw new Error(`${label}: "maintenance.cycleInterval" must be a positive integer`);
+      }
+      maintenance.cycleInterval = m.cycleInterval;
+    }
+    config.maintenance = maintenance;
   }
   if (obj.git !== undefined) {
     if (typeof obj.git !== "object" || obj.git === null || Array.isArray(obj.git)) {
@@ -124,6 +171,15 @@ export function writeProjectConfig(cwd: string, config: ProjectConfig): string {
   const path = resolve(join(cwd, PROJECT_CONFIG_PATH));
   writeFileSync(path, JSON.stringify(config, null, 2));
   return path;
+}
+
+export function resolveMaintenanceConfig(cfg: ProjectConfig): Required<MaintenanceConfig> {
+  return {
+    pm: cfg.maintenance?.pm ?? false,
+    architect: cfg.maintenance?.architect ?? false,
+    queueThreshold: cfg.maintenance?.queueThreshold ?? 3,
+    cycleInterval: cfg.maintenance?.cycleInterval ?? 5,
+  };
 }
 
 function looksLikePath(input: string): boolean {

@@ -664,6 +664,9 @@ export class WorkflowEngine {
       }
     }
 
+    // Resolve effective sandbox config: step overrides workflow defaults.
+    const effectiveSandbox = step.sandbox ?? this.workflow.defaults?.sandbox;
+
     const ctx: RuntimeContext = {
       stepId,
       step,
@@ -685,6 +688,7 @@ export class WorkflowEngine {
       stepOutputs: this.stepOutputs,
       workflowDir: this.workflowDir,
       nudgeQueue,
+      sandbox: effectiveSandbox,
     };
     if (resuming) {
       this.logger.info(`[${stepId}] resuming session ${status.sessionId}`);

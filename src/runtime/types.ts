@@ -1,4 +1,4 @@
-import type { Runtime, Step } from "../schema/types.js";
+import type { Runtime, Step, SandboxConfig } from "../schema/types.js";
 import type { GitConfig, ProjectConfig } from "../config/project-config.js";
 
 export interface NudgeItem {
@@ -62,6 +62,11 @@ export interface RuntimeContext {
    * them after each completed turn instead of closing stdin.
    */
   nudgeQueue?: NudgeQueue;
+  /**
+   * Effective sandbox configuration for this step (merged from step + workflow
+   * defaults by the engine). When absent, applySandbox uses its own defaults.
+   */
+  sandbox?: SandboxConfig;
 }
 
 export interface RuntimeResult {

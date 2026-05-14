@@ -150,11 +150,57 @@ Creates isolated git worktrees per step or per run. Mode `isolated` creates a na
 **Re-entry after success = new invocation**: When `triggerStep` fires for a step whose current state is `"succeeded"`, the engine treats it as a completely fresh invocation rather than a retry. It resets `retryCount`, `tokenLimitResumes`, `sessionId`, `lastError`, `inPlaceAttempt`, and `outputs`, and calls `worktreeManager.invalidate(stepId)` for `isolated` worktrees. This makes multi-task loops (e.g. `auto-develop`) correct: each iteration gets a fresh claude session and a fresh branch, while genuine failure-edge retries (state `"failed"` → re-trigger) still keep the session and worktree intact.
 
 ### Worktree Confinement Guardrails
-Two complementary mechanisms prevent agents from accidentally committing to the parent repo instead of their isolated worktree:
+Three complementary layers prevent agents from escaping their isolated worktree:
 
-**Preventive (soft reminder):** The `claude-code` adapter prepends a system reminder to the agent's prompt whenever `ctx.cwd !== ctx.repoRoot`. The reminder tells the agent to stay inside the worktree and avoid absolute parent-repo paths or `git -C` targeting the parent.
+**Layer 1 — Preventive (soft reminder):** The `claude-code` adapter prepends a system reminder to the agent's prompt whenever `ctx.cwd !== ctx.repoRoot`. The reminder tells the agent to stay inside the worktree and avoid absolute parent-repo paths or `git -C` targeting the parent.
 
-**Detective (escape detection):** The engine captures the parent repo's HEAD SHA before spawning any worktree step, then re-checks it after the step finishes. If the parent HEAD moved but the worktree received no new commits, the step is failed with a descriptive error naming the runaway SHA. This catches both direct `cd` escapes and indirect `git -C` escapes.
+**Layer 2 — Detective (escape detection):** The engine captures the parent repo's HEAD SHA before spawning any worktree step, then re-checks it after the step finishes. If the parent HEAD moved but the worktree received no new commits, the step is failed with a descriptive error naming the runaway SHA. This catches both direct `cd` escapes and indirect `git -C` escapes.
+
+**Layer 3 — Preventive (hard sandbox):** See the Sandboxing section below. This is structural: a step literally cannot read or write outside its declared binds.
+
+### Sandboxing
+
+`src/sandbox/` implements per-step filesystem confinement via [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`). The sandbox is preventive: it structurally prevents reads and writes outside the declared paths, regardless of how the agent is prompted.
+
+**Scope (Phase 1):** Only the `claude-code` runtime adapter is sandboxed. The `shell`, `gemini`, `pr-creator`, and `pr-watcher` adapters will be covered in a follow-up PR using the same shared plumbing.
+
+**How it works:**
+
+1. `src/sandbox/bwrap.ts` — `buildBwrapArgv(opts)` builds the bwrap argv (pure function, fully unit-testable). The default profile:
+   - `--tmpfs /` (empty root), then explicit bind mounts for what the step needs.
+   - `/nix` and `/run/current-system` (NixOS tools), `/etc` (certs/resolv.conf), FHS fallbacks (`/usr`, `/bin`, etc.) — all read-only.
+   - `<worktreePath>` bound read-write.
+   - `<repoRoot>/.git` bound read-write (needed for git commits). The parent working tree is NOT bound — files outside the worktree are inaccessible.
+   - `~/.claude` bound read-write (claude session state), `~/.sparkflow` bound read-only.
+   - Sparkflow installation root bound read-only (MCP server binary, workflow files).
+   - `/tmp` bound read-write for scratch space.
+   - Named sockets (MCP IPC) bound read-write.
+   - `--clearenv` + `--setenv` for an explicit allowlist (`HOME`, `PATH`, `ANTHROPIC_*`, `SPARKFLOW_*`, `GIT_*`, etc.).
+
+2. `src/sandbox/apply.ts` — `applySandbox(opts)` orchestrates: reads the effective `SandboxConfig`, checks `isBwrapAvailable()`, wraps or falls back, logs a one-line status. `SPARKFLOW_SANDBOX=off` disables globally.
+
+3. `src/sandbox/types.ts` — `SandboxConfig` type shared by schema and runtime types.
+
+**Config surface:**
+
+```json
+"defaults": {
+  "sandbox": { "enabled": true, "required": false, "network": "allow" }
+},
+"steps": {
+  "my-step": {
+    "sandbox": {
+      "enabled": false,
+      "extra_ro_binds": ["/path/to/data"],
+      "extra_rw_binds": ["/path/to/output"]
+    }
+  }
+}
+```
+
+Step-level `sandbox` overrides `defaults.sandbox`. `SPARKFLOW_SANDBOX=off` overrides both.
+
+**Graceful fallback:** If `bwrap` is not installed and `required: false` (the default), a one-line warning is logged and the step runs unsandboxed. If `required: true`, the step fails before spawning. Existing workflows without a `sandbox` block get `enabled: true, required: false` by default — if a missing bind breaks something, the error message includes a hint to set `SPARKFLOW_SANDBOX=off` to diagnose.
 
 ## Process Architecture & Hot-Reload Semantics
 

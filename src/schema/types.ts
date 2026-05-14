@@ -1,3 +1,18 @@
+// ── Sandbox ─────────────────────────────────────────────────────────
+
+export interface SandboxConfig {
+  /** Whether sandboxing is enabled. Default: true when bwrap is available. */
+  enabled?: boolean;
+  /** When true, the step fails if bwrap is not available. Default: false. */
+  required?: boolean;
+  /** Network access policy. Default: "allow". "deny" is reserved for future use. */
+  network?: "allow" | "deny";
+  /** Extra paths to bind read-only inside the sandbox. */
+  extra_ro_binds?: string[];
+  /** Extra paths to bind read-write inside the sandbox. */
+  extra_rw_binds?: string[];
+}
+
 // ── Output Declaration ──────────────────────────────────────────────
 
 export interface OutputDeclaration {
@@ -187,6 +202,8 @@ export interface Step {
   success_output?: string;
   /** Extra environment variables. Values support templates. */
   env?: Record<string, string>;
+  /** Per-step sandbox configuration. Overrides workflow-level defaults.sandbox. */
+  sandbox?: SandboxConfig;
 }
 
 // ── Step Defaults ───────────────────────────────────────────────────
@@ -204,6 +221,8 @@ export interface StepDefaults {
   worktree?: WorktreeConfig;
   /** Default ask_on_failure for steps that don't set it. */
   ask_on_failure?: boolean;
+  /** Default sandbox configuration for all steps. */
+  sandbox?: SandboxConfig;
 }
 
 // ── Workflow (top-level) ────────────────────────────────────────────

@@ -49,10 +49,11 @@ describe("extractQuotaResetSeconds", () => {
   describe("resets HH:MM(am|pm) (TZ)", () => {
     // Use a fixed "now" in America/Los_Angeles (UTC-8 in winter / UTC-7 in DST).
     // We pick a reference time well before the reset to avoid edge cases.
+    // All wall-clock reset results include a 60-second buffer.
 
     it("returns positive seconds for a future reset time today", () => {
       // now = 2024-01-15 09:00:00 UTC = 01:00:00 AM PST (UTC-8)
-      // reset = 11:30am PST = 19:30 UTC → delta = 10.5 hours = 37800 s
+      // reset = 11:30am PST = 19:30 UTC → delta = 10.5 hours = 37800 s + 60s buffer = 37860s
       const now = new Date("2024-01-15T09:00:00Z");
       const result = extractQuotaResetSeconds(
         "You've hit your limit · resets 11:30am (America/Los_Angeles)",
@@ -60,14 +61,13 @@ describe("extractQuotaResetSeconds", () => {
       );
       expect(result).not.toBeNull();
       expect(result).toBeGreaterThan(0);
-      // Allow ±120 s for rounding/truncation
-      expect(result).toBeCloseTo(37800, -2);
+      expect(result).toBeCloseTo(37860, -2);
     });
 
-    it("wraps to tomorrow when reset time has already passed today", () => {
+    it("wraps to tomorrow when reset time has already passed today (beyond buffer)", () => {
       // now = 2024-01-15T21:00:00Z = 1pm PST (UTC-8)
-      // reset = 11:30am PST = 19:30 UTC (today) → already past → wraps to tomorrow
-      // delta ≈ 24h - 1.5h = 22.5h = 81000s
+      // reset = 11:30am PST = 19:30 UTC (today) → 1.5h past + 60s buffer = still past → wraps
+      // delta ≈ 24h - 1.5h + 60s = 81060s
       const now = new Date("2024-01-15T21:00:00Z");
       const result = extractQuotaResetSeconds(
         "resets 11:30am (America/Los_Angeles)",
@@ -75,44 +75,58 @@ describe("extractQuotaResetSeconds", () => {
       );
       expect(result).not.toBeNull();
       expect(result).toBeGreaterThan(0);
-      expect(result).toBeCloseTo(81000, -2);
+      expect(result).toBeCloseTo(81060, -2);
+    });
+
+    it("does NOT wrap to tomorrow when only 1 second past the reset time", () => {
+      // now = 2024-01-15T23:50:01Z = 3:50:01pm PST (UTC-8)
+      // reset = 3:50pm PST = 23:50:00 UTC → secondsUntil = -1 + 60 buffer = 59s (not tomorrow)
+      // This is the exact scenario from issue #128.
+      const now = new Date("2024-01-15T23:50:01Z");
+      const result = extractQuotaResetSeconds(
+        "You've hit your limit · resets 3:50pm (America/Los_Angeles)",
+        now
+      );
+      expect(result).not.toBeNull();
+      expect(result).toBeGreaterThan(0);
+      expect(result).toBeLessThan(200);
     });
 
     it("handles pm times correctly", () => {
       // now = 2024-01-15T09:00:00Z = 01:00am PST
-      // reset = 3:00pm PST = 23:00 UTC → delta = 14h = 50400s
+      // reset = 3:00pm PST = 23:00 UTC → delta = 14h = 50400s + 60s buffer = 50460s
       const now = new Date("2024-01-15T09:00:00Z");
       const result = extractQuotaResetSeconds(
         "resets 3:00pm (America/Los_Angeles)",
         now
       );
       expect(result).not.toBeNull();
-      expect(result).toBeCloseTo(50400, -2);
+      expect(result).toBeCloseTo(50460, -2);
     });
 
     it("handles 12:00pm (noon) correctly", () => {
       // now = 2024-01-15T09:00:00Z = 01:00am PST
-      // reset = 12:00pm PST = noon = 20:00 UTC → delta = 11h = 39600s
+      // reset = 12:00pm PST = noon = 20:00 UTC → delta = 11h = 39600s + 60s buffer = 39660s
       const now = new Date("2024-01-15T09:00:00Z");
       const result = extractQuotaResetSeconds(
         "resets 12:00pm (America/Los_Angeles)",
         now
       );
       expect(result).not.toBeNull();
-      expect(result).toBeCloseTo(39600, -2);
+      expect(result).toBeCloseTo(39660, -2);
     });
 
     it("handles 12:00am (midnight) correctly", () => {
       // now = 2024-01-15T09:00:00Z = 01:00am PST
       // reset = 12:00am PST = midnight = 08:00 UTC (next day) → wraps to tomorrow
-      // delta ≈ 23h = 82800s
+      // delta ≈ 23h + 60s buffer = 82860s
       const now = new Date("2024-01-15T09:00:00Z");
       const result = extractQuotaResetSeconds(
         "resets 12:00am (America/Los_Angeles)",
         now
       );
       expect(result).not.toBeNull();
-      expect(result).toBeCloseTo(82800, -2);
+      expect(result).toBeCloseTo(82860, -2);
     });
 
     it("returns null for an unrecognized timezone", () => {
@@ -126,14 +140,14 @@ describe("extractQuotaResetSeconds", () => {
 
     it("works with UTC timezone", () => {
       // now = 2024-01-15T09:00:00Z
-      // reset = 11:30am UTC = 11:30 UTC → delta = 2.5h = 9000s
+      // reset = 11:30am UTC = 11:30 UTC → delta = 2.5h = 9000s + 60s buffer = 9060s
       const now = new Date("2024-01-15T09:00:00Z");
       const result = extractQuotaResetSeconds(
         "resets 11:30am (UTC)",
         now
       );
       expect(result).not.toBeNull();
-      expect(result).toBeCloseTo(9000, -2);
+      expect(result).toBeCloseTo(9060, -2);
     });
   });
 

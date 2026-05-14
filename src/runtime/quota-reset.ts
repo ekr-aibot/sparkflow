@@ -85,7 +85,13 @@ function computeSecondsUntilReset(hour24: number, minute: number, tz: string, no
 
     let secondsUntil = (todayTargetMs - now.getTime()) / 1000;
 
-    // If the reset time has already passed today in that timezone, assume tomorrow.
+    // Add a 60-second buffer so the quota window has fully cleared before we
+    // retry. This also prevents scheduling "tomorrow" when we wake up just 1-2
+    // seconds after the stated reset time (a common occurrence when the prior
+    // wait was computed from the same reset message).
+    secondsUntil += 60;
+
+    // If the reset time (plus buffer) has already passed today, assume tomorrow.
     if (secondsUntil <= 0) secondsUntil += 24 * 3600;
 
     return Math.round(secondsUntil);

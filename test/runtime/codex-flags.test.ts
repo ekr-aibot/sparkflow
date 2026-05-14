@@ -12,6 +12,18 @@ import {
 } from "../../src/runtime/codex-flags.js";
 
 describe("buildCodexArgs", () => {
+  it("starts with 'exec'", () => {
+    const args = buildCodexArgs({ type: "codex" });
+    expect(args[0]).toBe("exec");
+  });
+
+  it("includes 'resume' and sessionId when provided", () => {
+    const args = buildCodexArgs({ type: "codex" }, { sessionId: "sess-123" });
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toBe("resume");
+    expect(args[2]).toBe("sess-123");
+  });
+
   it("includes --dangerously-bypass-approvals-and-sandbox and --json", () => {
     const args = buildCodexArgs({ type: "codex" });
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
@@ -147,14 +159,8 @@ describe("isCodexTokenLimitError", () => {
 });
 
 describe("codexUserMessage", () => {
-  it("produces a valid NDJSON user_input event", () => {
-    const line = codexUserMessage("hello world");
-    const parsed = JSON.parse(line.trim()) as Record<string, unknown>;
-    expect(parsed.type).toBe("user_input");
-    expect(parsed.text).toBe("hello world");
-  });
-
-  it("ends with a newline", () => {
-    expect(codexUserMessage("test")).toMatch(/\n$/);
+  it("returns plain text", () => {
+    const text = codexUserMessage("hello world");
+    expect(text).toBe("hello world");
   });
 });

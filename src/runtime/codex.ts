@@ -12,7 +12,7 @@ import {
   isCodexTokenLimitError,
   codexUserMessage,
 } from "./codex-flags.js";
-import { extractJsonFromResult, applySuccessGate } from "./claude-code.js";
+import { extractJsonFromResult, applySuccessGate, buildWorktreeReminder } from "./claude-code.js";
 import { extractQuotaResetSeconds } from "./quota-reset.js";
 
 export class CodexAdapter implements RuntimeAdapter {
@@ -32,34 +32,143 @@ export class CodexAdapter implements RuntimeAdapter {
     const tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-codex-"));
     const tempFiles: string[] = [];
 
-    // Build args: [exec|exec resume <sessionId>] [flags]
-    // On resume, use `codex exec resume <id>` instead of `codex exec`.
-    const resuming = Boolean(ctx.resume && ctx.sessionId);
-    const subcommand: string[] = resuming
-      ? ["exec", "resume", ctx.sessionId!]
-      : ["exec"];
+    let currentSessionId = (ctx.resume && ctx.sessionId) ? ctx.sessionId : undefined;
+    let initialTurnDone = false;
+    let selfNudgeUsed = false;
+    let lastResult: RuntimeResult | null = null;
 
-    // Interactive step → write temp config with sparkflow MCP entry.
-    // Create the file first so buildCodexArgs can include --config-file alongside
-    // the other flags in the right order.
+    try {
+      while (true) {
+        let promptText = "";
+        let isNudge = false;
+        let nudgeId: string | undefined;
+
+        // 1. Determine prompt for this turn
+        if (!initialTurnDone) {
+          const parts: string[] = [];
+          const worktreeReminder = buildWorktreeReminder(ctx);
+          if (worktreeReminder) {
+            parts.push(worktreeReminder);
+            ctx.logger?.info(`[${ctx.stepId}] injected worktree confinement reminder (cwd=${ctx.cwd})`);
+          }
+
+          if (!currentSessionId) {
+            // Fresh run: use prompt + transition
+            if (ctx.prompt) parts.push(ctx.prompt);
+            if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
+            promptText = parts.join("\n\n");
+          } else {
+            // Resuming existing session: only use transition message if any
+            if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
+            promptText = parts.join("\n\n");
+          }
+          initialTurnDone = true;
+        } else {
+          // Check for manual nudge
+          const nudgeItem = ctx.nudgeQueue?.shift();
+          if (nudgeItem) {
+            promptText = nudgeItem.message;
+            nudgeId = nudgeItem.id;
+            isNudge = true;
+          } else if (lastResult && ctx.step.success_output && !selfNudgeUsed) {
+            // Check for self-nudge (missing success gate)
+            const resultText = typeof lastResult.outputs._response === "string"
+              ? lastResult.outputs._response
+              : JSON.stringify(lastResult.outputs._response);
+
+            const parsedCurrent = extractJsonFromResult(resultText);
+            const gatePresent = parsedCurrent !== null && ctx.step.success_output in parsedCurrent;
+            if (!gatePresent && resultText) {
+              const declaredNames = ctx.step.outputs
+                ? Object.keys(ctx.step.outputs)
+                : [ctx.step.success_output];
+              promptText =
+                `Your previous response did not include the required \`${ctx.step.success_output}\`` +
+                ` field (and possibly other declared outputs). Please respond now with a valid JSON` +
+                ` object containing all of: ${declaredNames.join(", ")}. Do not include any other prose.`;
+              ctx.logger?.info(`[${ctx.stepId}:self-nudge] gate output \`${ctx.step.success_output}\` was absent, requesting re-emit`);
+              selfNudgeUsed = true;
+              isNudge = true;
+            }
+          }
+        }
+
+        // 2. Execute turn if we have a prompt or it's the very first turn (which might be empty resume)
+        const isFirstTurn = !lastResult;
+        if (promptText || isFirstTurn) {
+          if (nudgeId) {
+            process.stderr.write(
+              JSON.stringify({
+                type: "nudge_event", nudge_id: nudgeId, phase: "delivered",
+                step: ctx.stepId, at: Date.now(),
+              }) + "\n"
+            );
+            ctx.logger?.info(`[${ctx.stepId}:nudge:delivered] ${nudgeId}`);
+          }
+
+          const startAt = Date.now();
+          const turnResult = await this.executeTurn(ctx, runtime, currentSessionId, promptText, tmpDir, tempFiles);
+          const endAt = Date.now();
+          currentSessionId = turnResult.sessionId || currentSessionId;
+          lastResult = turnResult;
+
+          if (nudgeId) {
+            if (turnResult.success) {
+              process.stderr.write(
+                JSON.stringify({
+                  type: "nudge_event", nudge_id: nudgeId, phase: "acked",
+                  step: ctx.stepId, at: endAt, duration_ms: endAt - startAt,
+                  turn_count: 1,
+                }) + "\n"
+              );
+              ctx.logger?.info(`[${ctx.stepId}:nudge:acked] ${nudgeId} in ${endAt - startAt}ms`);
+            } else {
+              process.stderr.write(
+                JSON.stringify({
+                  type: "nudge_event", nudge_id: nudgeId, phase: "abandoned",
+                  step: ctx.stepId, at: endAt, reason: turnResult.error || "Turn failed",
+                }) + "\n"
+              );
+              ctx.logger?.info(`[${ctx.stepId}:nudge:abandoned] ${nudgeId}: ${turnResult.error}`);
+            }
+          }
+
+          if (!turnResult.success) {
+            // Stop on failure unless it's a gate failure (exitCode 0) on the initial turn,
+            // which might be fixable by self-nudge in the next iteration.
+            const isGateFailure = turnResult.exitCode === 0 && ctx.step.success_output;
+            if (isNudge || !isGateFailure) break;
+          }
+          
+          // If it was a nudge, we continue to check for more nudges or self-nudge.
+        } else {
+          break;
+        }
+      }
+
+      return lastResult || { success: false, outputs: {}, error: "No turns executed" };
+    } finally {
+      for (const f of tempFiles) {
+        try { unlinkSync(f); } catch { /* ignore */ }
+      }
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
+
+  private async executeTurn(
+    ctx: RuntimeContext,
+    runtime: CodexRuntime,
+    sessionId: string | undefined,
+    prompt: string,
+    tmpDir: string,
+    tempFiles: string[]
+  ): Promise<RuntimeResult> {
     let mcpConfigPath: string | undefined;
     if (ctx.interactive && ctx.ipcSocketPath) {
       mcpConfigPath = writeCodexMcpConfig(tmpDir, ctx.ipcSocketPath);
-      tempFiles.push(mcpConfigPath);
+      if (!tempFiles.includes(mcpConfigPath)) tempFiles.push(mcpConfigPath);
     }
-    const extraArgs = buildCodexArgs(runtime, { mcpConfigPath });
-
-    // Build the prompt to send as first stdin message. On resume, the prompt
-    // is the transition message only; the original prompt is already in the
-    // session's history.
-    const parts: string[] = [];
-    if (!resuming && ctx.prompt) parts.push(ctx.prompt);
-    if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
-    const fullPrompt = parts.join("\n\n");
-
-    // `codex exec` reads the prompt from stdin. Pass it as raw text and end stdin
-    // so it starts processing.
-    const args = [...subcommand, ...extraArgs];
+    const args = buildCodexArgs(runtime, { mcpConfigPath, sessionId });
 
     return new Promise<RuntimeResult>((resolve) => {
       const child = spawn("codex", args, {
@@ -68,22 +177,20 @@ export class CodexAdapter implements RuntimeAdapter {
         stdio: "pipe",
       });
 
-      if (fullPrompt) {
-        child.stdin?.write(fullPrompt);
+      // Write prompt to stdin and close it immediately. 
+      // Codex reads until EOF before starting.
+      if (prompt) {
+        child.stdin?.write(codexUserMessage(prompt));
       }
       child.stdin?.end();
 
       let stdout = "";
       let stderr = "";
       let stdoutLineBuffer = "";
-
-      // Captured from the first event that carries a session_id field.
-      let capturedSessionId: string | undefined = resuming ? ctx.sessionId : undefined;
-
-      // The final assistant message text from the last turn.
+      let capturedSessionId: string | undefined = sessionId;
       let lastAssistantText = "";
-      // Accumulates all assistant text in case we need it for extraction.
       let allAssistantText = "";
+      let resultEventText = "";
 
       child.stdout?.on("data", (data: Buffer) => {
         const chunk = data.toString();
@@ -98,16 +205,13 @@ export class CodexAdapter implements RuntimeAdapter {
 
           try {
             const event = JSON.parse(line) as Record<string, unknown>;
-
-            // Capture session ID from any event that carries it.
             if (!capturedSessionId) {
               const sid = extractCodexSessionId(event);
               if (sid) capturedSessionId = sid;
             }
 
-            // Accumulate assistant message text.
             const evType = String(event.type ?? "");
-            if (evType === "assistant_message" || evType === "item.completed") {
+            if (evType === "assistant_message" || evType === "item.completed" || evType === "result") {
               const content = event.content ?? event.text ?? event.result;
               let text = "";
               if (typeof content === "string") {
@@ -125,8 +229,12 @@ export class CodexAdapter implements RuntimeAdapter {
               }
 
               if (text.trim()) {
-                lastAssistantText = text.trim();
-                allAssistantText += (allAssistantText ? "\n" : "") + text.trim();
+                if (evType === "result") {
+                  resultEventText = text.trim();
+                } else {
+                  lastAssistantText = text.trim();
+                  allAssistantText += (allAssistantText ? "\n" : "") + text.trim();
+                }
               }
             }
 
@@ -162,10 +270,6 @@ export class CodexAdapter implements RuntimeAdapter {
 
       child.on("close", (code) => {
         if (timer) clearTimeout(timer);
-        for (const f of tempFiles) {
-          try { unlinkSync(f); } catch { /* ignore */ }
-        }
-        try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
         const exitCode = code ?? 1;
         let success = exitCode === 0;
@@ -181,11 +285,11 @@ export class CodexAdapter implements RuntimeAdapter {
         const quotaHit = !success && !tokenLimitHit && (
           isCodexQuotaError(stderr) || isCodexQuotaError(stdout)
         );
-        const quotaText = [String(lastAssistantText ?? ""), stderr, stdout].filter(Boolean).join("\n");
+        const quotaText = [String(resultEventText || lastAssistantText || ""), stderr, stdout].filter(Boolean).join("\n");
         const quotaResetSeconds = quotaHit ? (extractQuotaResetSeconds(quotaText) ?? undefined) : undefined;
 
         const outputs: Record<string, unknown> = {};
-        const resultText = lastAssistantText || allAssistantText || stdout.trim();
+        const resultText = resultEventText || lastAssistantText || allAssistantText || stdout.trim();
         const parsedJson = resultText
           ? extractJsonFromResult(resultText)
           : null;
@@ -227,9 +331,6 @@ export class CodexAdapter implements RuntimeAdapter {
 
       child.on("error", (err) => {
         if (timer) clearTimeout(timer);
-        for (const f of tempFiles) {
-          try { unlinkSync(f); } catch { /* ignore */ }
-        }
         const message = err.message.includes("ENOENT")
           ? `codex CLI not found on $PATH — install from https://github.com/openai/codex`
           : err.message;

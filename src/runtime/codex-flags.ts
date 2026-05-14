@@ -11,13 +11,17 @@ export const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
 
 /**
  * Build the `codex exec` CLI args from a CodexRuntime and optional MCP config path.
- * The prompt is passed as a positional argument by the caller, not here.
+ * The prompt should be written to the child's stdin until EOF by the caller.
  */
 export function buildCodexArgs(
   runtime: CodexRuntime,
-  opts: { mcpConfigPath?: string } = {}
+  opts: { mcpConfigPath?: string; sessionId?: string } = {}
 ): string[] {
-  const args: string[] = [];
+  const args: string[] = ["exec"];
+  if (opts.sessionId) {
+    args.push("resume", opts.sessionId);
+  }
+
   if (runtime.model) args.push("--model", runtime.model);
   // Permission bypass — always required for autonomous non-interactive steps.
   args.push("--dangerously-bypass-approvals-and-sandbox");
@@ -80,8 +84,9 @@ export function isCodexTokenLimitError(text: string): boolean {
 }
 
 /**
- * Format a user message as a codex NDJSON stdin event.
+ * Format a user message for codex. Real codex exec (v0.130.0+) reads raw text
+ * from stdin until EOF, not JSON-wrapped events.
  */
 export function codexUserMessage(text: string): string {
-  return JSON.stringify({ type: "user_input", text }) + "\n";
+  return text;
 }

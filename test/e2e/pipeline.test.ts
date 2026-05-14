@@ -5,15 +5,25 @@ import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { WorkflowEngine } from "../../src/engine/engine.js";
 import type { SparkflowWorkflow } from "../../src/schema/types.js";
+import { createFakeClaude, createFakeCodex } from "./fake-binaries.js";
 
 let prevLlm: string | undefined;
 let prevTrust: string | undefined;
+let prevPath: string | undefined;
+let fakeBinDir: string | undefined;
 
 beforeEach(() => {
   prevLlm = process.env.SPARKFLOW_LLM;
   delete process.env.SPARKFLOW_LLM;
   prevTrust = process.env.GEMINI_CLI_TRUST_WORKSPACE;
   process.env.GEMINI_CLI_TRUST_WORKSPACE = "true";
+  
+  // Set up fake binaries in PATH
+  fakeBinDir = mkdtempSync(join(tmpdir(), "sparkflow-e2e-bin-"));
+  createFakeClaude(fakeBinDir);
+  createFakeCodex(fakeBinDir);
+  prevPath = process.env.PATH;
+  process.env.PATH = `${fakeBinDir}:${process.env.PATH}`;
 });
 
 afterEach(() => {
@@ -21,20 +31,11 @@ afterEach(() => {
   else process.env.SPARKFLOW_LLM = prevLlm;
   if (prevTrust === undefined) delete process.env.GEMINI_CLI_TRUST_WORKSPACE;
   else process.env.GEMINI_CLI_TRUST_WORKSPACE = prevTrust;
+  if (prevPath) process.env.PATH = prevPath;
+  if (fakeBinDir) rmSync(fakeBinDir, { recursive: true, force: true });
 });
 
-// Skip if claude is not available
-let hasClaude = false;
-try {
-  execSync("claude --version", { stdio: "pipe" });
-  hasClaude = true;
-} catch {
-  // claude not installed
-}
-
-const describeE2e = hasClaude ? describe : describe.skip;
-
-describeE2e("e2e pipeline", () => {
+describe("e2e pipeline", () => {
   let workDir: string;
 
   beforeEach(() => {
@@ -164,6 +165,56 @@ describeE2e("e2e pipeline", () => {
 
       expect(existsSync(join(workDir, "multiply.js"))).toBe(true);
       expect(existsSync(join(workDir, "multiply.test.js"))).toBe(true);
+      expect(result.success).toBe(true);
+      expect(result.stepResults.get("author")?.state).toBe("succeeded");
+      expect(result.stepResults.get("tester")?.state).toBe("succeeded");
+    },
+    120_000
+  );
+
+  it(
+    "codex runtime writes code, tester runs it",
+    async () => {
+      const workflow: SparkflowWorkflow = {
+        version: "1",
+        name: "e2e-codex-test",
+        entry: "author",
+        defaults: {
+          max_retries: 1,
+        },
+        steps: {
+          author: {
+            name: "Author",
+            interactive: false,
+            runtime: {
+              type: "codex",
+              model: "gpt-4o",
+            },
+            prompt: "Write a file called add.js ...",
+            on_success: [{ step: "tester" }],
+          },
+          tester: {
+            name: "Tester",
+            interactive: false,
+            runtime: {
+              type: "shell",
+              command: "node",
+              args: ["add.test.js"],
+            },
+            timeout: 30,
+          },
+        },
+      };
+
+      const engine = new WorkflowEngine(workflow, {
+        cwd: workDir,
+        workflowDir: workDir,
+      });
+
+      const result = await engine.run();
+
+      expect(existsSync(join(workDir, "add.js"))).toBe(true);
+      expect(existsSync(join(workDir, "add.test.js"))).toBe(true);
       expect(result.success).toBe(true);
       expect(result.stepResults.get("author")?.state).toBe("succeeded");
       expect(result.stepResults.get("tester")?.state).toBe("succeeded");

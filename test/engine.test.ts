@@ -1243,28 +1243,35 @@ describe("WorkflowEngine", () => {
   });
 
   describe("nudge queue", () => {
-    it("provides a NudgeQueue to claude-code steps", async () => {
-      let capturedQueue: unknown;
+    it("provides a NudgeQueue to claude-code and codex steps", async () => {
+      let claudeQueue: unknown;
+      let codexQueue: unknown;
       const workflow: SparkflowWorkflow = {
         version: "1",
         name: "nudge-queue-presence",
-        entry: "a",
+        entry: "claude",
         defaults: {},
         steps: {
-          a: { name: "A", interactive: false, runtime: { type: "claude-code" } },
+          claude: { name: "Claude", interactive: false, runtime: { type: "claude-code" }, on_success: [{ step: "codex" }] },
+          codex: { name: "Codex", interactive: false, runtime: { type: "codex" } },
         },
       };
 
       const adapters = new Map<string, RuntimeAdapter>([
         ["claude-code", new MockAdapter(async (ctx) => {
-          capturedQueue = ctx.nudgeQueue;
+          claudeQueue = ctx.nudgeQueue;
+          return { success: true, outputs: {} };
+        })],
+        ["codex", new MockAdapter(async (ctx) => {
+          codexQueue = ctx.nudgeQueue;
           return { success: true, outputs: {} };
         })],
       ]);
 
       await new WorkflowEngine(workflow, { logger: silentLogger }, adapters).run();
 
-      expect(capturedQueue).toBeInstanceOf(NudgeQueue);
+      expect(claudeQueue).toBeInstanceOf(NudgeQueue);
+      expect(codexQueue).toBeInstanceOf(NudgeQueue);
     });
 
     it("does not provide a nudgeQueue to non-claude-code steps", async () => {
@@ -1613,5 +1620,102 @@ describe("WorkflowEngine resume mode (resumeFromStep)", () => {
     expect(reviewerEntry?.state).toBe("succeeded");
     // "reviewer" was reached by running normally, not by being pre-seeded
     expect(executed.indexOf("reviewer")).toBeGreaterThan(executed.indexOf("developer"));
+  });
+});
+
+describe("WorkflowEngine Join & Merge", () => {
+  it("does not re-run a joined step when multiple parents trigger it with different messages", async () => {
+    const executionCount: Record<string, number> = {};
+    const executionMessages: Record<string, string[]> = {};
+
+    const workflow = makeWorkflow({
+      steps: {
+        a: {
+          name: "Start",
+          interactive: false,
+          on_success: [{ step: "b" }, { step: "c" }],
+        },
+        b: {
+          name: "Parent 1",
+          interactive: false,
+          on_success: [{ step: "d", message: "msg from b" }],
+        },
+        c: {
+          name: "Parent 2",
+          interactive: false,
+          on_success: [{ step: "d", message: "msg from c" }],
+        },
+        d: {
+          name: "Joined Child",
+          interactive: false,
+          join: ["b", "c"],
+        },
+      },
+      entry: "a",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executionCount[ctx.stepId] = (executionCount[ctx.stepId] || 0) + 1;
+      if (!executionMessages[ctx.stepId]) executionMessages[ctx.stepId] = [];
+      if (ctx.transitionMessage) {
+        executionMessages[ctx.stepId].push(ctx.transitionMessage);
+      }
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger as any }, adapters);
+    await engine.run();
+
+    expect(executionCount["d"]).toBe(1);
+    expect(executionMessages["d"]).toHaveLength(1);
+    expect(executionMessages["d"][0]).toContain("msg from b");
+    expect(executionMessages["d"][0]).toContain("msg from c");
+  });
+
+  it("deduplicates identical messages in joined steps", async () => {
+    const executionCount: Record<string, number> = {};
+    const executionMessages: Record<string, string[]> = {};
+
+    const workflow = makeWorkflow({
+      steps: {
+        a: {
+          name: "Start",
+          interactive: false,
+          on_success: [{ step: "b" }, { step: "c" }],
+        },
+        b: {
+          name: "Parent 1",
+          interactive: false,
+          on_success: [{ step: "d", message: "identical msg" }],
+        },
+        c: {
+          name: "Parent 2",
+          interactive: false,
+          on_success: [{ step: "d", message: "identical msg" }],
+        },
+        d: {
+          name: "Joined Child",
+          interactive: false,
+          join: ["b", "c"],
+        },
+      },
+      entry: "a",
+    });
+
+    const adapters = makeAdapters(async (ctx) => {
+      executionCount[ctx.stepId] = (executionCount[ctx.stepId] || 0) + 1;
+      if (!executionMessages[ctx.stepId]) executionMessages[ctx.stepId] = [];
+      if (ctx.transitionMessage) {
+        executionMessages[ctx.stepId].push(ctx.transitionMessage);
+      }
+      return { success: true, outputs: {} };
+    });
+
+    const engine = new WorkflowEngine(workflow, { logger: silentLogger as any }, adapters);
+    await engine.run();
+
+    expect(executionCount["d"]).toBe(1);
+    expect(executionMessages["d"]).toHaveLength(1);
+    expect(executionMessages["d"][0]).toBe("identical msg");
   });
 });

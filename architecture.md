@@ -36,7 +36,7 @@ Executes workflow steps, resolves worktrees, injects env vars. Passes `config` t
 ### Runtimes
 - `claude-code` — spawns `claude` CLI with a prompt, supports nudges and session resumption
 - `gemini` — spawns `gemini` CLI
-- `codex` — spawns OpenAI `codex exec --json` for NDJSON streaming; session ID captured from events for resume; multi-turn nudge via `user_input` events on stdin; MCP wired via a temp `--config-file` TOML; helper code in `src/runtime/codex-flags.ts`
+- `codex` — spawns OpenAI `codex exec --json` for NDJSON streaming; session ID captured from events for resume; multi-turn nudge/self-nudge handled by spawning a new `codex exec resume <sessionId>` process for each turn (closing stdin immediately with raw prompt text); MCP wired via a temp `--config-file` TOML; helper code in `src/runtime/codex-flags.ts`
 - `shell` — runs arbitrary shell commands; applies `resolveTemplate` to `command` and each `arg` before spawning, so `${config.X}` and `${steps.X.output.Y}` work in shell args; fails fast with a clear error if a config path resolves to missing
 - `pr-watcher` — polls GitHub for CI results and review activity
 - `workflow` — dispatches child workflows (supports `foreach`)
@@ -78,9 +78,9 @@ Each `nudge_job` call is tracked end-to-end through three phases: **received →
 
 **Phase events** (emitted to process.stderr as JSON by the worker process, picked up by the LogTailer and processed in `handleStatusLine`):
 - `{type:"nudge_event", phase:"received", nudge_id, step, at}` — engine.ts, when nudge is queued on the NudgeQueue
-- `{type:"nudge_event", phase:"delivered", nudge_id, step, at}` — claude-code.ts, when the message is written to the LLM's stdin
-- `{type:"nudge_event", phase:"acked", nudge_id, step, at, duration_ms, turn_count}` — claude-code.ts, when the first `result` event arrives after delivery
-- `{type:"nudge_event", phase:"abandoned", nudge_id, step, at, reason}` — claude-code.ts, when the child exits with a delivered-but-not-acked nudge
+- `{type:"nudge_event", phase:"delivered", nudge_id, step, at}` — claude-code.ts / codex.ts, when the message is written to the LLM's stdin
+- `{type:"nudge_event", phase:"acked", nudge_id, step, at, duration_ms, turn_count}` — claude-code.ts / codex.ts, when the first `result` event arrives after delivery
+- `{type:"nudge_event", phase:"abandoned", nudge_id, step, at, reason}` — claude-code.ts / codex.ts, when the child exits with a delivered-but-not-acked nudge
 
 **JobManager** maintains `JobInfo.nudges: NudgeRecord[]` and a `nudgeWaiters` map. When acked/abandoned events arrive, any registered waiter is resolved. Worker death also abandons in-flight waiters.
 

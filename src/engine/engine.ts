@@ -378,6 +378,16 @@ export class WorkflowEngine {
         }
         return;
       }
+
+      // Join satisfied: consume all pending messages from parents and merge with the current one.
+      // Deduping prevents redundant prompts in common fan-out/join patterns like auto-develop.
+      const messages = [...status.pendingMessages];
+      if (message) messages.push(message);
+      status.pendingMessages = [];
+      if (messages.length > 0) {
+        const uniqueMessages = Array.from(new Set(messages));
+        message = uniqueMessages.join("\n\n");
+      }
     }
 
     // Re-entry that begins a new logical invocation (e.g. the next iteration of
@@ -627,11 +637,11 @@ export class WorkflowEngine {
       (status.retryCount > 0 || status.tokenLimitResumes > 0) &&
       !!status.sessionId;
 
-    // Create a nudge queue for claude-code steps so mid-run messages from
-    // triggerStep are delivered as additional turns rather than queued for a
-    // post-completion re-run.
+    // Create a nudge queue for claude-code and codex steps so mid-run messages
+    // from triggerStep are delivered as additional turns rather than queued for
+    // a post-completion re-run.
     let nudgeQueue: NudgeQueue | undefined;
-    if (runtime.type === "claude-code") {
+    if (runtime.type === "claude-code" || runtime.type === "codex") {
       nudgeQueue = new NudgeQueue();
       status.nudgeQueue = nudgeQueue;
     }

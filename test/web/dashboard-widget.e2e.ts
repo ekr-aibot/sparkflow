@@ -40,14 +40,14 @@ test.describe("Dashboard Widget E2E", () => {
     await expect(iframe).toBeVisible();
 
     // Check iframe content - need to access frame
-    const frame = page.frame({ url: /api\/dashboard/ });
+    const frame = page.frame({ url: /\/repos\/[^/]+\/dashboard/ });
     expect(frame).toBeTruthy();
     await expect(frame!.locator("body")).toHaveText("Dashboard V1");
 
     // 4. Update dashboard.html -> iframe reloads
     // Capture old src to check for cache-buster change
     const oldSrc = await iframe.getAttribute("src");
-    expect(oldSrc).toContain("/api/dashboard");
+    expect(oldSrc).toMatch(/\/repos\/[^/]+\/dashboard/);
 
     const content2 = "<html><body>Dashboard V2</body></html>";
     writeFileSync(dashPath, content2);

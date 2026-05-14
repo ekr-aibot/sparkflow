@@ -332,9 +332,11 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
         if (e.watchDebounce) clearTimeout(e.watchDebounce);
         e.watchDebounce = setTimeout(() => {
           e.watchDebounce = null;
-          let data: string | null = null;
-          try { data = readFileSync(statePath, "utf-8"); } catch { /* file may not exist */ }
-          if (data === null) return;
+          let raw: string | null = null;
+          try { raw = readFileSync(statePath, "utf-8"); } catch { /* file may not exist */ }
+          if (raw === null) return;
+          let data: string;
+          try { data = JSON.stringify(JSON.parse(raw)); } catch { return; }
           for (const client of e.clients) {
             try { client.write(`event: state\ndata: ${data}\n\n`); } catch { /* client gone */ }
           }
@@ -941,10 +943,10 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
           "x-accel-buffering": "no",
         });
 
-        // Send initial state
+        // Send initial state (compact JSON — SSE data field must be single-line)
         const statePath = join(dashDir, "state.json");
         let initialData = "null";
-        try { initialData = readFileSync(statePath, "utf-8"); } catch { /* missing is fine */ }
+        try { initialData = JSON.stringify(JSON.parse(readFileSync(statePath, "utf-8"))); } catch { /* missing or invalid JSON — send null */ }
         try { res.write(`event: state\ndata: ${initialData}\n\n`); } catch { /* ignore */ }
 
         const entry = getDashboardSseEntry(repoId);

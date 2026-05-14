@@ -193,7 +193,7 @@ export class JobManager {
     const child = spawn(process.execPath, [SPARKFLOW_RUN_PATH, ...args], {
       cwd: jobCwd,
       stdio: ["pipe", logFd, logFd],
-      env: process.env as Record<string, string>,
+      env: { ...process.env, SPARKFLOW_JOB_ID: id } as Record<string, string>,
       detached: true,
     });
 

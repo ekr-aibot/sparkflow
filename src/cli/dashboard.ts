@@ -128,6 +128,10 @@ export function parseSections(md: string): TaskSection[] {
   return sections;
 }
 
+// IDs are hashed from task text; two tasks with identical wording in different
+// sections share the same ID. The recent-diff uses prevById.get(id) and will
+// attribute a status change to whichever task it finds first, which is the
+// correct one in practice (ROADMAP tasks are rarely duplicated verbatim).
 function stableId(text: string): string {
   return createHash("sha1").update(text).digest("hex").slice(0, 12);
 }

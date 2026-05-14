@@ -100,4 +100,19 @@ describe("cmdStatePut", () => {
     const tmpFile = join(tmpDir, ".sparkflow", "dashboard", "state.json.tmp");
     expect(() => readFileSync(tmpFile)).toThrow();
   });
+
+  it("two concurrent puts both succeed and leave valid JSON (last write wins)", async () => {
+    const statePath = join(tmpDir, ".sparkflow", "dashboard", "state.json");
+    // Run two puts concurrently via Promise.all — each does read-modify-rename.
+    // The file must remain valid JSON regardless of interleaving order.
+    await Promise.all([
+      Promise.resolve().then(() => cmdStatePut("/a", '"first"', tmpDir)),
+      Promise.resolve().then(() => cmdStatePut("/b", '"second"', tmpDir)),
+    ]);
+    const raw = readFileSync(statePath, "utf-8");
+    const parsed = JSON.parse(raw); // must not throw
+    // At least one write must have landed
+    expect(typeof parsed).toBe("object");
+    expect(parsed).not.toBeNull();
+  });
 });

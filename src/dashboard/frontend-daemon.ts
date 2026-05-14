@@ -104,7 +104,7 @@ function serveFile(res: ServerResponse, absPath: string): void {
   }
 }
 
-const APP_FILES = new Set(["index.html", "client.js", "style.css"]);
+const APP_FILES = new Set(["index.html", "client.js", "style.css", "dashboard-widget.js", "dashboard-widget.css"]);
 const VENDOR_FILES: Record<string, string> = {
   "xterm.css": join(NODE_MODULES, "@xterm", "xterm", "css", "xterm.css"),
   "xterm.mjs": join(NODE_MODULES, "@xterm", "xterm", "lib", "xterm.mjs"),
@@ -462,6 +462,36 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       if (file) return serveFile(res, file);
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
+      return;
+    }
+
+    // Dashboard widget: serves the .sparkflow/dashboard.html from the first
+    // attached repo. Since the widget is a single-URL poller, it only supports
+    // one repo at a time today (fine for auto-develop).
+    if (pathname === "/api/dashboard" && req.method === "GET") {
+      const repos = registry.getRepos();
+      const primary = registry.getEngine(repos[0]?.repoId ?? "");
+      const repoPath = primary?.repoPath;
+      if (!repoPath) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("no dashboard");
+        return;
+      }
+      const dashPath = join(repoPath, ".sparkflow", "dashboard.html");
+      try {
+        const body = readFileSync(dashPath);
+        const mtime = statSync(dashPath).mtime.toUTCString();
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": body.byteLength,
+          "cache-control": "no-store",
+          "last-modified": mtime,
+        });
+        res.end(body);
+      } catch {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("no dashboard");
+      }
       return;
     }
 

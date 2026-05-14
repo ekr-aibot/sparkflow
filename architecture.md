@@ -220,7 +220,7 @@ A generic live dashboard panel fixed in the upper-right corner of the web UI. An
 
 **`sparkflow-dashboard` CLI (`src/cli/dashboard.ts`):** Reads `ROADMAP.md` from the project root, parses task lines (`[ ]` pending, `[x]` done, `[!]` blocked with optional `<!-- blocked: reason -->` inline comments), and generates a self-contained HTML dashboard at `.sparkflow/dashboard.html`. Called by the `update-dashboard` step in `examples/auto-develop.json` before each `pick-next` cycle; step failure is non-fatal (routes to `pick-next` regardless).
 
-**Backend endpoint:** `GET /api/dashboard` reads `.sparkflow/dashboard.html` and serves it as `text/html; no-store`. Returns 404 when the file is absent.
+**Backend endpoint:** `GET /api/dashboard` in `src/dashboard/frontend-daemon.ts` reads `.sparkflow/dashboard.html` from the first attached repo and serves it as `text/html; charset=utf-8; no-store`, including a `Last-Modified` header for efficient change detection. Returns 404 when the file is absent or no repos are attached.
 
 **Frontend:** `dashboard-widget.js` polls `/api/dashboard` every 2 s, skips when `document.hidden`, re-polls on tab focus. Displays the HTML in an iframe; reloads when the ETag changes. Expand/collapse state persisted in `localStorage` keyed by port.
 

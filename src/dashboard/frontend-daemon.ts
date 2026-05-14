@@ -539,6 +539,11 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       res.end();
       return;
     }
+    // Set auth cookie on any query-token response so the SPA's sub-requests
+    // (fetch, EventSource, script/link tags) are also authorized via cookie.
+    if (!cookieOk && queryOk) {
+      res.setHeader("set-cookie", `sf_token=${token}; Path=/; HttpOnly; SameSite=Strict`);
+    }
 
     // Static files
     if (pathname === "/" || pathname === "/index.html") {
@@ -977,6 +982,15 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
         // Try new SPA directory first, fall back to legacy dashboard.html
         const spaIndex = join(dashDir, "index.html");
         const legacyHtml = join(sparkflowDir, "dashboard.html");
+
+        // Redirect no-trailing-slash to trailing-slash when serving SPA so that
+        // relative asset URLs (app.js, style.css) resolve to /dashboard/<file>
+        // rather than /repos/<repoId>/<file>.
+        if (subpath === "" && existsSync(spaIndex)) {
+          res.writeHead(301, { location: `/repos/${repoId}/dashboard/`, "cache-control": "no-store" });
+          res.end();
+          return;
+        }
 
         const tryPath = existsSync(spaIndex) ? spaIndex : existsSync(legacyHtml) ? legacyHtml : null;
         if (!tryPath) {

@@ -28,8 +28,8 @@ test.describe("Dashboard Widget E2E", () => {
     const content1 = "<html><body>Dashboard V1</body></html>";
     writeFileSync(dashPath, content1);
 
-    // Polling is 2s, wait up to 5s
-    await expect(widget).toBeVisible({ timeout: 5000 });
+    // Polling is 2s; allow extra time for CI to populate #repo-filter via SSE
+    await expect(widget).toBeVisible({ timeout: 8000 });
     await expect(widget.locator(".dw-label")).toHaveText("Dashboard");
 
     // 3. Expand widget and check iframe content
@@ -39,15 +39,14 @@ test.describe("Dashboard Widget E2E", () => {
     const iframe = widget.locator("iframe.dw-iframe");
     await expect(iframe).toBeVisible();
 
-    // Check iframe content - need to access frame
-    const frame = page.frame({ url: /api\/dashboard/ });
-    expect(frame).toBeTruthy();
-    await expect(frame!.locator("body")).toHaveText("Dashboard V1");
+    // Check iframe content using frameLocator (auto-waits for frame to load)
+    const frameLocator = page.frameLocator("iframe.dw-iframe");
+    await expect(frameLocator.locator("body")).toHaveText("Dashboard V1", { timeout: 5000 });
 
     // 4. Update dashboard.html -> iframe reloads
     // Capture old src to check for cache-buster change
     const oldSrc = await iframe.getAttribute("src");
-    expect(oldSrc).toContain("/api/dashboard");
+    expect(oldSrc).toMatch(/\/repos\/[^/]+\/dashboard/);
 
     const content2 = "<html><body>Dashboard V2</body></html>";
     writeFileSync(dashPath, content2);
@@ -55,8 +54,8 @@ test.describe("Dashboard Widget E2E", () => {
     const now = new Date();
     utimesSync(dashPath, now, now);
 
-    // Wait for iframe to reload and show new content
-    await expect(frame!.locator("body")).toHaveText("Dashboard V2", { timeout: 5000 });
+    // Wait for iframe to reload and show new content (poll cycle up to 2s + load time)
+    await expect(frameLocator.locator("body")).toHaveText("Dashboard V2", { timeout: 8000 });
 
     const newSrc = await iframe.getAttribute("src");
     expect(newSrc).not.toBe(oldSrc);
@@ -79,7 +78,7 @@ test.describe("Dashboard Widget E2E", () => {
 
     await page.goto(server.url, { waitUntil: "domcontentloaded" });
     const widget = page.locator(".dw");
-    await expect(widget).toBeVisible({ timeout: 5000 });
+    await expect(widget).toBeVisible({ timeout: 8000 });
 
     // Ensure it's collapsed initially
     await expect(widget).not.toHaveClass(/dw--expanded/);

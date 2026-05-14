@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -277,5 +277,64 @@ describe("frontend-daemon HTTP routes", () => {
     expect(res.ok).toBe(true);
     const body = await res.json() as { jobId: string };
     expect(body.jobId).toBe("new-job-xyz");
+  });
+});
+
+describe("GET /repos/:repoId/dashboard", () => {
+  let tmpDir: string;
+  let daemon: FrontendDaemonHandle;
+  let client: EngineIpcClient;
+  const baseUrl = () => `http://127.0.0.1:${daemon.port}`;
+  const authHeaders = { Cookie: `sf_token=${TEST_TOKEN}` };
+
+  beforeEach(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "sparkflow-dashboard-test-"));
+    const ipcSock = join(tmpDir, "frontend.sock");
+    daemon = await createFrontendDaemon({ ipcSocketPath: ipcSock, port: 0, token: TEST_TOKEN });
+
+    client = new EngineIpcClient({
+      frontendSocketPath: ipcSock,
+      repoId: "dashrepo",
+      repoPath: tmpDir,
+      repoName: "Dash Repo",
+      mcpSocket: join(tmpDir, "mcp.sock"),
+      version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
+    });
+    await client.connect();
+    await waitFor(() => daemon.registry.getEngine("dashrepo") !== null);
+  });
+
+  afterEach(async () => {
+    client.close();
+    await daemon.close();
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("returns 200 with dashboard HTML and etag when file exists", async () => {
+    mkdirSync(join(tmpDir, ".sparkflow"), { recursive: true });
+    writeFileSync(join(tmpDir, ".sparkflow", "dashboard.html"), "<h1>My Dashboard</h1>");
+
+    const res = await fetch(`${baseUrl()}/repos/dashrepo/dashboard`, { headers: authHeaders });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("etag")).toBeTruthy();
+    const body = await res.text();
+    expect(body).toBe("<h1>My Dashboard</h1>");
+  });
+
+  it("returns 404 with body 'no dashboard' when the file does not exist", async () => {
+    const res = await fetch(`${baseUrl()}/repos/dashrepo/dashboard`, { headers: authHeaders });
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    expect(body).toBe("no dashboard");
+  });
+
+  it("returns 404 for unknown repoId", async () => {
+    const res = await fetch(`${baseUrl()}/repos/unknown-repo/dashboard`, { headers: authHeaders });
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain("No engine attached");
   });
 });

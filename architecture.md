@@ -212,6 +212,33 @@ CLI / Web UI → WorkflowEngine.run()
     → onStepComplete/Failure → triggerStep(next)
 ```
 
+### Per-Workflow Dashboards (`src/dashboard/frontend-daemon.ts`, `src/cli/dashboard.ts`)
+
+Any workflow can ship its own dashboard SPA. The platform provides hosting, state storage, and live event streaming.
+
+**Dashboard contract** — a workflow that wants a dashboard:
+1. Drops SPA assets (`index.html` + any `.js`/`.css`) into `.sparkflow/dashboard/` in the repo.
+2. Writes workflow state to `.sparkflow/dashboard/state.json` (schema is the SPA's choice; sparkflow stores it verbatim).
+3. The SPA fetches `GET /repos/:repoId/dashboard/state` on load and subscribes to `GET /repos/:repoId/dashboard/events` (SSE) for live updates.
+
+**Endpoints:**
+- `GET /repos/:repoId/dashboard` — serves `index.html` from `.sparkflow/dashboard/`; backward-compat fallback to `.sparkflow/dashboard.html` when the directory is absent.
+- `GET /repos/:repoId/dashboard/<path>` — static file serving from `.sparkflow/dashboard/`; path traversal rejected with 404.
+- `GET /repos/:repoId/dashboard/state` — serves `state.json` verbatim as `application/json`.
+- `GET /repos/:repoId/dashboard/events` — per-repo SSE stream. Emits two event types:
+  - `event: state` — fires on every `state.json` change (100ms debounced file-watch), payload is the new JSON.
+  - `event: job` — fires for each job lifecycle change for this repo, payload mirrors `JobInfo`.
+  - Heartbeat comment frame every 30s to keep the connection alive.
+
+**`sparkflow-dashboard` CLI subcommands:**
+- `state set-from-roadmap [projectDir]` — parses ROADMAP.md (including `##` section headings) and writes `state.json`. Diffs against `.last-state.json` to maintain `recent[]` activity history.
+- `state put <json-pointer> <value>` — atomic JSON-pointer write to `state.json` (`.tmp` + rename).
+- `scaffold [--force] [projectDir]` — copies the bundled auto-develop SPA assets into `.sparkflow/dashboard/`. Idempotent by default (does not overwrite existing files).
+
+**Auto-develop SPA** (`src/dashboard/auto-develop-spa/`) — vanilla JS reference implementation. Layout: progress bar → recent-activity strip (3 entries) → active/blocked pinned panel → sections in file order (all-done sections collapsed by default).
+
+**Backward compatibility:** `.sparkflow/dashboard.html` is served as a fallback when `.sparkflow/dashboard/index.html` is absent. The fallback will be removed after the auto-develop migration is verified end-to-end.
+
 ### Step-publishable HTML Dashboard (`src/web/static/dashboard-widget.*`, `src/cli/dashboard.ts`)
 
 A generic live dashboard panel fixed in the upper-right corner of the web UI. Any workflow can opt in by setting `"dashboard": true` in its JSON and including a step that writes `.sparkflow/dashboard.html`. The web UI polls `GET /api/dashboard`, which serves that file verbatim as `text/html`. The panel appears when the file exists and hides when it doesn't; the iframe reloads when the file changes (detected via ETag/timestamp).

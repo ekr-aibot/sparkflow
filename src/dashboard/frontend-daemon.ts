@@ -19,8 +19,9 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createConnection, type Socket } from "node:net";
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { extname, resolve, dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, watch as fsWatch, writeFileSync } from "node:fs";
+import type { FSWatcher } from "node:fs";
+import { extname, normalize, resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -291,6 +292,91 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
   // Start the IPC server (engine registry)
   const registry = new FrontendIpcServer(ipcSocketPath);
   await registry.listen();
+
+  // ---------------------------------------------------------------------------
+  // Per-repo dashboard SSE state
+  // ---------------------------------------------------------------------------
+  interface DashboardSseEntry {
+    clients: Set<ServerResponse>;
+    watcher: FSWatcher | null;
+    watchDebounce: NodeJS.Timeout | null;
+  }
+  const dashboardSseClients = new Map<string, DashboardSseEntry>();
+  const dashboardJobSnapshots = new Map<string, Map<string, string>>();
+
+  function getDashboardSseEntry(repoId: string): DashboardSseEntry {
+    if (!dashboardSseClients.has(repoId)) {
+      dashboardSseClients.set(repoId, { clients: new Set(), watcher: null, watchDebounce: null });
+    }
+    return dashboardSseClients.get(repoId)!;
+  }
+
+  function teardownDashboardSseEntry(repoId: string): void {
+    const entry = dashboardSseClients.get(repoId);
+    if (!entry) return;
+    if (entry.watchDebounce) { clearTimeout(entry.watchDebounce); entry.watchDebounce = null; }
+    if (entry.watcher) { try { entry.watcher.close(); } catch { /* ignore */ } entry.watcher = null; }
+    dashboardSseClients.delete(repoId);
+    dashboardJobSnapshots.delete(repoId);
+  }
+
+  function setupStateWatcher(repoId: string, dashDir: string): void {
+    const entry = getDashboardSseEntry(repoId);
+    if (entry.watcher) return;
+    const statePath = join(dashDir, "state.json");
+    try {
+      // Watch the directory — atomic renames emit "rename" events on the dir
+      const watcher = fsWatch(dashDir, { persistent: false }, (_event, filename) => {
+        if (filename !== null && filename !== "state.json") return;
+        const e = getDashboardSseEntry(repoId);
+        if (e.watchDebounce) clearTimeout(e.watchDebounce);
+        e.watchDebounce = setTimeout(() => {
+          e.watchDebounce = null;
+          let data: string | null = null;
+          try { data = readFileSync(statePath, "utf-8"); } catch { /* file may not exist */ }
+          if (data === null) return;
+          for (const client of e.clients) {
+            try { client.write(`event: state\ndata: ${data}\n\n`); } catch { /* client gone */ }
+          }
+        }, 100);
+      });
+      entry.watcher = watcher;
+    } catch { /* dashDir may not exist yet; no watcher — clients will get job events */ }
+  }
+
+  // Global registry subscription for dashboard job SSE events
+  const unsubDashboardJobs = registry.onUpdate(() => {
+    for (const [repoId, entry] of dashboardSseClients.entries()) {
+      if (entry.clients.size === 0) continue;
+      const engine = registry.getEngine(repoId);
+      if (!engine) continue;
+
+      const prevSnapshot = dashboardJobSnapshots.get(repoId) ?? new Map<string, string>();
+      const newSnapshot = new Map<string, string>();
+
+      for (const [jobId, job] of engine.jobs) {
+        const jobAny = job as unknown as Record<string, unknown>;
+        const currKey = JSON.stringify({ state: jobAny.state, summary: jobAny.summary });
+        newSnapshot.set(jobId, currKey);
+        if (prevSnapshot.get(jobId) !== currKey) {
+          const payload = JSON.stringify(job);
+          for (const client of entry.clients) {
+            try { client.write(`event: job\ndata: ${payload}\n\n`); } catch { /* client gone */ }
+          }
+        }
+      }
+      // Emit removal events for jobs that disappeared
+      for (const [jobId] of prevSnapshot) {
+        if (!engine.jobs.has(jobId)) {
+          const payload = JSON.stringify({ id: jobId, state: "removed" });
+          for (const client of entry.clients) {
+            try { client.write(`event: job\ndata: ${payload}\n\n`); } catch { /* client gone */ }
+          }
+        }
+      }
+      dashboardJobSnapshots.set(repoId, newSnapshot);
+    }
+  });
 
   // Per-repo PTY bridge state. Each attached engine that exposes a bridge
   // gets its own entry with a pool of per-chat states.
@@ -813,33 +899,138 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       return;
     }
 
-    // GET /repos/:repoId/dashboard — serve .sparkflow/dashboard.html for the repo
-    const dashboardMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/dashboard$/);
-    if (dashboardMatch && req.method === "GET") {
-      const [, repoId] = dashboardMatch;
+    // Dashboard routes: /repos/:repoId/dashboard[/<subpath>]
+    const dashboardRootMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/dashboard(\/.*)?$/);
+    if (dashboardRootMatch) {
+      const [, repoId, subpathRaw] = dashboardRootMatch;
+      const subpath = subpathRaw ?? "";
       const engine = registry.getEngine(repoId);
       if (!engine) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
-      const dashPath = join(engine.repoPath, ".sparkflow", "dashboard.html");
-      try {
-        const stat = statSync(dashPath);
-        const buf = readFileSync(dashPath);
-        const etag = `"${stat.mtimeMs.toString(36)}"`;
+      const sparkflowDir = join(engine.repoPath, ".sparkflow");
+      const dashDir = join(sparkflowDir, "dashboard");
+
+      // GET /repos/:repoId/dashboard/state — serve state.json as JSON
+      if (subpath === "/state" && req.method === "GET") {
+        const statePath = join(dashDir, "state.json");
+        try {
+          const buf = readFileSync(statePath);
+          res.writeHead(200, {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": buf.byteLength,
+            "cache-control": "no-store",
+          });
+          res.end(buf);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
+            res.end(JSON.stringify({ error: "no state" }));
+          } else {
+            res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+            res.end("internal error");
+          }
+        }
+        return;
+      }
+
+      // GET /repos/:repoId/dashboard/events — per-repo SSE stream
+      if (subpath === "/events" && req.method === "GET") {
         res.writeHead(200, {
-          "content-type": "text/html; charset=utf-8",
-          "content-length": buf.byteLength,
-          "cache-control": "no-store",
-          etag,
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
         });
-        res.end(buf);
-      } catch (err: unknown) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+
+        // Send initial state
+        const statePath = join(dashDir, "state.json");
+        let initialData = "null";
+        try { initialData = readFileSync(statePath, "utf-8"); } catch { /* missing is fine */ }
+        try { res.write(`event: state\ndata: ${initialData}\n\n`); } catch { /* ignore */ }
+
+        const entry = getDashboardSseEntry(repoId);
+        entry.clients.add(res);
+
+        // Ensure watcher is running (directory must exist)
+        try { mkdirSync(dashDir, { recursive: true }); } catch { /* ignore */ }
+        setupStateWatcher(repoId, dashDir);
+
+        // 30s heartbeat
+        const heartbeat = setInterval(() => {
+          try { res.write(":\n\n"); } catch { /* ignore */ }
+        }, 30_000);
+
+        req.on("close", () => {
+          clearInterval(heartbeat);
+          const e = dashboardSseClients.get(repoId);
+          if (e) {
+            e.clients.delete(res);
+            if (e.clients.size === 0) teardownDashboardSseEntry(repoId);
+          }
+        });
+        return;
+      }
+
+      // GET /repos/:repoId/dashboard or /repos/:repoId/dashboard/ — serve index
+      if ((subpath === "" || subpath === "/") && req.method === "GET") {
+        // Try new SPA directory first, fall back to legacy dashboard.html
+        const spaIndex = join(dashDir, "index.html");
+        const legacyHtml = join(sparkflowDir, "dashboard.html");
+
+        const tryPath = existsSync(spaIndex) ? spaIndex : existsSync(legacyHtml) ? legacyHtml : null;
+        if (!tryPath) {
           res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
           res.end("no dashboard");
-        } else {
+          return;
+        }
+        try {
+          const stat = statSync(tryPath);
+          const buf = readFileSync(tryPath);
+          const etag = `"${stat.mtimeMs.toString(36)}"`;
+          res.writeHead(200, {
+            "content-type": "text/html; charset=utf-8",
+            "content-length": buf.byteLength,
+            "cache-control": "no-store",
+            etag,
+          });
+          res.end(buf);
+        } catch {
           res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
           res.end("internal error");
         }
+        return;
       }
+
+      // GET /repos/:repoId/dashboard/<file> — static asset from .sparkflow/dashboard/
+      if (subpath.startsWith("/") && req.method === "GET") {
+        const requestedFile = subpath.slice(1);
+        // Path traversal check
+        const resolved = normalize(join(dashDir, requestedFile));
+        const dashDirNorm = normalize(dashDir);
+        if (!resolved.startsWith(dashDirNorm + "/") && resolved !== dashDirNorm) {
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+          res.end("not found");
+          return;
+        }
+        // Reject directory traversal via realpath
+        try {
+          const real = realpathSync(resolved);
+          const realDash = realpathSync(dashDir);
+          if (!real.startsWith(realDash + "/")) {
+            res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+            res.end("not found");
+            return;
+          }
+        } catch {
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+          res.end("not found");
+          return;
+        }
+        serveFile(res, resolved);
+        return;
+      }
+
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
       return;
     }
 
@@ -981,6 +1172,8 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
     ipcSocketPath,
     registry,
     close: async () => {
+      unsubDashboardJobs();
+      for (const [repoId] of [...dashboardSseClients.keys()]) teardownDashboardSseEntry(repoId);
       await registry.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },

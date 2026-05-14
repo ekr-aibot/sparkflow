@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTasks, buildDashboardHtml } from "../../src/cli/dashboard.js";
+import { parseTasks, parseSections, buildDashboardHtml } from "../../src/cli/dashboard.js";
 
 describe("parseTasks", () => {
   it("parses a pending task", () => {
@@ -39,6 +39,27 @@ describe("parseTasks", () => {
     const tasks = parseTasks(md);
     expect(tasks[0]).toMatchObject({ line: 1, status: "done" });
     expect(tasks[1]).toMatchObject({ line: 3, status: "pending" });
+  });
+});
+
+describe("parseSections", () => {
+  it("returns tasks grouped under null title when no ## headings", () => {
+    const sections = parseSections("- [ ] one\n- [x] two");
+    expect(sections).toHaveLength(1);
+    expect(sections[0].title).toBeNull();
+    expect(sections[0].tasks).toHaveLength(2);
+  });
+
+  it("groups tasks under ## headings", () => {
+    const md = "## Phase 1\n- [ ] a\n## Phase 2\n- [x] b";
+    const sections = parseSections(md);
+    expect(sections).toHaveLength(2);
+    expect(sections[0].title).toBe("Phase 1");
+    expect(sections[1].title).toBe("Phase 2");
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(parseSections("")).toEqual([]);
   });
 });
 

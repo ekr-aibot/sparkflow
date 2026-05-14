@@ -145,7 +145,7 @@ export interface Step {
    * true — presents a TUI the user can interact with.
    * false — runs autonomously to completion.
    */
-  interactive: boolean;
+  interactive?: boolean;
   /** How to execute this step. If omitted, inherited from defaults.runtime. */
   runtime?: Runtime;
   /** Instructions injected into the agent's context. Supports templates. */

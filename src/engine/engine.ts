@@ -675,7 +675,7 @@ export class WorkflowEngine {
       env,
       git: this.config?.git,
       projectConfig: this.config,
-      interactive: step.interactive,
+      interactive: step.interactive ?? false,
       timeout: step.timeout ?? this.workflow.defaults?.timeout,
       ipcSocketPath,
       verbose: this.verbose,

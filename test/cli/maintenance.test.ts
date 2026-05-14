@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
@@ -9,18 +9,6 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-
-// Mock child_process so git calls don't hit the real system.
-// Pass spawnSync through so runMaintenance subprocess tests work.
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    execFileSync: vi.fn(),
-  };
-});
-
-import { execFileSync } from "node:child_process";
 
 // Import the internals under test. We re-export them via the module boundary.
 // Since maintenance.ts uses process.argv / process.exit, we call the exported
@@ -303,7 +291,6 @@ describe("record-maintenance-done logic", () => {
 
   beforeEach(() => {
     cwd = makeTmp();
-    vi.mocked(execFileSync).mockReset();
   });
   afterEach(() => { rmSync(cwd, { recursive: true, force: true }); });
 

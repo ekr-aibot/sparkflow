@@ -71,6 +71,12 @@ export function applySandbox(opts: {
     return { command, args, env };
   }
 
+  if (cfg.network === "deny") {
+    ctx.logger?.info(
+      `[${ctx.stepId}] sandbox: warning — network="deny" is not yet implemented; network will be allowed`
+    );
+  }
+
   const sockets = collectSockets(ctx);
 
   const bwrapArgs = buildBwrapArgv({

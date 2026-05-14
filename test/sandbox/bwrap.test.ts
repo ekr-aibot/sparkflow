@@ -6,10 +6,11 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("node:fs", () => ({
   existsSync: vi.fn(),
+  readFileSync: vi.fn(),
 }));
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   isBwrapAvailable,
   resetBwrapAvailableCache,
@@ -19,6 +20,7 @@ import {
 
 const mockExec = vi.mocked(execFileSync);
 const mockExists = vi.mocked(existsSync);
+const mockReadFileSync = vi.mocked(readFileSync);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -27,6 +29,8 @@ beforeEach(() => {
   mockExists.mockReturnValue(true);
   // Default: bwrap --version succeeds
   mockExec.mockReturnValue(Buffer.from("bwrap 0.9.0\n"));
+  // Default: .git file points to a sidecar at /repo/.git/worktrees/run1-step1
+  mockReadFileSync.mockReturnValue("gitdir: /repo/.git/worktrees/run1-step1\n" as any);
 });
 
 afterEach(() => {
@@ -127,15 +131,21 @@ describe("buildBwrapArgv", () => {
     expect(rwPairs).toContainEqual(["/worktrees/run1/step1", "/worktrees/run1/step1"]);
   });
 
-  it("binds parent repo .git RW when in a worktree", () => {
+  it("binds worktree sidecar RW and shared .git parts RO when in a worktree", () => {
     const argv = buildBwrapArgv(BASE_OPTS);
     const rwPairs: string[][] = [];
+    const roPairs: string[][] = [];
     for (let i = 0; i < argv.length - 2; i++) {
-      if (argv[i] === "--bind") {
-        rwPairs.push([argv[i + 1], argv[i + 2]]);
-      }
+      if (argv[i] === "--bind") rwPairs.push([argv[i + 1], argv[i + 2]]);
+      if (argv[i] === "--ro-bind") roPairs.push([argv[i + 1], argv[i + 2]]);
     }
-    expect(rwPairs).toContainEqual(["/repo/.git", "/repo/.git"]);
+    // The sidecar directory must be bound RW (for git ref updates)
+    expect(rwPairs).toContainEqual(["/repo/.git/worktrees/run1-step1", "/repo/.git/worktrees/run1-step1"]);
+    // Shared git parts must be bound RO
+    expect(roPairs.some(([src]) => src === "/repo/.git/objects")).toBe(true);
+    expect(roPairs.some(([src]) => src === "/repo/.git/HEAD")).toBe(true);
+    expect(roPairs.some(([src]) => src === "/repo/.git/refs")).toBe(true);
+    expect(roPairs.some(([src]) => src === "/repo/.git/config")).toBe(true);
   });
 
   it("does NOT bind parent repo working tree", () => {
@@ -147,9 +157,10 @@ describe("buildBwrapArgv", () => {
       }
     }
     // The parent working tree (/repo) itself must NOT be bound
-    // (the .git subdir is allowed, but not the root)
     const repoRootBound = allBinds.some(([src]) => src === "/repo");
     expect(repoRootBound).toBe(false);
+    // But .git subdirs are accessible (objects, refs, sidecar, etc.)
+    expect(allBinds.some(([src]) => src.startsWith("/repo/.git/"))).toBe(true);
   });
 
   it("does not add .git bind when cwd equals repoRoot (not a worktree)", () => {
@@ -251,12 +262,32 @@ describe("gitWorktreeBinds", () => {
     expect(binds[0]).toEqual(["--bind", "/repo", "/repo"]);
   });
 
-  it("returns worktree + .git binds when in a worktree", () => {
+  it("returns worktree RW + sidecar RW + shared git parts RO when in a worktree", () => {
     mockExists.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue("gitdir: /repo/.git/worktrees/step1\n" as any);
     const binds = gitWorktreeBinds("/repo", "/worktrees/run1/step1");
-    expect(binds).toHaveLength(2);
-    expect(binds[0]).toEqual(["--bind", "/worktrees/run1/step1", "/worktrees/run1/step1"]);
-    expect(binds[1]).toEqual(["--bind", "/repo/.git", "/repo/.git"]);
+    const rwBinds = binds.filter((b) => b[0] === "--bind");
+    const roBinds = binds.filter((b) => b[0] === "--ro-bind");
+    // Worktree dir must be RW
+    expect(rwBinds).toContainEqual(["--bind", "/worktrees/run1/step1", "/worktrees/run1/step1"]);
+    // Sidecar must be RW
+    expect(rwBinds).toContainEqual(["--bind", "/repo/.git/worktrees/step1", "/repo/.git/worktrees/step1"]);
+    // Shared git parts must be RO
+    expect(roBinds.some(([, src]) => src === "/repo/.git/objects")).toBe(true);
+    expect(roBinds.some(([, src]) => src === "/repo/.git/HEAD")).toBe(true);
+    expect(roBinds.some(([, src]) => src === "/repo/.git/refs")).toBe(true);
+    expect(roBinds.some(([, src]) => src === "/repo/.git/config")).toBe(true);
+  });
+
+  it("falls back to RO bind of entire .git when sidecar cannot be read", () => {
+    mockExists.mockReturnValue(true);
+    mockReadFileSync.mockImplementation(() => { throw new Error("ENOENT"); });
+    const binds = gitWorktreeBinds("/repo", "/worktrees/run1/step1");
+    const roBinds = binds.filter((b) => b[0] === "--ro-bind");
+    expect(roBinds).toContainEqual(["--ro-bind", "/repo/.git", "/repo/.git"]);
+    // The entire .git RO bind must NOT be RW
+    const rwBinds = binds.filter((b) => b[0] === "--bind");
+    expect(rwBinds.some(([, src]) => src === "/repo/.git")).toBe(false);
   });
 
   it("omits .git bind when .git dir does not exist", () => {
@@ -268,11 +299,12 @@ describe("gitWorktreeBinds", () => {
 
   it("does NOT bind the parent working tree", () => {
     mockExists.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue("gitdir: /repo/.git/worktrees/step1\n" as any);
     const binds = gitWorktreeBinds("/repo", "/worktrees/run1/step1");
-    const bindsSrcs = binds.map(([, src]) => src);
+    const allSrcs = binds.map(([, src]) => src);
     // /repo itself must not be bound
-    expect(bindsSrcs).not.toContain("/repo");
-    // /repo/.git is fine
-    expect(bindsSrcs).toContain("/repo/.git");
+    expect(allSrcs).not.toContain("/repo");
+    // But .git subdirs are accessible
+    expect(allSrcs.some((src) => src.startsWith("/repo/.git/"))).toBe(true);
   });
 });

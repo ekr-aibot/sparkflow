@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -18,13 +18,8 @@ function deriveSparkflowRoot(): string {
     const parent = dirname(dir);
     if (parent === dir) break; // filesystem root
     dir = parent;
-    // Use a try/catch to avoid depending on existsSync (may be mocked in tests)
-    try {
-      const marker = resolve(dir, "package.json");
-      execFileSync("test", ["-f", marker], { stdio: "pipe" });
+    if (existsSync(resolve(dir, "package.json"))) {
       return dir;
-    } catch {
-      // Continue walking up
     }
   }
   return resolve(__dirname, "../../..");
@@ -207,25 +202,62 @@ function buildPassthroughEnv(extraEnv: Record<string, string>): Record<string, s
  * Returns the bwrap bind-mount flags needed for git operations inside a worktree.
  *
  * When repoRoot === worktreePath (not in a worktree), returns a single RW bind
- * for the directory. When in a worktree:
+ * for the directory. When in a proper worktree, uses surgical binds:
  *   1. `--bind <worktreePath> <worktreePath>` — the agent's working directory (RW)
- *   2. `--bind <repoRoot>/.git <repoRoot>/.git` — full git plumbing (RW, needed for commits)
+ *   2. `--bind <sidecar> <sidecar>` — the worktree sidecar inside .git/worktrees/<id>/ (RW,
+ *      needed for git ref updates); sidecar path is read from <worktreePath>/.git file.
+ *   3. `--ro-bind <repoRoot>/.git/{objects,refs,HEAD,config,info,packed-refs}` — shared git
+ *      plumbing the agent needs to read (RO — the agent must not rewrite parent repo refs).
  *
  * The parent repo's working tree (<repoRoot>/) is intentionally NOT bound, so the
  * agent cannot read or write files there.
+ *
+ * Fallback: if the sidecar cannot be determined (e.g., not a real worktree), binds the
+ * entire <repoRoot>/.git as RO to preserve read access without granting write access.
  */
 export function gitWorktreeBinds(repoRoot: string, worktreePath: string): string[][] {
   const binds: string[][] = [];
 
-  // The agent's working directory
+  // The agent's working directory (RW)
   binds.push(["--bind", worktreePath, worktreePath]);
 
-  // If in a proper worktree, also bind the parent's .git for git plumbing
-  if (repoRoot !== worktreePath) {
-    const gitDir = `${repoRoot}/.git`;
-    if (existsSync(gitDir)) {
-      binds.push(["--bind", gitDir, gitDir]);
+  // Not in a worktree — no additional git binds needed
+  if (repoRoot === worktreePath) {
+    return binds;
+  }
+
+  const gitDir = `${repoRoot}/.git`;
+  if (!existsSync(gitDir)) {
+    return binds;
+  }
+
+  // Read the .git file inside the worktree to discover the sidecar path.
+  // Format: "gitdir: /absolute/path/to/<repo>/.git/worktrees/<id>"
+  let sidecarPath: string | undefined;
+  try {
+    const content = readFileSync(`${worktreePath}/.git`, "utf8").trim();
+    const match = /^gitdir:\s*(.+)$/.exec(content);
+    if (match) {
+      sidecarPath = match[1].trim();
     }
+  } catch {
+    // Not a file-based worktree or unreadable — fall back below
+  }
+
+  if (sidecarPath && existsSync(sidecarPath)) {
+    // Surgical: sidecar RW (git needs to write ORIG_HEAD, HEAD ref, etc.)
+    binds.push(["--bind", sidecarPath, sidecarPath]);
+    // Shared git objects/refs/config: RO — agent can read history but cannot
+    // rewrite parent repo refs (e.g., move main to an arbitrary commit).
+    for (const part of ["objects", "refs", "HEAD", "config", "info", "packed-refs"]) {
+      const partPath = `${gitDir}/${part}`;
+      if (existsSync(partPath)) {
+        binds.push(["--ro-bind", partPath, partPath]);
+      }
+    }
+  } else {
+    // Fallback: bind the whole .git RO — git reads work, but writes are blocked.
+    binds.push(["--ro-bind", gitDir, gitDir]);
   }
 
   return binds;

@@ -17,6 +17,9 @@ import { isBwrapAvailable, resetBwrapAvailableCache, buildBwrapArgv } from "../.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const isLinux = process.platform === "linux";
+// /var/tmp is required so the parent repo lives outside the /tmp bind mount,
+// making parent-repo confinement tests meaningful.
+const hasVarTmp = existsSync("/var/tmp");
 
 function hasBwrap(): boolean {
   resetBwrapAvailableCache();
@@ -25,18 +28,14 @@ function hasBwrap(): boolean {
 
 /**
  * Use /var/tmp for the parent repo so it is outside the /tmp bind mount.
- * /var/tmp is writable by all users on standard Linux systems and is NOT
- * bound in our bwrap profile (only /tmp is bound). This lets us verify that
- * the parent repo root is inaccessible while the worktree and .git dir are.
+ * /var/tmp is NOT bound in our bwrap profile (only /tmp is), so we can verify
+ * that the parent repo root is inaccessible while the worktree and .git are.
  */
 function repoTmpDir(): string {
-  // Prefer /var/tmp; fall back to /tmp with a unique prefix so we can
-  // distinguish it from the worktree path.
-  const base = existsSync("/var/tmp") ? "/var/tmp" : tmpdir();
-  return mkdtempSync(join(base, "sf-sandbox-repo-"));
+  return mkdtempSync(join("/var/tmp", "sf-sandbox-repo-"));
 }
 
-describe.skipIf(!isLinux || !hasBwrap())("bwrap integration", () => {
+describe.skipIf(!isLinux || !hasBwrap() || !hasVarTmp)("bwrap integration", () => {
   let repoDir: string;
   let worktreeDir: string;
   let testFile: string;

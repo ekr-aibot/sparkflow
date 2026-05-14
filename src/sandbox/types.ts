@@ -1,10 +1,6 @@
-export interface SandboxConfig {
-  enabled?: boolean;
-  required?: boolean;
-  network?: "allow" | "deny";
-  extra_ro_binds?: string[];
-  extra_rw_binds?: string[];
-}
+import type { SandboxConfig } from "../schema/types.js";
+
+export type { SandboxConfig };
 
 export interface SandboxOptions {
   command: string;

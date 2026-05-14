@@ -77,7 +77,7 @@ test.describe("Dashboard Widget E2E", () => {
 
   test("SPA dashboard renders progress bar and sections from state.json", async ({ page }) => {
     // Get the repoId from /repos
-    const reposRes = await fetch(`${server.url.replace(/\?.*/, "")}/repos?token=${server.token}`);
+    const reposRes = await fetch(`http://127.0.0.1:${server.port}/repos?token=${server.token}`);
     const reposBody = await reposRes.json() as { repos: Array<{ repoId: string }> };
     const repoId = reposBody.repos[0]?.repoId;
     expect(repoId).toBeTruthy();

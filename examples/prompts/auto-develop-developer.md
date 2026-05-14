@@ -21,6 +21,39 @@ If your current attempt number exceeds 3, give up: set `implementation_ready` to
 
 Otherwise, implement the task and output your current attempt number as `attempt_count`.
 
+## Tracking this task on the dashboard
+
+Before implementing, publish your job ID so the dashboard shows this task as in-progress:
+
+```bash
+if [ -n "$SPARKFLOW_JOB_ID" ] && [ -f .sparkflow/dashboard/state.json ]; then
+  # Find section/task indices for this task by matching its text in state.json
+  POINTER=$(node -e "
+    const fs = require('fs');
+    const s = JSON.parse(fs.readFileSync('.sparkflow/dashboard/state.json', 'utf8'));
+    const txt = process.argv[1].trim();
+    for (let si = 0; si < s.sections.length; si++) {
+      const tasks = s.sections[si].tasks;
+      for (let ti = 0; ti < tasks.length; ti++) {
+        if (tasks[ti].text.trim() === txt) {
+          process.stdout.write('/sections/' + si + '/tasks/' + ti + '/currentJobId');
+          process.exit(0);
+        }
+      }
+    }
+  " "$TASK_TEXT" 2>/dev/null)
+  if [ -n "$POINTER" ]; then
+    sparkflow-dashboard state put "$POINTER" "\"$SPARKFLOW_JOB_ID\""
+  fi
+fi
+```
+
+Replace `$TASK_TEXT` with the exact task text from your transition message. When your work is complete (success or giving-up), clear it before outputting your JSON:
+
+```bash
+if [ -n "$POINTER" ]; then sparkflow-dashboard state put "$POINTER" "null"; fi
+```
+
 ## Implementing the task
 
 1. **Read context files first.** Read `ROADMAP.md` and `ARCHITECTURE.md` in the working directory. Understand the overall goal and design decisions before writing code.

@@ -11,8 +11,12 @@
     "sparkflow-kill": "dist/src/cli/kill-bin.js",
     "sparkflow-dashboard": "dist/src/cli/dashboard.js"
   },
+  "files": [
+    "dist",
+    "src/dashboard/auto-develop-spa"
+  ],
   "scripts": {
-    "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/ && mkdir -p dist/src/web/static && cp src/web/static/* dist/src/web/static/",
+    "build": "tsc && cp src/schema/workflow.schema.json dist/src/schema/ && mkdir -p dist/src/web/static && cp src/web/static/* dist/src/web/static/ && mkdir -p dist/src/dashboard/auto-develop-spa && cp src/dashboard/auto-develop-spa/* dist/src/dashboard/auto-develop-spa/",
     "check": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/run/current-system/sw/bin/chromium playwright test",

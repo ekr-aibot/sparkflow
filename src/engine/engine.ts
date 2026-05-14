@@ -563,6 +563,8 @@ export class WorkflowEngine {
       const issuesRepo = this.config.git.issues_repo ?? this.config.git.pr_repo;
       if (issuesRepo) env.SPARKFLOW_ISSUES_REPO = issuesRepo;
     }
+    // Propagate the job ID set by job-manager when this engine was spawned
+    if (process.env.SPARKFLOW_JOB_ID) env.SPARKFLOW_JOB_ID = process.env.SPARKFLOW_JOB_ID;
 
     if (step.env) {
       try {

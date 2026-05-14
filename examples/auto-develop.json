@@ -27,7 +27,7 @@
       "success_output": "initialized",
       "on_success": [
         {
-          "step": "update-dashboard"
+          "step": "scaffold-dashboard"
         }
       ],
       "outputs": {
@@ -296,16 +296,40 @@
         }
       }
     },
-    "update-dashboard": {
-      "name": "Update Dashboard",
-      "description": "Regenerates .sparkflow/dashboard.html from the current ROADMAP.md. Runs before each pick-next cycle so the web UI stays current. Dashboard failures are non-fatal — the workflow routes to pick-next regardless.",
+    "scaffold-dashboard": {
+      "name": "Scaffold Dashboard",
+      "description": "Copies the auto-develop SPA assets into .sparkflow/dashboard/ on first run. Idempotent — does not overwrite existing files.",
       "interactive": false,
       "worktree": {
         "mode": "shared"
       },
       "runtime": {
         "type": "shell",
-        "command": "sparkflow-dashboard"
+        "command": "sparkflow-dashboard",
+        "args": ["scaffold"]
+      },
+      "on_success": [
+        {
+          "step": "update-dashboard"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "update-dashboard"
+        }
+      ]
+    },
+    "update-dashboard": {
+      "name": "Update Dashboard",
+      "description": "Writes .sparkflow/dashboard/state.json from the current ROADMAP.md. Runs before each pick-next cycle so the web UI stays current. Dashboard failures are non-fatal — the workflow routes to pick-next regardless.",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "shell",
+        "command": "sparkflow-dashboard",
+        "args": ["state", "set-from-roadmap"]
       },
       "on_success": [
         {

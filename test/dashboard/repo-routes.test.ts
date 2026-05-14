@@ -280,6 +280,60 @@ describe("frontend-daemon HTTP routes", () => {
   });
 });
 
+describe("GET /repos/:repoId/dashboard — legacy fallback", () => {
+  let tmpDir2: string;
+  let daemon2: FrontendDaemonHandle;
+  let client2: EngineIpcClient;
+  const authH2 = { Cookie: `sf_token=${TEST_TOKEN}` };
+  const baseUrl2 = () => `http://127.0.0.1:${daemon2.port}`;
+
+  beforeEach(async () => {
+    tmpDir2 = mkdtempSync(join(tmpdir(), "sparkflow-legacy-dash-"));
+    const ipcSock = join(tmpDir2, "frontend.sock");
+    daemon2 = await createFrontendDaemon({ ipcSocketPath: ipcSock, port: 0, token: TEST_TOKEN });
+    client2 = new EngineIpcClient({
+      frontendSocketPath: ipcSock,
+      repoId: "legacydash",
+      repoPath: tmpDir2,
+      repoName: "Legacy",
+      mcpSocket: join(tmpDir2, "mcp.sock"),
+      version: SPARKFLOW_VERSION,
+      protocolVersion: SPARKFLOW_PROTOCOL_VERSION,
+    });
+    await client2.connect();
+    await waitFor(() => daemon2.registry.getEngine("legacydash") !== null);
+  });
+
+  afterEach(async () => {
+    client2.close();
+    await daemon2.close();
+    try { rmSync(tmpDir2, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it("falls back to .sparkflow/dashboard.html when dashboard/ dir is absent", async () => {
+    mkdirSync(join(tmpDir2, ".sparkflow"), { recursive: true });
+    writeFileSync(join(tmpDir2, ".sparkflow", "dashboard.html"), "<html>LegacyContent</html>");
+
+    const res = await fetch(`${baseUrl2()}/repos/legacydash/dashboard`, { headers: authH2 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toContain("LegacyContent");
+  });
+
+  it("prefers SPA index.html over legacy dashboard.html when both exist", async () => {
+    mkdirSync(join(tmpDir2, ".sparkflow", "dashboard"), { recursive: true });
+    writeFileSync(join(tmpDir2, ".sparkflow", "dashboard", "index.html"), "<html>SPA</html>");
+    writeFileSync(join(tmpDir2, ".sparkflow", "dashboard.html"), "<html>Legacy</html>");
+
+    const res = await fetch(`${baseUrl2()}/repos/legacydash/dashboard`, { headers: authH2 });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("SPA");
+    expect(body).not.toContain("Legacy");
+  });
+});
+
 describe("GET /repos/:repoId/dashboard", () => {
   let tmpDir: string;
   let daemon: FrontendDaemonHandle;

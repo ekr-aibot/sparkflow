@@ -23,6 +23,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { parseTasks } from "./dashboard.js";
 import { loadProjectConfig, resolveMaintenanceConfig } from "../config/project-config.js";
 
@@ -223,4 +224,6 @@ function main(): void {
   }
 }
 
-main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}

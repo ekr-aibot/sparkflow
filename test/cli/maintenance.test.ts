@@ -11,9 +11,14 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 // Mock child_process so git calls don't hit the real system.
-vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(),
-}));
+// Pass spawnSync through so runMaintenance subprocess tests work.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn(),
+  };
+});
 
 import { execFileSync } from "node:child_process";
 
@@ -89,10 +94,10 @@ const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../../../");
 const MAINTENANCE_TS = join(REPO_ROOT, "src/cli/maintenance.ts");
 
 function runMaintenance(args: string[], cwd: string): { code: number; stdout: string; stderr: string } {
-  // Use tsx (or ts-node) to run maintenance.ts; fall back to compiled dist if unavailable.
+  const viteBin = resolve(REPO_ROOT, "node_modules/.bin/vite-node");
   const result = spawnSync(
-    "node",
-    ["--import", "tsx/esm", MAINTENANCE_TS, ...args],
+    viteBin,
+    ["--script", MAINTENANCE_TS, ...args],
     { cwd, encoding: "utf-8" },
   );
   return {
@@ -353,14 +358,62 @@ describe("record-maintenance-done logic", () => {
   });
 });
 
-// ── is-enabled logic ──────────────────────────────────────────────────────
+// ── is-enabled (subprocess integration) ───────────────────────────────────
 
-describe("is-enabled logic", () => {
-  it("correctly resolves pm enabled=true", () => {
-    // We import resolveMaintenanceConfig directly and test the logic
-    const { pm, architect } = { pm: true, architect: false };
-    expect(pm).toBe(true);
-    expect(architect).toBe(false);
+describe("is-enabled subcommand", () => {
+  let cwd: string;
+
+  beforeEach(() => { cwd = makeTmp(); });
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }); });
+
+  it("exits 0 for pm when pm=true in config", () => {
+    writeConfig(cwd, { maintenance: { pm: true, architect: false } });
+    const { code } = runMaintenance(["is-enabled", "pm", "--cwd", cwd], cwd);
+    expect(code).toBe(0);
+  });
+
+  it("exits 1 for architect when architect=false in config", () => {
+    writeConfig(cwd, { maintenance: { pm: true, architect: false } });
+    const { code } = runMaintenance(["is-enabled", "architect", "--cwd", cwd], cwd);
+    expect(code).toBe(1);
+  });
+
+  it("exits 1 for pm when no config (defaults to disabled)", () => {
+    const { code } = runMaintenance(["is-enabled", "pm", "--cwd", cwd], cwd);
+    expect(code).toBe(1);
+  });
+
+  it("exits 2 for unknown agent name", () => {
+    const { code } = runMaintenance(["is-enabled", "unknown-agent", "--cwd", cwd], cwd);
+    expect(code).toBe(2);
+  });
+});
+
+// ── decide (subprocess integration) ───────────────────────────────────────
+
+describe("decide subcommand (subprocess)", () => {
+  let cwd: string;
+
+  beforeEach(() => { cwd = makeTmp(); });
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }); });
+
+  it("outputs run=none when both agents disabled", () => {
+    writeConfig(cwd, { maintenance: { pm: false, architect: false } });
+    const { stdout } = runMaintenance(["decide", "--cwd", cwd], cwd);
+    const result = JSON.parse(stdout.trim());
+    expect(result.run).toBe("none");
+    expect(result.reason).toMatch(/disabled/);
+  });
+
+  it("outputs run=pm-then-architect when queue is low and pm enabled", () => {
+    writeConfig(cwd, { maintenance: { pm: true, architect: false, queueThreshold: 3 } });
+    // ROADMAP.md with 0 pending tasks → queue low
+    writeRoadmap(cwd, "# Roadmap\n\n- [x] Done task\n");
+    const { stdout } = runMaintenance(["decide", "--cwd", cwd], cwd);
+    const result = JSON.parse(stdout.trim());
+    expect(result.run).toBe("pm-then-architect");
+    expect(result.pmEnabled).toBe(true);
+    expect(result.architectEnabled).toBe(false);
   });
 });
 

@@ -813,6 +813,36 @@ export async function createFrontendDaemon(opts: FrontendDaemonOptions): Promise
       return;
     }
 
+    // GET /repos/:repoId/dashboard — serve .sparkflow/dashboard.html for the repo
+    const dashboardMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/dashboard$/);
+    if (dashboardMatch && req.method === "GET") {
+      const [, repoId] = dashboardMatch;
+      const engine = registry.getEngine(repoId);
+      if (!engine) return sendJson(res, 404, { error: `No engine attached for repo: ${repoId}` });
+      const dashPath = join(engine.repoPath, ".sparkflow", "dashboard.html");
+      try {
+        const stat = statSync(dashPath);
+        const buf = readFileSync(dashPath);
+        const etag = `"${stat.mtimeMs.toString(36)}"`;
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": buf.byteLength,
+          "cache-control": "no-store",
+          etag,
+        });
+        res.end(buf);
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+          res.end("no dashboard");
+        } else {
+          res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+          res.end("internal error");
+        }
+      }
+      return;
+    }
+
     // Workflow start for a specific repo
     const startWorkflowMatch = pathname.match(/^\/repos\/([A-Za-z0-9_-]+)\/start$/);
     if (startWorkflowMatch && req.method === "POST") {

@@ -1,6 +1,6 @@
 // Generic step-publishable HTML dashboard widget.
-// Shows /api/dashboard in a collapsible panel when .sparkflow/dashboard.html exists.
-// Polls /api/dashboard every 2s; reloads the iframe when content changes.
+// Shows /repos/:repoId/dashboard in a collapsible panel when .sparkflow/dashboard.html exists.
+// Polls the active repo's dashboard endpoint every 2s; reloads the iframe when content changes.
 
 const POLL_MS = 2000;
 const STORAGE_KEY = `sparkflow.dashboard.expanded.${location.port}`;
@@ -74,24 +74,53 @@ function apply() {
 
 apply();
 
+// -- Repo tracking --
+
+const repoFilterEl = document.getElementById("repo-filter");
+
+function currentDashboardUrl() {
+  const repoId = repoFilterEl ? repoFilterEl.value : null;
+  if (!repoId) return null;
+  return `/repos/${encodeURIComponent(repoId)}/dashboard`;
+}
+
+function resetWidget() {
+  available = false;
+  lastEtag = null;
+  widget.style.display = "none";
+}
+
+if (repoFilterEl) {
+  repoFilterEl.addEventListener("change", () => {
+    resetWidget();
+    if (pollTimer !== null) clearTimeout(pollTimer);
+    poll();
+  });
+}
+
 // -- Polling --
 
 async function poll() {
   if (document.hidden) return;
+  const url = currentDashboardUrl();
+  if (!url) {
+    pollTimer = setTimeout(poll, POLL_MS);
+    return;
+  }
   try {
-    const res = await fetch("/api/dashboard", { method: "GET" });
+    const res = await fetch(url, { method: "GET" });
     if (res.ok) {
       const etag = res.headers.get("etag") ?? res.headers.get("last-modified") ?? String(Date.now());
       if (!available) {
         // First time dashboard appeared: load iframe
         available = true;
         widget.style.display = "";
-        iframe.src = "/api/dashboard?" + Date.now();
+        iframe.src = url + "?" + Date.now();
         lastEtag = etag;
       } else if (etag !== lastEtag) {
         // Content changed: reload iframe to pick up new HTML
         lastEtag = etag;
-        iframe.src = "/api/dashboard?" + Date.now();
+        iframe.src = url + "?" + Date.now();
       }
     } else {
       available = false;

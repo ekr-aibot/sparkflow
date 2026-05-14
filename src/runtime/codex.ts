@@ -12,7 +12,7 @@ import {
   isCodexTokenLimitError,
   codexUserMessage,
 } from "./codex-flags.js";
-import { extractJsonFromResult, applySuccessGate } from "./claude-code.js";
+import { extractJsonFromResult, applySuccessGate, buildWorktreeReminder } from "./claude-code.js";
 import { extractQuotaResetSeconds } from "./quota-reset.js";
 
 export class CodexAdapter implements RuntimeAdapter {
@@ -45,15 +45,22 @@ export class CodexAdapter implements RuntimeAdapter {
 
         // 1. Determine prompt for this turn
         if (!initialTurnDone) {
+          const parts: string[] = [];
+          const worktreeReminder = buildWorktreeReminder(ctx);
+          if (worktreeReminder) {
+            parts.push(worktreeReminder);
+            ctx.logger?.info(`[${ctx.stepId}] injected worktree confinement reminder (cwd=${ctx.cwd})`);
+          }
+
           if (!currentSessionId) {
             // Fresh run: use prompt + transition
-            const parts: string[] = [];
             if (ctx.prompt) parts.push(ctx.prompt);
             if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
             promptText = parts.join("\n\n");
           } else {
             // Resuming existing session: only use transition message if any
-            promptText = ctx.transitionMessage || "";
+            if (ctx.transitionMessage) parts.push(ctx.transitionMessage);
+            promptText = parts.join("\n\n");
           }
           initialTurnDone = true;
         } else {
@@ -183,6 +190,7 @@ export class CodexAdapter implements RuntimeAdapter {
       let capturedSessionId: string | undefined = sessionId;
       let lastAssistantText = "";
       let allAssistantText = "";
+      let resultEventText = "";
 
       child.stdout?.on("data", (data: Buffer) => {
         const chunk = data.toString();
@@ -203,7 +211,7 @@ export class CodexAdapter implements RuntimeAdapter {
             }
 
             const evType = String(event.type ?? "");
-            if (evType === "assistant_message" || evType === "item.completed") {
+            if (evType === "assistant_message" || evType === "item.completed" || evType === "result") {
               const content = event.content ?? event.text ?? event.result;
               let text = "";
               if (typeof content === "string") {
@@ -221,8 +229,12 @@ export class CodexAdapter implements RuntimeAdapter {
               }
 
               if (text.trim()) {
-                lastAssistantText = text.trim();
-                allAssistantText += (allAssistantText ? "\n" : "") + text.trim();
+                if (evType === "result") {
+                  resultEventText = text.trim();
+                } else {
+                  lastAssistantText = text.trim();
+                  allAssistantText += (allAssistantText ? "\n" : "") + text.trim();
+                }
               }
             }
 
@@ -273,11 +285,11 @@ export class CodexAdapter implements RuntimeAdapter {
         const quotaHit = !success && !tokenLimitHit && (
           isCodexQuotaError(stderr) || isCodexQuotaError(stdout)
         );
-        const quotaText = [String(lastAssistantText ?? ""), stderr, stdout].filter(Boolean).join("\n");
+        const quotaText = [String(resultEventText || lastAssistantText || ""), stderr, stdout].filter(Boolean).join("\n");
         const quotaResetSeconds = quotaHit ? (extractQuotaResetSeconds(quotaText) ?? undefined) : undefined;
 
         const outputs: Record<string, unknown> = {};
-        const resultText = lastAssistantText || allAssistantText || stdout.trim();
+        const resultText = resultEventText || lastAssistantText || allAssistantText || stdout.trim();
         const parsedJson = resultText
           ? extractJsonFromResult(resultText)
           : null;

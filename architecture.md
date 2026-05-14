@@ -78,9 +78,9 @@ Each `nudge_job` call is tracked end-to-end through three phases: **received →
 
 **Phase events** (emitted to process.stderr as JSON by the worker process, picked up by the LogTailer and processed in `handleStatusLine`):
 - `{type:"nudge_event", phase:"received", nudge_id, step, at}` — engine.ts, when nudge is queued on the NudgeQueue
-- `{type:"nudge_event", phase:"delivered", nudge_id, step, at}` — claude-code.ts, when the message is written to the LLM's stdin
-- `{type:"nudge_event", phase:"acked", nudge_id, step, at, duration_ms, turn_count}` — claude-code.ts, when the first `result` event arrives after delivery
-- `{type:"nudge_event", phase:"abandoned", nudge_id, step, at, reason}` — claude-code.ts, when the child exits with a delivered-but-not-acked nudge
+- `{type:"nudge_event", phase:"delivered", nudge_id, step, at}` — claude-code.ts / codex.ts, when the message is written to the LLM's stdin
+- `{type:"nudge_event", phase:"acked", nudge_id, step, at, duration_ms, turn_count}` — claude-code.ts / codex.ts, when the first `result` event arrives after delivery
+- `{type:"nudge_event", phase:"abandoned", nudge_id, step, at, reason}` — claude-code.ts / codex.ts, when the child exits with a delivered-but-not-acked nudge
 
 **JobManager** maintains `JobInfo.nudges: NudgeRecord[]` and a `nudgeWaiters` map. When acked/abandoned events arrive, any registered waiter is resolved. Worker death also abandons in-flight waiters.
 

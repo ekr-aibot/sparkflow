@@ -11,7 +11,7 @@ export const MCP_SERVER_PATH = resolve(__dirname, "../mcp/server.js");
 
 /**
  * Build the `codex exec` CLI args from a CodexRuntime and optional MCP config path.
- * The prompt is passed as a positional argument by the caller, not here.
+ * The prompt should be written to the child's stdin until EOF by the caller.
  */
 export function buildCodexArgs(
   runtime: CodexRuntime,

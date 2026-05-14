@@ -1243,28 +1243,35 @@ describe("WorkflowEngine", () => {
   });
 
   describe("nudge queue", () => {
-    it("provides a NudgeQueue to claude-code steps", async () => {
-      let capturedQueue: unknown;
+    it("provides a NudgeQueue to claude-code and codex steps", async () => {
+      let claudeQueue: unknown;
+      let codexQueue: unknown;
       const workflow: SparkflowWorkflow = {
         version: "1",
         name: "nudge-queue-presence",
-        entry: "a",
+        entry: "claude",
         defaults: {},
         steps: {
-          a: { name: "A", interactive: false, runtime: { type: "claude-code" } },
+          claude: { name: "Claude", interactive: false, runtime: { type: "claude-code" }, on_success: [{ step: "codex" }] },
+          codex: { name: "Codex", interactive: false, runtime: { type: "codex" } },
         },
       };
 
       const adapters = new Map<string, RuntimeAdapter>([
         ["claude-code", new MockAdapter(async (ctx) => {
-          capturedQueue = ctx.nudgeQueue;
+          claudeQueue = ctx.nudgeQueue;
+          return { success: true, outputs: {} };
+        })],
+        ["codex", new MockAdapter(async (ctx) => {
+          codexQueue = ctx.nudgeQueue;
           return { success: true, outputs: {} };
         })],
       ]);
 
       await new WorkflowEngine(workflow, { logger: silentLogger }, adapters).run();
 
-      expect(capturedQueue).toBeInstanceOf(NudgeQueue);
+      expect(claudeQueue).toBeInstanceOf(NudgeQueue);
+      expect(codexQueue).toBeInstanceOf(NudgeQueue);
     });
 
     it("does not provide a nudgeQueue to non-claude-code steps", async () => {

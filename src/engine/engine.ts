@@ -637,11 +637,11 @@ export class WorkflowEngine {
       (status.retryCount > 0 || status.tokenLimitResumes > 0) &&
       !!status.sessionId;
 
-    // Create a nudge queue for claude-code steps so mid-run messages from
-    // triggerStep are delivered as additional turns rather than queued for a
-    // post-completion re-run.
+    // Create a nudge queue for claude-code and codex steps so mid-run messages
+    // from triggerStep are delivered as additional turns rather than queued for
+    // a post-completion re-run.
     let nudgeQueue: NudgeQueue | undefined;
-    if (runtime.type === "claude-code") {
+    if (runtime.type === "claude-code" || runtime.type === "codex") {
       nudgeQueue = new NudgeQueue();
       status.nudgeQueue = nudgeQueue;
     }

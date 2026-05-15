@@ -86,10 +86,18 @@ function runMaintenance(args: string[], _cwd?: string): { code: number; stdout: 
   const result = spawnSync(
     viteBin,
     ["--script", MAINTENANCE_TS, ...args],
-    { cwd: REPO_ROOT, encoding: "utf-8" },
+    { cwd: REPO_ROOT, encoding: "utf-8", timeout: 15000 },
   );
+  if (result.error) {
+    throw new Error(`vite-node failed to spawn: ${result.error.message}\nargs: ${args.join(" ")}`);
+  }
+  if (result.status === null) {
+    throw new Error(
+      `vite-node was killed by signal ${result.signal ?? "(unknown)"}\nstderr: ${result.stderr ?? ""}`,
+    );
+  }
   return {
-    code: result.status ?? 1,
+    code: result.status,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };

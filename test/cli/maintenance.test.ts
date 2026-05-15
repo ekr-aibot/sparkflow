@@ -81,12 +81,12 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../../../");
 const MAINTENANCE_TS = join(REPO_ROOT, "src/cli/maintenance.ts");
 
-function runMaintenance(args: string[], cwd: string): { code: number; stdout: string; stderr: string } {
+function runMaintenance(args: string[], _cwd?: string): { code: number; stdout: string; stderr: string } {
   const viteBin = resolve(REPO_ROOT, "node_modules/.bin/vite-node");
   const result = spawnSync(
     viteBin,
     ["--script", MAINTENANCE_TS, ...args],
-    { cwd, encoding: "utf-8" },
+    { cwd: REPO_ROOT, encoding: "utf-8" },
   );
   return {
     code: result.status ?? 1,

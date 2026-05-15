@@ -247,12 +247,18 @@ export function gitWorktreeBinds(repoRoot: string, worktreePath: string): string
   if (sidecarPath && existsSync(sidecarPath)) {
     // Surgical: sidecar RW (git needs to write ORIG_HEAD, HEAD ref, etc.)
     binds.push(["--bind", sidecarPath, sidecarPath]);
-    // Shared git objects/refs/config: RO — agent can read history but cannot
-    // rewrite parent repo refs (e.g., move main to an arbitrary commit).
+    // objects and refs must be RW so the agent can `git commit` in its worktree
+    // branch. New commit objects go into .git/objects; the branch ref is updated
+    // under .git/refs/heads/<branch>. The escape-detection layer (engine.ts)
+    // catches any parent HEAD movement post-step, keeping the constraint visible.
+    //
+    // HEAD and config stay RO: HEAD prevents redirecting the parent repo's
+    // checked-out branch; config prevents overwriting shared git settings.
+    const RW_PARTS = new Set(["objects", "refs"]);
     for (const part of ["objects", "refs", "HEAD", "config", "info", "packed-refs"]) {
       const partPath = `${gitDir}/${part}`;
       if (existsSync(partPath)) {
-        binds.push(["--ro-bind", partPath, partPath]);
+        binds.push([RW_PARTS.has(part) ? "--bind" : "--ro-bind", partPath, partPath]);
       }
     }
   } else {

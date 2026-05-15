@@ -143,4 +143,13 @@ describe.skipIf(!isLinux || !hasBwrap() || !hasVarTmp)("bwrap integration", () =
     const { exitCode } = runInSandbox("touch /tmp/sandbox-write-test");
     expect(exitCode).toBe(0);
   });
+
+  it("git commit inside the worktree succeeds (objects/refs are RW)", () => {
+    const { exitCode, stderr } = runInSandbox(
+      `cd "${worktreeDir}" && echo "hello" > sandbox-test.txt && git add sandbox-test.txt && git commit -m "sandbox test commit"`
+    );
+    // Treat missing git binary as an environment skip
+    if (stderr.includes("not found") || stderr.includes("No such file")) return;
+    expect(exitCode).toBe(0);
+  });
 });

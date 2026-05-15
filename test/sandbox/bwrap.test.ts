@@ -131,7 +131,7 @@ describe("buildBwrapArgv", () => {
     expect(rwPairs).toContainEqual(["/worktrees/run1/step1", "/worktrees/run1/step1"]);
   });
 
-  it("binds worktree sidecar RW and shared .git parts RO when in a worktree", () => {
+  it("binds worktree sidecar/objects/refs RW and HEAD/config RO when in a worktree", () => {
     const argv = buildBwrapArgv(BASE_OPTS);
     const rwPairs: string[][] = [];
     const roPairs: string[][] = [];
@@ -139,12 +139,12 @@ describe("buildBwrapArgv", () => {
       if (argv[i] === "--bind") rwPairs.push([argv[i + 1], argv[i + 2]]);
       if (argv[i] === "--ro-bind") roPairs.push([argv[i + 1], argv[i + 2]]);
     }
-    // The sidecar directory must be bound RW (for git ref updates)
+    // Sidecar RW (git ref updates); objects/refs RW (git commit writes here)
     expect(rwPairs).toContainEqual(["/repo/.git/worktrees/run1-step1", "/repo/.git/worktrees/run1-step1"]);
-    // Shared git parts must be bound RO
-    expect(roPairs.some(([src]) => src === "/repo/.git/objects")).toBe(true);
+    expect(rwPairs.some(([src]) => src === "/repo/.git/objects")).toBe(true);
+    expect(rwPairs.some(([src]) => src === "/repo/.git/refs")).toBe(true);
+    // HEAD and config stay RO
     expect(roPairs.some(([src]) => src === "/repo/.git/HEAD")).toBe(true);
-    expect(roPairs.some(([src]) => src === "/repo/.git/refs")).toBe(true);
     expect(roPairs.some(([src]) => src === "/repo/.git/config")).toBe(true);
   });
 
@@ -262,7 +262,7 @@ describe("gitWorktreeBinds", () => {
     expect(binds[0]).toEqual(["--bind", "/repo", "/repo"]);
   });
 
-  it("returns worktree RW + sidecar RW + shared git parts RO when in a worktree", () => {
+  it("returns worktree RW + sidecar/objects/refs RW + HEAD/config RO when in a worktree", () => {
     mockExists.mockReturnValue(true);
     mockReadFileSync.mockReturnValue("gitdir: /repo/.git/worktrees/step1\n" as any);
     const binds = gitWorktreeBinds("/repo", "/worktrees/run1/step1");
@@ -272,10 +272,11 @@ describe("gitWorktreeBinds", () => {
     expect(rwBinds).toContainEqual(["--bind", "/worktrees/run1/step1", "/worktrees/run1/step1"]);
     // Sidecar must be RW
     expect(rwBinds).toContainEqual(["--bind", "/repo/.git/worktrees/step1", "/repo/.git/worktrees/step1"]);
-    // Shared git parts must be RO
-    expect(roBinds.some(([, src]) => src === "/repo/.git/objects")).toBe(true);
+    // objects and refs must be RW (git commits need write access to both)
+    expect(rwBinds.some(([, src]) => src === "/repo/.git/objects")).toBe(true);
+    expect(rwBinds.some(([, src]) => src === "/repo/.git/refs")).toBe(true);
+    // HEAD and config must stay RO
     expect(roBinds.some(([, src]) => src === "/repo/.git/HEAD")).toBe(true);
-    expect(roBinds.some(([, src]) => src === "/repo/.git/refs")).toBe(true);
     expect(roBinds.some(([, src]) => src === "/repo/.git/config")).toBe(true);
   });
 

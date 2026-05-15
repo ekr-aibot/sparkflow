@@ -269,7 +269,7 @@
     },
     "replan": {
       "name": "Replanner",
-      "description": "Marks the completed or blocked task in ROADMAP.md, updates ARCHITECTURE.md, and optionally adds/reorders pending tasks. Commits changes then loops back to pick-next.",
+      "description": "Marks the completed or blocked task in ROADMAP.md, updates ARCHITECTURE.md, and optionally adds/reorders pending tasks. Commits changes then routes to count-completed.",
       "interactive": false,
       "worktree": {
         "mode": "shared"
@@ -282,7 +282,7 @@
       "prompt": "./prompts/auto-develop-replan.md",
       "on_success": [
         {
-          "step": "update-dashboard"
+          "step": "count-completed"
         }
       ],
       "outputs": {
@@ -333,12 +333,159 @@
       },
       "on_success": [
         {
-          "step": "pick-next"
+          "step": "check-maintenance"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "check-maintenance"
+        }
+      ]
+    },
+    "count-completed": {
+      "name": "Count Completed Task",
+      "description": "Records that a task was completed or blocked, incrementing the maintenance cycle counter. Routes to update-dashboard regardless of outcome.",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "shell",
+        "command": "sparkflow-maintenance",
+        "args": [
+          "record-task-completed"
+        ]
+      },
+      "on_success": [
+        {
+          "step": "update-dashboard"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "update-dashboard"
+        }
+      ]
+    },
+    "check-maintenance": {
+      "name": "Check Maintenance",
+      "description": "Decides whether to run a PM/architect maintenance pass. Exits 0 and routes to pm-replan when the queue is low or the cycle interval is met; exits 1 and routes to pick-next otherwise.",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "shell",
+        "command": "sparkflow-maintenance",
+        "args": [
+          "decide"
+        ]
+      },
+      "outputs": {
+        "result": {
+          "type": "json",
+          "description": "Decision object: { run, reason, pmEnabled, architectEnabled }"
+        }
+      },
+      "on_success": [
+        {
+          "step": "pm-replan"
         }
       ],
       "on_failure": [
         {
           "step": "pick-next"
+        }
+      ]
+    },
+    "pm-replan": {
+      "name": "PM Replan Agent",
+      "description": "Periodically scans the project and proposes new features to add to ROADMAP.md under '## Proposed features (PM)'. Soft-fail: routes to architect-replan regardless of outcome.",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-pm-replan.md",
+      "ask_on_failure": false,
+      "outputs": {
+        "added": {
+          "type": "json",
+          "description": "Number of task lines added to ROADMAP.md"
+        }
+      },
+      "on_success": [
+        {
+          "step": "architect-replan"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "architect-replan"
+        }
+      ]
+    },
+    "architect-replan": {
+      "name": "Architect Replan Agent",
+      "description": "Periodically reviews the architecture and proposes refactors to add to ROADMAP.md under '## Proposed refactors (architect)'. Soft-fail: routes to maintenance-bookkeeping regardless of outcome.",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "claude-code",
+        "model": "sonnet",
+        "auto_accept": true
+      },
+      "prompt": "./prompts/auto-develop-architect-replan.md",
+      "ask_on_failure": false,
+      "outputs": {
+        "added": {
+          "type": "json",
+          "description": "Number of task lines added to ROADMAP.md"
+        }
+      },
+      "on_success": [
+        {
+          "step": "maintenance-bookkeeping"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "maintenance-bookkeeping"
+        }
+      ]
+    },
+    "maintenance-bookkeeping": {
+      "name": "Maintenance Bookkeeping",
+      "description": "Resets the maintenance cycle counter, records how many tasks were added by PM and architect agents, commits any ROADMAP.md changes, and loops back to update-dashboard.",
+      "interactive": false,
+      "worktree": {
+        "mode": "shared"
+      },
+      "runtime": {
+        "type": "shell",
+        "command": "sparkflow-maintenance",
+        "args": [
+          "record-maintenance-done",
+          "--pm-added",
+          "${steps.pm-replan.output.added}",
+          "--architect-added",
+          "${steps.architect-replan.output.added}"
+        ]
+      },
+      "on_success": [
+        {
+          "step": "update-dashboard"
+        }
+      ],
+      "on_failure": [
+        {
+          "step": "update-dashboard"
         }
       ]
     },

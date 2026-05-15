@@ -5,6 +5,7 @@ import { select, checkbox, input, confirm } from "@inquirer/prompts";
 import {
   type ProjectConfig,
   type GitConfig,
+  type MaintenanceConfig,
   listWorkflowsIn,
   projectConfigExists,
   parseConfigObject,
@@ -130,6 +131,24 @@ export async function runInitInterview(opts: {
       default: defaultWorkflowSeed,
     });
 
+    // 1a. Maintenance agents — only prompted when auto-develop is the chosen default.
+    let maintenance: MaintenanceConfig | undefined;
+    if (selectedDefault === "auto-develop") {
+      const pm = await confirm({
+        message:
+          "Enable the PM agent? (periodically scans the project and proposes new features to add to ROADMAP.md)",
+        default: existing?.maintenance?.pm ?? true,
+      });
+      const architect = await confirm({
+        message:
+          "Enable the architect agent? (periodically reviews the architecture and proposes refactors to add to ROADMAP.md)",
+        default: existing?.maintenance?.architect ?? true,
+      });
+      if (pm || architect) {
+        maintenance = { pm, architect };
+      }
+    }
+
     // 2. Monitors (only kind:"monitor" workflows, minus the chosen default)
     const monitorChoices = monitorKindChoices.filter((c) => c.value !== selectedDefault);
     const existingMonitors = (existing?.monitors ?? []).filter((m) =>
@@ -200,6 +219,7 @@ export async function runInitInterview(opts: {
     const config: ProjectConfig = {};
     if (selectedDefault !== NONE) config.defaultWorkflow = selectedDefault;
     if (selectedMonitors.length > 0) config.monitors = selectedMonitors;
+    if (maintenance !== undefined) config.maintenance = maintenance;
 
     const git: GitConfig = {};
     if (pushRemote.trim()) git.push_remote = pushRemote.trim();

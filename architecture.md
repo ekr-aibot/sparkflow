@@ -298,6 +298,29 @@ A generic live dashboard panel fixed in the upper-right corner of the web UI. An
 
 **Frontend:** `dashboard-widget.js` polls `/api/dashboard` every 2 s, skips when `document.hidden`, re-polls on tab focus. Displays the HTML in an iframe; reloads when the ETag changes. Expand/collapse state persisted in `localStorage` keyed by port.
 
+### PM + Architect Maintenance Agents (`src/cli/maintenance.ts`, `examples/auto-develop.json`)
+
+The `auto-develop` workflow supports optional periodic maintenance passes by a PM agent and an architect agent. These are configured via the `maintenance` block in project config:
+
+```json
+"maintenance": {
+  "pm": true,
+  "architect": true,
+  "queueThreshold": 3,
+  "cycleInterval": 5
+}
+```
+
+**How it works:**
+- After each task completes (or is blocked), `sparkflow-maintenance record-task-completed` increments a counter in `.sparkflow/maintenance-state.json`.
+- `sparkflow-maintenance decide` returns `run=pm-then-architect` when the queue of pending tasks falls below `queueThreshold` OR the cycle counter reaches `cycleInterval`, whichever comes first. Otherwise returns `run=none`.
+- `pm-replan` runs the PM agent (`examples/prompts/auto-develop-pm-replan.md`) to append new feature ideas under `## Proposed features (PM)` in `ROADMAP.md`.
+- `architect-replan` runs the architect agent (`examples/prompts/auto-develop-architect-replan.md`) to append refactor proposals under `## Proposed refactors (architect)`.
+- Both steps are soft-fail (`ask_on_failure: false`): they route forward regardless of outcome.
+- `sparkflow-maintenance record-maintenance-done` resets the cycle counter.
+
+The `is-enabled` subcommand (`sparkflow-maintenance is-enabled <pm|architect>`) lets each agent self-check at runtime whether it's enabled — avoiding work when the config disables it.
+
 ## Config Layering
 
 User config (`~/.sparkflow/config.json`) is the base; project config (`.sparkflow/config.json`) overlays it. Nested objects like `git` are replaced wholesale — a project `git` block drops all user `git` fields.

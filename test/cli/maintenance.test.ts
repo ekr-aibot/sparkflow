@@ -75,21 +75,27 @@ function makeTmp(): string {
 // ── Helper: run the maintenance CLI as a child process (for integration tests) ─
 
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../../../");
 const MAINTENANCE_TS = join(REPO_ROOT, "src/cli/maintenance.ts");
 
+// Resolve vite-node via the module system so it works regardless of which
+// worktree node_modules is installed — vitest already depends on vite-node,
+// so createRequire from this file's location is guaranteed to find it.
+const _require = createRequire(import.meta.url);
+const VITE_NODE_BIN = _require.resolve("vite-node/vite-node.mjs");
+
 function runMaintenance(args: string[], _cwd?: string): { code: number; stdout: string; stderr: string } {
-  const viteBin = resolve(REPO_ROOT, "node_modules/.bin/vite-node");
   const result = spawnSync(
-    viteBin,
-    ["--script", MAINTENANCE_TS, ...args],
+    process.execPath,
+    [VITE_NODE_BIN, "--script", MAINTENANCE_TS, ...args],
     { cwd: REPO_ROOT, encoding: "utf-8", timeout: 15000 },
   );
   if (result.error) {
-    throw new Error(`vite-node failed to spawn: ${result.error.message}\nargs: ${args.join(" ")}`);
+    throw new Error(`maintenance spawn failed: ${result.error.message}\nargs: ${args.join(" ")}`);
   }
   if (result.status === null) {
     throw new Error(

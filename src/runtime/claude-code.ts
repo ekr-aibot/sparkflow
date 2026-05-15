@@ -347,7 +347,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           success,
           outputs,
           exitCode,
-          error: success ? undefined : (gateError ?? (stderr.trim() || `Exit code ${exitCode}`) + hint),
+          error: success ? undefined : ((gateError ?? (stderr.trim() || `Exit code ${exitCode}`)) + hint) || undefined,
           sessionId,
           tokenLimitHit,
           quotaHit,

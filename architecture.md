@@ -170,7 +170,8 @@ Three complementary layers prevent agents from escaping their isolated worktree:
    - `--tmpfs /` (empty root), then explicit bind mounts for what the step needs.
    - `/nix` and `/run/current-system` (NixOS tools), `/etc` (certs/resolv.conf), FHS fallbacks (`/usr`, `/bin`, etc.) — all read-only.
    - `<worktreePath>` bound read-write.
-   - `<repoRoot>/.git` bound read-write (needed for git commits). The parent working tree is NOT bound — files outside the worktree are inaccessible.
+   - `<repoRoot>/.git` binds are surgical: `objects/` and `refs/` are bound read-write (needed for git commits); `HEAD`, `config`, and `info/` are bound read-only. The parent working tree is NOT bound — files outside the worktree are inaccessible.
+   - **Note:** with `refs/` bound RW, an agent can run `git update-ref refs/heads/main <sha>` and move a parent-repo branch without touching `HEAD`. Layer 2 escape detection checks HEAD movement but not arbitrary ref movement — this is an accepted Phase 1 tradeoff.
    - `~/.claude` bound read-write (claude session state), `~/.sparkflow` bound read-only.
    - Sparkflow installation root bound read-only (MCP server binary, workflow files).
    - `/tmp` bound read-write for scratch space.

@@ -9,6 +9,7 @@ import type { RuntimeAdapter, RuntimeContext, RuntimeResult } from "./types.js";
 import type { ClaudeCodeRuntime } from "../schema/types.js";
 import { suffixFor, formatClaudeEvent } from "./log-block.js";
 import { extractQuotaResetSeconds } from "./quota-reset.js";
+import { applySandbox } from "../sandbox/apply.js";
 
 /**
  * Returns a system reminder instructing the agent to stay inside its worktree.
@@ -159,9 +160,20 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
     return new Promise<RuntimeResult>((resolve) => {
       const cmd = process.env.SPARKFLOW_CLAUDE_COMMAND || "claude";
-      const child = spawn(cmd, args, {
+      const hostEnv = { ...process.env as Record<string, string>, ...ctx.env };
+      const applied = applySandbox({
+        command: cmd,
+        args,
         cwd: ctx.cwd,
-        env: { ...process.env as Record<string, string>, ...ctx.env },
+        env: hostEnv,
+        ctx,
+      });
+      const sandboxHint = applied.command === "bwrap"
+        ? " (hint: this may be a sandbox-bind issue — set SPARKFLOW_SANDBOX=off to bypass and reproduce)"
+        : "";
+      const child = spawn(applied.command, applied.args, {
+        cwd: ctx.cwd,
+        env: applied.env,
         stdio: "pipe",
       });
 
@@ -327,11 +339,15 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
           }
         }
 
+        // Append a sandbox hint when the child exited with no output and no
+        // result event — this pattern often indicates a missing bind mount.
+        const earlyExit = !success && !parsed && !stdout.trim();
+        const hint = earlyExit ? sandboxHint : "";
         resolve({
           success,
           outputs,
           exitCode,
-          error: success ? undefined : (gateError ?? (stderr.trim() || `Exit code ${exitCode}`)),
+          error: success ? undefined : ((gateError ?? (stderr.trim() || `Exit code ${exitCode}`)) + hint) || undefined,
           sessionId,
           tokenLimitHit,
           quotaHit,
@@ -347,7 +363,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         resolve({
           success: false,
           outputs: {},
-          error: err.message,
+          error: err.message + sandboxHint,
           sessionId,
         });
       });
